@@ -116,18 +116,53 @@ curl http://localhost:8001/health
 
 ## Deployment
 
-Runs on the **same EC2** as `governor_chatbot_service` (`us-east-1`, t3.small):
+### Server Layout (EC2)
 
+The autopilot runs on a **dedicated EC2 instance** (`us-east-1`, t3.small, IP `100.52.234.163`) separate from `seni_ror` (Edgar) to protect critical infrastructure.
+
+**Code location:** `/opt/truesight_autopilot`
 ```bash
-# Edit EC2_HOST in scripts/deploy.sh, then:
+# SSH in (Host alias configured in ~/.ssh/config as "truesight-autopilot")
+ssh truesight-autopilot
+
+# Navigate to the deployment
+cd /opt/truesight_autopilot
+
+# Key directories
+app/              # FastAPI application code
+scripts/          # launch_ec2.sh, deploy.sh, user-data.sh
+systemd/          # truesight-autopilot.service
+```
+
+**Environment file:** `/opt/truesight_autopilot/.env` (chmod 600)
+```bash
+# View current env vars (secrets redacted)
+grep -v '^#' /opt/truesight_autopilot/.env | sed 's/=.*/=*/'
+```
+
+**Systemd service:**
+```bash
+# Status
+sudo systemctl status truesight-autopilot
+
+# Logs (follow)
+sudo journalctl -u truesight-autopilot -f
+
+# Restart after code or env changes
+sudo systemctl restart truesight-autopilot
+
+# Enable/disable auto-start on boot
+sudo systemctl enable truesight-autopilot
+sudo systemctl disable truesight-autopilot
+```
+
+**Deploy from local:**
+```bash
+# From your Mac, in the truesight_autopilot repo:
 ./scripts/deploy.sh
 ```
 
-Systemd service:
-```bash
-sudo systemctl status truesight-autopilot
-sudo journalctl -u truesight-autopilot -f
-```
+This rsyncs the repo to `/opt/truesight_autopilot` on the EC2 instance, reinstalls dependencies, and restarts the systemd service.
 
 ## Environment
 
@@ -137,9 +172,9 @@ See `.env.example` for required variables. Key credentials:
 |---|---|---|
 | `TRUESIGHT_DAO_AUTOPILOT` | GitHub fine-grained PAT (Contents + PR write) | ✅ Ready |
 | `GMAIL_TOKEN_JSON` | Full `token.json` from `market_research/credentials/gmail/` | ✅ Ready |
-| `DEEPSEEK_API_KEY` | From platform.deepseek.com | 🆕 Sign up |
+| `DEEPSEEK_API_KEY` (or `DEEPSEEK_SDK`) | From platform.deepseek.com | ✅ Ready |
 | `EMAIL` / `PUBLIC_KEY` / `PRIVATE_KEY` | Dedicated Edgar identity | 🆕 Generate via `truesight-dao-auth login` |
-| `AWS_*` | Prefer IAM instance role; fallback to env vars | ❌ Need valid creds or IAM role |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | From `cypher_def/.env` (TRUESIGHT_DAO_AUTOPILOT_AWS_*) | ✅ Ready |
 
 Full credential audit: `agentic_ai_context/API_CREDENTIALS_DOCUMENTATION.md` §10
 
