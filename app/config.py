@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     gmail_token_json: str = os.getenv("GMAIL_TOKEN_JSON", "")
 
     # LLM — DeepSeek only (dropped Kimi + Claude for cost)
-    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("DEEPSEEK_SDK", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "4096"))
