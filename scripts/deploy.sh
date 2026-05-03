@@ -21,14 +21,19 @@ pip install -r requirements.txt
 echo "=== Syncing to EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "sudo mkdir -p $REMOTE_DIR && sudo chown ubuntu:ubuntu $REMOTE_DIR"
 
-# rsync code (excluding venv, .env, .git)
+# rsync code (excluding venv, .git, caches)
 rsync -avz --delete \
     --exclude='.venv' \
-    --exclude='.env' \
     --exclude='.git' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
     ./ "$EC2_HOST:$REMOTE_DIR/"
+
+# Sync .env separately (gitignored locally, needed on EC2)
+if [ -f ".env" ]; then
+    echo "=== Syncing .env ==="
+    scp -i "$EC2_KEY" .env "$EC2_HOST:$REMOTE_DIR/.env"
+fi
 
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
@@ -36,6 +41,8 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     python3 -m venv .venv
     source .venv/bin/activate
     pip install -r requirements.txt
+    # Ensure dao_client is installed from GitHub (needed for Edgar submissions)
+    pip install 'truesight-dao-client @ git+https://github.com/TrueSightDAO/dao_client.git'
 "
 
 echo "=== Installing systemd service ==="

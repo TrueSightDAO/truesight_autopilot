@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
@@ -22,6 +22,7 @@ from .fix_agent import FixAgent
 from .github_client import GitHubClient
 from .email_poller import EmailPoller
 from .aws_monitor import AWSMonitor
+from .edgar_logger import EdgarLogger as EdgarDirectClient
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
@@ -114,9 +115,181 @@ async def auth_challenge(request: Request) -> JSONResponse:
     return response
 
 
+def _sse_event(event_type: str, data: object) -> str:
+    return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
+
+
+async def _run_tool(func_name: str, func_args: dict) -> str:
+    if func_name == "list_org_repos":
+        gh = GitHubClient()
+        repos = gh.list_org_repos()
+        if repos:
+            lines = [f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}" for r in repos]
+            return "TrueSightDAO repositories:\n" + "\n".join(lines)
+        return "Failed to list repos or none found."
+    if func_name == "read_context_file":
+        result = get_context_file(func_args.get("path", ""))
+        return result if result else "File not found."
+    if func_name == "read_repo_file":
+        result = read_repo_file(
+            func_args.get("repo", ""),
+            func_args.get("path", ""),
+            func_args.get("ref", "main"),
+        )
+        if result.get("type") == "file":
+            return result["content"]
+        if result.get("type") == "directory":
+            return "Directory listing:\n" + "\n".join(
+                f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
+            )
+        return f"Error: {result.get('error', 'unknown')}"
+    if func_name == "submit_contribution":
+        edgar = EdgarDirectClient()
+        event_name = func_args.get("event_name", "CONTRIBUTION EVENT")
+        attributes = func_args.get("attributes", {})
+        ok = edgar.submit_contribution(event_name, attributes, description=attributes.get("Description", ""))
+        return "Contribution submitted successfully." if ok else "Failed to submit contribution."
+    if func_name == "open_fix_pr":
+        repo_name = func_args.get("repo", "")
+        issue = func_args.get("issue_description", "")
+        allowed = settings.allowed_repos
+        if repo_name not in allowed:
+            return f"Error: repo '{repo_name}' not in allowed list."
+        fixer = FixAgent()
+        pr_url = fixer.run_simple(repo_name, issue)
+        return f"PR opened: {pr_url}" if pr_url else "Fix agent failed to produce a PR."
+    if func_name == "create_dao_submission":
+        return "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."
+    return f"Unknown tool: {func_name}"
+
+
+async def _stream_chat(user_message: str, history: list[dict]):
+    system_prompt = get_system_prompt()
+    client = LLMClient()
+    tools = get_tool_schemas()
+
+    try:
+        completion = client.chat(system_prompt, history, tools=tools)
+        assistant_message = completion["choices"][0].get("message", {})
+
+        tool_calls = assistant_message.get("tool_calls", [])
+
+        if tool_calls:
+            # Stream initial thought
+            thought = assistant_message.get("content", "") or "Thinking..."
+            yield _sse_event("token", thought)
+
+            history.append({
+                "role": "assistant",
+                "content": assistant_message.get("content", ""),
+                "tool_calls": [
+                    {"id": tc["id"], "type": tc["type"],
+                     "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                    for tc in tool_calls
+                ],
+            })
+
+            for tc in tool_calls:
+                func_name = tc["function"]["name"]
+                func_args = json.loads(tc["function"]["arguments"])
+                tool_call_id = tc["id"]
+
+                # Announce tool call
+                yield _sse_event("tool", {"tool": func_name, "status": "calling"})
+
+                result_text = await _run_tool(func_name, func_args)
+
+                yield _sse_event("tool", {"tool": func_name, "status": "done"})
+
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": result_text,
+                })
+
+            # Get final response after tool calls
+            completion = client.chat(system_prompt, history, tools=tools)
+            assistant_text = client.extract_text(completion)
+        else:
+            assistant_text = client.extract_text(completion)
+
+    except LLMError as exc:
+        yield _sse_event("error", str(exc))
+        return
+
+    # Parse embedded proposal JSON
+    proposal = None
+    try:
+        json_match = re.search(r"```json\s*(\{.*?\})\s*```", assistant_text, re.DOTALL)
+        if json_match:
+            embedded = json.loads(json_match.group(1))
+            if "proposal" in embedded:
+                proposal = embedded["proposal"]
+                assistant_text = re.sub(r"```json\s*\{.*?\}\s*```", "", assistant_text, flags=re.DOTALL).strip()
+    except Exception:
+        pass
+
+    # Stream final response tokens
+    for chunk in _chunk_text(assistant_text):
+        yield _sse_event("token", chunk)
+
+    # Stream done event
+    done_data: dict[str, object] = {"response": assistant_text}
+    if proposal:
+        done_data["proposal"] = proposal
+    yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
+
+
+def _chunk_text(text: str, size: int = 80) -> list[str]:
+    """Split text into chunks for streaming, keeping newlines."""
+    if not text:
+        return []
+    chunks = []
+    for paragraph in text.split("\n"):
+        while len(paragraph) > size:
+            chunks.append(paragraph[:size])
+            paragraph = paragraph[size:]
+        chunks.append(paragraph)
+    return chunks
+
+
 @app.post("/chat")
-async def chat(request: Request) -> JSONResponse:
-    """Main chat endpoint. Receives signed message or JWT-authenticated message."""
+async def chat(request: Request):
+    """SSE-streaming chat endpoint."""
+    body = await request.json()
+    payload = body.get("payload")
+    signature = body.get("signature")
+    public_key = request.headers.get("X-Public-Key", "")
+
+    if payload and signature and public_key:
+        verify_payload(payload, signature, public_key)
+        user_message = payload.get("message", "")
+    else:
+        public_key = verify_jwt(request)
+        user_message = body.get("message", "")
+        if not user_message:
+            raise HTTPException(status_code=400, detail="message is required.")
+
+    session_id = public_key
+    history = _sessions.get(session_id, [])
+    history.append({"role": "user", "content": user_message})
+
+    return StreamingResponse(
+        _stream_chat(user_message, history),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ──────────────────── Non-streaming fallback chat ────────────────────
+
+@app.post("/chat-blocking")
+async def chat_blocking(request: Request) -> JSONResponse:
+    """Non-streaming fallback for clients that don't support SSE."""
     body = await request.json()
     payload = body.get("payload")
     signature = body.get("signature")
@@ -142,84 +315,31 @@ async def chat(request: Request) -> JSONResponse:
     try:
         completion = client.chat(system_prompt, history, tools=tools)
         assistant_message = completion["choices"][0].get("message", {})
-
         tool_calls = assistant_message.get("tool_calls", [])
+
         if tool_calls:
             history.append({
                 "role": "assistant",
                 "content": assistant_message.get("content", ""),
                 "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": tc["type"],
-                        "function": {
-                            "name": tc["function"]["name"],
-                            "arguments": tc["function"]["arguments"],
-                        },
-                    }
+                    {"id": tc["id"], "type": tc["type"],
+                     "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
                     for tc in tool_calls
                 ],
             })
-
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
                 func_args = json.loads(tc["function"]["arguments"])
                 tool_call_id = tc["id"]
-
-                if func_name == "list_org_repos":
-                    gh = GitHubClient()
-                    repos = gh.list_org_repos()
-                    if repos:
-                        lines = [f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}" for r in repos]
-                        result_text = "TrueSightDAO repositories:\n" + "\n".join(lines)
-                    else:
-                        result_text = "Failed to list repos or none found."
-                elif func_name == "read_context_file":
-                    result = get_context_file(func_args.get("path", ""))
-                    result_text = result if result else "File not found."
-                elif func_name == "read_repo_file":
-                    result = read_repo_file(
-                        func_args.get("repo", ""),
-                        func_args.get("path", ""),
-                        func_args.get("ref", "main"),
-                    )
-                    if result.get("type") == "file":
-                        result_text = result["content"]
-                    elif result.get("type") == "directory":
-                        result_text = "Directory listing:\n" + "\n".join(
-                            f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
-                        )
-                    else:
-                        result_text = f"Error: {result.get('error', 'unknown')}"
-                elif func_name == "open_fix_pr":
-                    repo_name = func_args.get("repo", "")
-                    issue = func_args.get("issue_description", "")
-                    if repo_name not in ["dapp", "tokenomics", "truesight_me", "truesight_me_prod", "agroverse_shop", "agroverse_shop_prod", "dao_client", "market_research", "sentiment_importer", "truesight_autopilot"]:
-                        result_text = f"Error: repo '{repo_name}' not in allowed list."
-                    else:
-                        fixer = FixAgent()
-                        pr_url = fixer.run_simple(repo_name, issue)
-                        result_text = f"PR opened: {pr_url}" if pr_url else "Fix agent failed to produce a PR."
-                elif func_name == "create_dao_submission":
-                    result_text = "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."
-                else:
-                    result_text = f"Unknown tool: {func_name}"
-
-                history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result_text,
-                })
-
+                result_text = await _run_tool(func_name, func_args)
+                history.append({"role": "tool", "tool_call_id": tool_call_id, "content": result_text})
             completion = client.chat(system_prompt, history, tools=tools)
             assistant_text = client.extract_text(completion)
         else:
             assistant_text = client.extract_text(completion)
-
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
-    # Parse embedded proposal JSON
     proposal = None
     try:
         json_match = re.search(r"```json\s*(\{.*?\})\s*```", assistant_text, re.DOTALL)
@@ -237,7 +357,6 @@ async def chat(request: Request) -> JSONResponse:
     response_data: dict[str, Any] = {"response": assistant_text}
     if proposal:
         response_data["proposal"] = proposal
-
     return JSONResponse(response_data)
 
 

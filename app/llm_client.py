@@ -197,6 +197,27 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "submit_contribution",
+                "description": "Submit a signed [CONTRIBUTION EVENT] or other event to Edgar (the DAO API). Use this to log transactions, cacao bags received, sales, contributions, or any DAO record.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "event_name": {
+                            "type": "string",
+                            "description": "Event name in square-bracket convention, e.g. 'CONTRIBUTION EVENT', 'BAG RECEIPT', 'SALE'",
+                        },
+                        "attributes": {
+                            "type": "object",
+                            "description": "Key-value pairs describing the event. Include Type, Amount, Description, Contributors, etc.",
+                        },
+                    },
+                    "required": ["event_name", "attributes"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "open_fix_pr",
                 "description": "Run a full agentic loop to diagnose and fix an issue in any TrueSightDAO repo. Opens a DRAFT PR that requires human review.",
                 "parameters": {

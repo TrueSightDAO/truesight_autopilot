@@ -42,8 +42,8 @@ class Settings(BaseSettings):
     # LLM — DeepSeek only (dropped Kimi + Claude for cost)
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("DEEPSEEK_SDK", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "4096"))
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat-v4")
+    deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
     deepseek_temperature: float = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3"))
 
     # Edgar
