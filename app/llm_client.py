@@ -1,4 +1,4 @@
-"""Swappable LLM client: DeepSeek-V3 primary, Claude fallback."""
+"""LLM client: DeepSeek-V3 for everything (chat, diagnosis, code)."""
 from __future__ import annotations
 
 import json
@@ -12,10 +12,63 @@ from .config import settings
 logger = logging.getLogger("autopilot.llm")
 
 
+class LLMError(Exception):
+    pass
+
+
 class LLMClient:
-    def __init__(self, provider: str | None = None):
-        self.provider = (provider or "deepseek").lower()
+    """DeepSeek client with OpenAI-compatible API.
+
+    Used for both governor chat (with tools) and autopilot diagnosis.
+    """
+
+    def __init__(self) -> None:
+        if not settings.deepseek_api_key:
+            raise LLMError("DEEPSEEK_API_KEY is not set.")
+        self.base_url = settings.deepseek_base_url.rstrip("/")
+        self.api_key = settings.deepseek_api_key
+        self.model = settings.deepseek_model
+        self.max_tokens = settings.deepseek_max_tokens
+        self.temperature = settings.deepseek_temperature
         self._http = httpx.Client(timeout=120.0)
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Send a chat completion request to DeepSeek."""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}, *messages],
+            "max_tokens": max_tokens or self.max_tokens,
+            "temperature": temperature if temperature is not None else self.temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        try:
+            resp = self._http.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(f"DeepSeek API error {exc.response.status_code}: {exc.response.text}") from exc
+        except httpx.RequestError as exc:
+            raise LLMError(f"DeepSeek request failed: {exc}") from exc
 
     def complete(
         self,
@@ -24,70 +77,23 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 4096,
     ) -> str:
-        if self.provider == "deepseek":
-            return self._deepseek(system, messages, temperature, max_tokens)
-        elif self.provider == "anthropic":
-            return self._anthropic(system, messages, temperature, max_tokens)
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider}")
+        """Simple completion (used by diagnosis engine)."""
+        resp = self.chat(system, messages, temperature=temperature, max_tokens=max_tokens)
+        return self.extract_text(resp)
 
-    def _deepseek(
-        self,
-        system: str,
-        messages: list[dict[str, str]],
-        temperature: float,
-        max_tokens: int,
-    ) -> str:
-        if not settings.deepseek_api_key:
-            raise RuntimeError("DEEPSEEK_API_KEY not set")
+    def extract_text(self, completion: dict[str, Any]) -> str:
+        choices = completion.get("choices", [])
+        if not choices:
+            return "(no response)"
+        message = choices[0].get("message", {})
+        return message.get("content", "") or "(empty response)"
 
-        payload = {
-            "model": settings.deepseek_model,
-            "messages": [{"role": "system", "content": system}] + messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        r = self._http.post(
-            f"{settings.deepseek_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.deepseek_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data["choices"][0]["message"]["content"]
-
-    def _anthropic(
-        self,
-        system: str,
-        messages: list[dict[str, str]],
-        temperature: float,
-        max_tokens: int,
-    ) -> str:
-        if not settings.anthropic_api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-        payload = {
-            "model": settings.anthropic_model,
-            "system": system,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        r = self._http.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": settings.anthropic_api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data["content"][0]["text"]
+    def extract_tool_calls(self, completion: dict[str, Any]) -> list[dict[str, Any]]:
+        choices = completion.get("choices", [])
+        if not choices:
+            return []
+        message = choices[0].get("message", {})
+        return message.get("tool_calls", []) or []
 
     def diagnose_github_failure(
         self,
@@ -115,7 +121,6 @@ class LLMClient:
         ]
         try:
             raw = self.complete(system, messages, temperature=0.2, max_tokens=2048)
-            # Try to extract JSON from markdown code block if present
             if "```json" in raw:
                 raw = raw.split("```json")[1].split("```")[0].strip()
             elif "```" in raw:
@@ -128,3 +133,96 @@ class LLMClient:
                 "proposed_fix": raw[:500] if "raw" in dir() else "N/A",
                 "files_to_edit": "",
             }
+
+
+# Default tool schemas for governor chat
+def get_tool_schemas() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_context_file",
+                "description": "Read a file from the agentic_ai_context repository.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path inside agentic_ai_context, e.g. 'WORKSPACE_CONTEXT.md'",
+                        }
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_repo_file",
+                "description": "Read a file from a GitHub repository.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "GitHub repo name under TrueSightDAO, e.g. 'tokenomics'",
+                        },
+                        "path": {"type": "string", "description": "File path in the repo."},
+                        "ref": {
+                            "type": "string",
+                            "description": "Branch or commit. Default: main",
+                            "default": "main",
+                        },
+                    },
+                    "required": ["repo", "path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "open_fix_pr",
+                "description": "Ask the autopilot to diagnose and fix an issue in a repo.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Repo name under TrueSightDAO, e.g. 'go_to_market'",
+                        },
+                        "issue_description": {
+                            "type": "string",
+                            "description": "Description of the issue to fix",
+                        },
+                    },
+                    "required": ["repo", "issue_description"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_dao_submission",
+                "description": "Compile and submit a [CONTRIBUTION EVENT] to Edgar for AI agent work.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short one-line title."},
+                        "body": {"type": "string", "description": "Multi-line description with what changed and why."},
+                        "pr_urls": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "At least one https://github.com/TrueSightDAO/.../pull/N URL.",
+                        },
+                        "contributors": {
+                            "type": "string",
+                            "description": "Display name. Defaults to EMAIL local-part.",
+                        },
+                        "amount": {"type": "string", "default": "0"},
+                        "tdg_issued": {"type": "string", "default": "0"},
+                    },
+                    "required": ["title", "body", "pr_urls"],
+                },
+            },
+        },
+    ]

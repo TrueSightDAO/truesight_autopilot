@@ -1,6 +1,6 @@
 # truesight_autopilot
 
-**Autonomous SRE + developer for TrueSight DAO.**
+**Unified AI service for TrueSight DAO — governor chat + autonomous SRE + developer.**
 
 ## Vision
 
@@ -8,11 +8,22 @@ TrueSight DAO runs on code: market research pipelines, email agents, inventory s
 
 **truesight_autopilot exists to close that gap.**
 
-It is a persistent cloud service that:
-1. **Watches** — monitors Gmail for failure emails, AWS CloudWatch for EC2 health, Cost Explorer for spend anomalies
-2. **Thinks** — uses DeepSeek-V3 (30× cheaper than Claude) to diagnose root causes from logs and code
-3. **Acts** — clones repos, edits code, runs `py_compile`, opens Pull Requests with fixes
-4. **Reports** — logs every action as a `[CONTRIBUTION EVENT]` to Edgar, creating an auditable trail of autonomous work
+It is a persistent cloud service with two modes:
+
+### Reactive Mode — Governor Chat (`POST /chat`)
+You talk to it through the DApp chat UI at `dapp.truesight.me/chat.html`:
+- *"What did we ship last week?"* → reads context, summarizes PRs
+- *"The circle-detect workflow failed — can you fix it?"* → diagnoses, opens PR
+- *"Check my AWS costs"* → queries Cost Explorer, reports anomalies
+- *"Create a PR that adds retry logic to hit_list_enrich_contact.py"* → implements, tests, opens PR
+
+### Proactive Mode — Autopilot (background loops)
+It watches continuously without human input:
+- **Gmail** — polls every 5 min for GitHub Action failures, GAS errors, security alerts
+- **AWS** — monitors CloudWatch metrics, Cost Explorer spend, Health events
+- **GitHub** — listens to webhooks for workflow failures
+
+Both modes share the same brain: **DeepSeek-V3** (30× cheaper than Claude) with full workspace context.
 
 **The human stays in the loop.** The autopilot never auto-merges. Every fix is a PR. You review and merge. The service just ensures the PR is waiting for you when you check GitHub — not the error email.
 
@@ -152,9 +163,16 @@ Full credential audit: `agentic_ai_context/API_CREDENTIALS_DOCUMENTATION.md` §1
 9. Logs 5-minute contribution to Edgar
 10. You wake up, review the PR, click merge
 
+## History
+
+This repo merges two previous services:
+- **`governor_chatbot_service`** — conversational AI for DAO governors (now the `/chat` endpoint)
+- **`truesight_autopilot`** (original scaffold) — autonomous SRE + developer (now the background loops + proactive PRs)
+
+Merged 2026-05-03. DeepSeek-V3 replaces Kimi + Claude for all LLM workloads. Deployed on a **dedicated EC2** separate from `seni_ror` (Edgar) to protect critical infrastructure.
+
 ## Related
 
 - `agentic_ai_context/API_CREDENTIALS_DOCUMENTATION.md` §10 — Credential audit and readiness
 - `agentic_ai_context/SETUP_REQUIREMENTS.md` — Autopilot prerequisites and blockers
-- `governor_chatbot_service` — Sister service on same EC2 (conversational AI for governors)
 - `market_research` — Primary repo the autopilot will monitor and fix

@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 
 from .config import settings
 from .github_client import GitHubClient
-from .llm_client import LLMClient
+from .llm_client import LLMClient, LLMError
 
 logger = logging.getLogger("autopilot.email")
 
