@@ -94,7 +94,7 @@ def verify_payload(payload: dict, signature: str, public_key_b64: str) -> None:
     _seen_nonces.add(nonce)
 
     # 4. Governor check
-    if not is_governor(public_key_b64):
+    if not settings.disable_governor_check and not is_governor(public_key_b64):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access restricted to authorized governors.",

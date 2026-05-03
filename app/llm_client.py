@@ -66,8 +66,11 @@ class LLMClient:
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as exc:
-            raise LLMError(f"DeepSeek API error {exc.response.status_code}: {exc.response.text}") from exc
+            err_body = exc.response.text[:1000]
+            logger.error("DeepSeek API error %s: %s", exc.response.status_code, err_body)
+            raise LLMError(f"DeepSeek API error {exc.response.status_code}: {err_body}") from exc
         except httpx.RequestError as exc:
+            logger.error("DeepSeek request failed: %s", exc)
             raise LLMError(f"DeepSeek request failed: {exc}") from exc
 
     def complete(
@@ -84,9 +87,15 @@ class LLMClient:
     def extract_text(self, completion: dict[str, Any]) -> str:
         choices = completion.get("choices", [])
         if not choices:
+            logger.warning("LLM response has no choices: %s", json.dumps(completion)[:500])
             return "(no response)"
         message = choices[0].get("message", {})
-        return message.get("content", "") or "(empty response)"
+        content = message.get("content")
+        if not content:
+            logger.warning("LLM response has empty content. Finish reason: %s. Message keys: %s",
+                           choices[0].get("finish_reason"),
+                           list(message.keys()))
+        return content or "(empty response)"
 
     def extract_tool_calls(self, completion: dict[str, Any]) -> list[dict[str, Any]]:
         choices = completion.get("choices", [])

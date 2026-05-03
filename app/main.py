@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -163,14 +164,19 @@ async def _run_tool(func_name: str, func_args: dict) -> str:
     return f"Unknown tool: {func_name}"
 
 
-async def _stream_chat(user_message: str, history: list[dict]):
+async def _stream_chat(user_message: str, history: list[dict], session_id: str):
     system_prompt = get_system_prompt()
     client = LLMClient()
     tools = get_tool_schemas()
+    req_id = int(time.time() * 1000) % 1000000
+    logger.info("[%d] CHAT REQ: session=%s msg=%.150s", req_id, session_id[:16], user_message)
 
     try:
         completion = client.chat(system_prompt, history, tools=tools)
         assistant_message = completion["choices"][0].get("message", {})
+        logger.info("[%d] DEEPSEEK RESP: tools=%d tokens=%s", req_id,
+                     len(assistant_message.get("tool_calls", [])),
+                     completion.get("usage", {}).get("total_tokens", "?"))
 
         tool_calls = assistant_message.get("tool_calls", [])
 
@@ -182,6 +188,7 @@ async def _stream_chat(user_message: str, history: list[dict]):
             history.append({
                 "role": "assistant",
                 "content": assistant_message.get("content", ""),
+                "reasoning_content": assistant_message.get("reasoning_content", ""),
                 "tool_calls": [
                     {"id": tc["id"], "type": tc["type"],
                      "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
@@ -193,6 +200,7 @@ async def _stream_chat(user_message: str, history: list[dict]):
                 func_name = tc["function"]["name"]
                 func_args = json.loads(tc["function"]["arguments"])
                 tool_call_id = tc["id"]
+                logger.info("[%d] TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
 
                 # Announce tool call
                 yield _sse_event("tool", {"tool": func_name, "status": "calling"})
@@ -200,6 +208,7 @@ async def _stream_chat(user_message: str, history: list[dict]):
                 result_text = await _run_tool(func_name, func_args)
 
                 yield _sse_event("tool", {"tool": func_name, "status": "done"})
+                logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
 
                 history.append({
                     "role": "tool",
@@ -214,8 +223,13 @@ async def _stream_chat(user_message: str, history: list[dict]):
             assistant_text = client.extract_text(completion)
 
     except LLMError as exc:
+        logger.error("[%d] CHAT ERROR: %s", req_id, exc)
+        _record_chat_error(str(exc))
         yield _sse_event("error", str(exc))
         return
+
+    # Log final response
+    logger.info("[%d] CHAT RESP: len=%d tokens=%.150s", req_id, len(assistant_text), assistant_text[:150])
 
     # Parse embedded proposal JSON
     proposal = None
@@ -275,7 +289,7 @@ async def chat(request: Request):
     history.append({"role": "user", "content": user_message})
 
     return StreamingResponse(
-        _stream_chat(user_message, history),
+        _stream_chat(user_message, history, session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -321,6 +335,7 @@ async def chat_blocking(request: Request) -> JSONResponse:
             history.append({
                 "role": "assistant",
                 "content": assistant_message.get("content", ""),
+                "reasoning_content": assistant_message.get("reasoning_content", ""),
                 "tool_calls": [
                     {"id": tc["id"], "type": tc["type"],
                      "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
@@ -337,6 +352,14 @@ async def chat_blocking(request: Request) -> JSONResponse:
             assistant_text = client.extract_text(completion)
         else:
             assistant_text = client.extract_text(completion)
+
+        # If the final response is still empty (LLM wants more tools than we gave),
+        # force a completion without tools
+        if not assistant_text or assistant_text in ("(empty response)", "(no response)"):
+            logger.info("Empty response after tools — forcing text-only completion")
+            completion = client.chat(system_prompt, history, tools=None)
+            assistant_text = client.extract_text(completion)
+
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -395,6 +418,80 @@ async def force_refresh_governors(request: Request) -> JSONResponse:
 
 
 # ───────────────────────────── Autopilot ─────────────────────────────
+
+# Track errors for self-healing
+_self_heal_errors: list[dict] = []
+_SELF_HEAL_THRESHOLD = 3  # consecutive errors before opening a fix PR
+_SELF_HEAL_WINDOW = 3600  # seconds
+
+
+def _record_chat_error(error_detail: str) -> None:
+    """Record a chat error for self-healing analysis."""
+    now = time.time()
+    _self_heal_errors.append({"time": now, "error": error_detail})
+    # Prune old entries
+    _self_heal_errors[:] = [e for e in _self_heal_errors if now - e["time"] < _SELF_HEAL_WINDOW]
+
+
+async def _self_heal_loop():
+    """Background loop: check for recent errors and open fix PRs."""
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        try:
+            now = time.time()
+            recent = [e for e in _self_heal_errors if now - e["time"] < _SELF_HEAL_WINDOW]
+            if len(recent) >= _SELF_HEAL_THRESHOLD:
+                logger.warning("Self-heal triggered: %d errors in window", len(recent))
+                patterns = "\n".join(recent[-5:])
+                fixer = FixAgent()
+                pr_url = fixer.run_simple(
+                    "truesight_autopilot",
+                    f"Autopilot detected {len(recent)} chat errors:\n{patterns}\n\nDiagnose and fix the root cause.",
+                )
+                if pr_url:
+                    logger.info("Self-heal PR opened: %s", pr_url)
+                    _self_heal_errors.clear()
+        except Exception as e:
+            logger.error("Self-heal loop error: %s", e)
+
+
+def _update_context_after_fix(repo: str, pr_url: str, summary: str) -> None:
+    """Append a summary of significant changes to agentic_ai_context/CONTEXT_UPDATES.md."""
+    try:
+        gh = GitHubClient()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        entry = f"- {now} — [{repo}]({pr_url}): {summary}\n"
+
+        # Read current CONTEXT_UPDATES.md
+        result = gh.read_file("agentic_ai_context", "CONTEXT_UPDATES.md")
+        if result.get("type") == "file":
+            content = result["content"]
+        else:
+            content = "# Context Updates\n\nAutopilot logs significant changes here so other AIs can stay up to date.\n\n"
+
+        # Prepend new entry
+        new_content = content.replace("# Context Updates\n\n", f"# Context Updates\n\n{entry}")
+
+        # Commit to a branch and open PR
+        branch = f"autopilot/context-update-{int(time.time())}"
+        repo = gh.get_repo("TrueSightDAO", "agentic_ai_context")
+        base = repo.get_branch("main")
+        repo.create_git_ref(ref=f"refs/heads/{branch}", sha=base.commit.sha)
+        try:
+            existing = repo.get_contents("CONTEXT_UPDATES.md", ref=branch)
+            repo.update_file("CONTEXT_UPDATES.md", f"[autopilot] Context update: {repo} fix",
+                             new_content, existing.sha, branch=branch)
+        except Exception:
+            repo.create_file("CONTEXT_UPDATES.md", f"[autopilot] Context update: {repo} fix",
+                             new_content, branch=branch)
+        pr = repo.create_pull(
+            title=f"[autopilot] Context update: {repo} fix",
+            body=f"## Context Update\n\n{summary}\n\nTriggered by: {pr_url}\n\nThis PR was automatically generated by truesight_autopilot.",
+            head=branch, base="main",
+        )
+        logger.info("Context update PR opened: %s", pr.html_url)
+    except Exception as e:
+        logger.error("Failed to update context: %s", e)
 
 @app.post("/webhook/github")
 async def github_webhook(payload: dict):
