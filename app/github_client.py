@@ -1,4 +1,8 @@
-"""GitHub API client: clone repos, create branches, commit, open PRs."""
+"""GitHub API client: read repos, create branches, commit, open PRs.
+
+IMPORTANT: This client uses the GitHub Content API exclusively.
+It does NOT clone repos. Repos like .github are large static assets
+that should never be pulled locally — always read/write via the API."""
 from __future__ import annotations
 
 import logging
@@ -19,6 +23,26 @@ class GitHubClient:
         self.g = Github(auth=auth)
         self._user = self.g.get_user()
         logger.info("GitHub client authenticated as %s", self._user.login)
+
+    def list_org_repos(self, org: str = "TrueSightDAO") -> list[dict[str, str]]:
+        """List all repos in the org (name, description, default_branch)."""
+        try:
+            org_obj = self.g.get_organization(org)
+            repos = org_obj.get_repos(type="all", sort="full_name")
+            return [
+                {
+                    "name": r.name,
+                    "description": r.description or "",
+                    "default_branch": r.default_branch,
+                    "private": r.private,
+                    "archived": r.archived,
+                }
+                for r in repos
+                if not r.archived
+            ]
+        except Exception as e:
+            logger.error("Failed to list org repos: %s", e)
+            return []
 
     def read_file(self, repo_name: str, path: str, ref: str = "main") -> dict[str, Any]:
         """Read a file (or directory listing) from a repo."""
@@ -110,6 +134,25 @@ class GitHubClient:
             return True
         except Exception as e:
             logger.error("Failed to commit file: %s", e)
+            return False
+
+    def delete_file(
+        self, repo_name: str, branch: str, path: str,
+    ) -> bool:
+        """Delete a file from a branch."""
+        try:
+            repo = self.g.get_repo(repo_name)
+            existing = repo.get_contents(path, ref=branch)
+            repo.delete_file(
+                path=path,
+                message=f"[autopilot] Delete {path}",
+                sha=existing.sha,
+                branch=branch,
+            )
+            logger.info("Deleted %s from %s:%s", path, repo_name, branch)
+            return True
+        except Exception as e:
+            logger.error("Failed to delete file: %s", e)
             return False
 
     def open_pr(

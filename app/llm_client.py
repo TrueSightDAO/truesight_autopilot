@@ -137,7 +137,23 @@ class LLMClient:
 
 # Default tool schemas for governor chat
 def get_tool_schemas() -> list[dict[str, Any]]:
+    ALLOWED_CHAT_REPOS = ", ".join([
+        "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
+        "agroverse_shop", "agroverse_shop_prod", "dao_client",
+        "market_research", "sentiment_importer", "truesight_autopilot",
+    ])
     return [
+        {
+            "type": "function",
+            "function": {
+                "name": "list_org_repos",
+                "description": "List all repositories in the TrueSightDAO GitHub organization. Use this to discover what repos exist.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+        },
         {
             "type": "function",
             "function": {
@@ -159,13 +175,13 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "read_repo_file",
-                "description": "Read a file from a GitHub repository.",
+                "description": "Read a file from a TrueSightDAO GitHub repository.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "repo": {
                             "type": "string",
-                            "description": "GitHub repo name under TrueSightDAO, e.g. 'tokenomics'",
+                            "description": f"GitHub repo name under TrueSightDAO. Allowed: {ALLOWED_CHAT_REPOS}",
                         },
                         "path": {"type": "string", "description": "File path in the repo."},
                         "ref": {
@@ -182,17 +198,17 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "open_fix_pr",
-                "description": "Ask the autopilot to diagnose and fix an issue in a repo.",
+                "description": "Run a full agentic loop to diagnose and fix an issue in any TrueSightDAO repo. Opens a DRAFT PR that requires human review.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "repo": {
                             "type": "string",
-                            "description": "Repo name under TrueSightDAO, e.g. 'go_to_market'",
+                            "description": f"Repo name under TrueSightDAO. Allowed: {ALLOWED_CHAT_REPOS}",
                         },
                         "issue_description": {
                             "type": "string",
-                            "description": "Description of the issue to fix",
+                            "description": "Description of the issue to fix — be specific about what needs to change",
                         },
                     },
                     "required": ["repo", "issue_description"],

@@ -39,16 +39,25 @@ class EmailPoller:
     def _build_gmail_service(self):
         token_json = settings.gmail_token_json
         if not token_json:
-            raise RuntimeError("GMAIL_TOKEN_JSON not set")
-        creds_data = json.loads(token_json)
-        creds = Credentials.from_authorized_user_info(creds_data)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        return build("gmail", "v1", credentials=creds, cache_discovery=False)
+            logger.warning("GMAIL_TOKEN_JSON not set — email polling disabled")
+            return None
+        try:
+            creds_data = json.loads(token_json)
+            creds = Credentials.from_authorized_user_info(creds_data)
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            return build("gmail", "v1", credentials=creds, cache_discovery=False)
+        except Exception as e:
+            logger.error("Failed to build Gmail service: %s — email polling disabled", e)
+            return None
 
     async def run_loop(self, interval_seconds: int = 300):
         """Poll Gmail every 5 minutes."""
         import asyncio
+        if self.gmail is None:
+            logger.warning("Email polling skipped — Gmail not configured")
+            while True:
+                await asyncio.sleep(interval_seconds)
         while True:
             try:
                 self.poll_once()
@@ -58,6 +67,8 @@ class EmailPoller:
 
     def poll_once(self) -> int:
         """Process unread actionable emails. Returns count processed."""
+        if self.gmail is None:
+            return 0
         results = self.gmail.users().messages().list(
             userId="me", q="is:unread", maxResults=20
         ).execute()

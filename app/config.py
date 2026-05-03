@@ -4,10 +4,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", env_file=".env", env_file_encoding="utf-8")
     # Service
     port: int = int(os.getenv("PORT", "8001"))
     host: str = os.getenv("HOST", "0.0.0.0")
@@ -27,6 +28,13 @@ class Settings(BaseSettings):
 
     # GitHub
     github_pat: str = os.getenv("TRUESIGHT_DAO_AUTOPILOT", "")
+
+    # Allowed repos for code modifications
+    allowed_repos: list[str] = [
+        "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
+        "agroverse_shop", "agroverse_shop_prod", "dao_client",
+        "market_research", "sentiment_importer", "truesight_autopilot",
+    ]
 
     # Gmail
     gmail_token_json: str = os.getenv("GMAIL_TOKEN_JSON", "")
@@ -54,10 +62,6 @@ class Settings(BaseSettings):
         "AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git"
     )
     static_governors_json: Path | None = None
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()

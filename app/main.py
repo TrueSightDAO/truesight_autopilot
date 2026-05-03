@@ -18,6 +18,8 @@ from .context import get_system_prompt, refresh_system_prompt, get_context_file
 from .governor_registry import refresh_cache as refresh_governor_cache, load_governors
 from .llm_client import LLMClient, LLMError, get_tool_schemas
 from .tools.github_tools import read_repo_file
+from .fix_agent import FixAgent
+from .github_client import GitHubClient
 from .email_poller import EmailPoller
 from .aws_monitor import AWSMonitor
 
@@ -35,10 +37,16 @@ async def lifespan(app: FastAPI):
     logger.info("Autopilot starting up...")
 
     if not settings.dry_run:
-        email_poller = EmailPoller()
-        aws_monitor = AWSMonitor()
-        asyncio.create_task(email_poller.run_loop())
-        asyncio.create_task(aws_monitor.run_loop())
+        try:
+            email_poller = EmailPoller()
+            asyncio.create_task(email_poller.run_loop())
+        except Exception as e:
+            logger.warning("Email poller failed to start: %s", e)
+        try:
+            aws_monitor = AWSMonitor()
+            asyncio.create_task(aws_monitor.run_loop())
+        except Exception as e:
+            logger.warning("AWS monitor failed to start: %s", e)
     else:
         logger.info("DRY_RUN=true — no background tasks started")
 
@@ -158,7 +166,15 @@ async def chat(request: Request) -> JSONResponse:
                 func_args = json.loads(tc["function"]["arguments"])
                 tool_call_id = tc["id"]
 
-                if func_name == "read_context_file":
+                if func_name == "list_org_repos":
+                    gh = GitHubClient()
+                    repos = gh.list_org_repos()
+                    if repos:
+                        lines = [f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}" for r in repos]
+                        result_text = "TrueSightDAO repositories:\n" + "\n".join(lines)
+                    else:
+                        result_text = "Failed to list repos or none found."
+                elif func_name == "read_context_file":
                     result = get_context_file(func_args.get("path", ""))
                     result_text = result if result else "File not found."
                 elif func_name == "read_repo_file":
@@ -176,8 +192,14 @@ async def chat(request: Request) -> JSONResponse:
                     else:
                         result_text = f"Error: {result.get('error', 'unknown')}"
                 elif func_name == "open_fix_pr":
-                    result_text = f"Autopilot fix requested for {func_args.get('repo')}. This will be processed asynchronously."
-                    # TODO: enqueue fix task
+                    repo_name = func_args.get("repo", "")
+                    issue = func_args.get("issue_description", "")
+                    if repo_name not in ["dapp", "tokenomics", "truesight_me", "truesight_me_prod", "agroverse_shop", "agroverse_shop_prod", "dao_client", "market_research", "sentiment_importer", "truesight_autopilot"]:
+                        result_text = f"Error: repo '{repo_name}' not in allowed list."
+                    else:
+                        fixer = FixAgent()
+                        pr_url = fixer.run_simple(repo_name, issue)
+                        result_text = f"PR opened: {pr_url}" if pr_url else "Fix agent failed to produce a PR."
                 elif func_name == "create_dao_submission":
                     result_text = "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."
                 else:

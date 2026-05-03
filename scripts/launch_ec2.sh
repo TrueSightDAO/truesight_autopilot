@@ -26,9 +26,9 @@ echo "=== Launching EC2 ==="
 INSTANCE_ID=$(aws ec2 run-instances \
   --image-id ami-00403f401ee6a4b98 \
   --instance-type t3.small \
-  --key-name governor_chatbot \
-  --security-group-ids sg-0d3b6c10480d83248 \
-  --subnet-id subnet-de8102b9 \
+  --key-name garyjob_aws \
+  --security-group-ids sg-e98f788e \
+  --subnet-id subnet-44257d33 \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=truesight-autopilot},{Key=Project,Value=TrueSightDAO},{Key=Service,Value=autopilot}]' \
   --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]' \
   --user-data file://"$SCRIPT_DIR/user-data.sh" \

@@ -4,7 +4,7 @@ set -e
 # Deploy truesight_autopilot to EC2
 # Assumes governor_chatbot_service EC2 is already provisioned
 
-EC2_HOST="${EC2_HOST:-ubuntu@<YOUR_EC2_IP>}"
+EC2_HOST="${EC2_HOST:-truesight-autopilot}"
 EC2_KEY="${EC2_KEY:-~/.ssh/agentic_ai_github/id_ed25519}"
 REMOTE_DIR="/opt/truesight_autopilot"
 

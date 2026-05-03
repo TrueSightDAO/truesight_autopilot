@@ -171,8 +171,26 @@ This repo merges two previous services:
 
 Merged 2026-05-03. DeepSeek-V3 replaces Kimi + Claude for all LLM workloads. Deployed on a **dedicated EC2** separate from `seni_ror` (Edgar) to protect critical infrastructure.
 
+## Code Modification (Agentic Loop)
+
+The autopilot can now modify **any TrueSightDAO repo** through governor chat:
+
+| Repo | Scope |
+|------|-------|
+| `dapp` | DApp HTML/JS pages |
+| `tokenomics` | GAS, Python scripts |
+| `truesight_me` / `truesight_me_prod` | Static site |
+| `agroverse_shop` / `agroverse_shop_prod` | E-commerce site |
+| `dao_client` | Python CLI + auth |
+| `market_research` | Research pipelines |
+| `sentiment_importer` | Edgar Rails API |
+| `truesight_autopilot` | Self-healing |
+
+Tools available in the agentic loop: `read_file`, `edit_file`, `create_file`, `delete_file`, `grep_code`, `py_compile`. Every change opens a **DRAFT PR** — never auto-merges. See `agentic_ai_context/AUTOPILOT_CODE_MODIFICATIONS.md` for full spec.
+
 ## Related
 
 - `agentic_ai_context/API_CREDENTIALS_DOCUMENTATION.md` §10 — Credential audit and readiness
 - `agentic_ai_context/SETUP_REQUIREMENTS.md` — Autopilot prerequisites and blockers
+- `agentic_ai_context/AUTOPILOT_CODE_MODIFICATIONS.md` — Full agentic loop spec
 - `market_research` — Primary repo the autopilot will monitor and fix

@@ -19,6 +19,7 @@ CANONICAL_CONTEXT_FILES: list[str] = [
     "DAPP_PAGE_CONVENTIONS.md",
     "API_CREDENTIALS_DOCUMENTATION.md",
     "SETUP_REQUIREMENTS.md",
+    "AUTOPILOT_CODE_MODIFICATIONS.md",
 ]
 
 _SYSTEM_PROMPT_HEADER = """You are the TrueSight DAO Autopilot — an autonomous SRE and developer assistant.
@@ -35,10 +36,10 @@ You have full read access to the workspace context and can execute approved acti
 8. When discussing strategy, reference DR_MANHATTAN.md principles.
 
 ## AVAILABLE TOOLS
+- list_org_repos() — list all repos in TrueSightDAO org (use to discover repos)
 - read_context_file(path) — read a file from agentic_ai_context
-- read_repo_file(repo, path, ref="main") — read a file from a GitHub repo
-- create_pr(repo, branch, base="main", title, body, files=[]) — create a branch + PR
-- open_fix_pr(repo, issue_description) — diagnose and open a fix PR
+- read_repo_file(repo, path, ref="main") — read a file from a GitHub repo (content API, no clone)
+- open_fix_pr(repo, issue_description) — diagnose and open a fix PR via agentic loop
 
 ## AUTOPILOT MODE
 When the governor asks you to fix something, create something, or check infrastructure:

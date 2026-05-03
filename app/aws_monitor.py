@@ -27,7 +27,7 @@ class AWSMonitor:
             self._ce = boto3.client("ce", region_name=settings.aws_region)
             self._health = boto3.client("health", region_name=settings.aws_region)
             # Test connectivity
-            self._cw.list_metrics(Namespace="AWS/EC2", MaxResults=1)
+            self._cw.list_metrics(Namespace="AWS/EC2")
             logger.info("AWS CloudWatch connected")
         except ClientError as e:
             logger.error("AWS client init failed: %s", e)
