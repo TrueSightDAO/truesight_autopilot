@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from github import Github, Auth
 
@@ -18,6 +19,31 @@ class GitHubClient:
         self.g = Github(auth=auth)
         self._user = self.g.get_user()
         logger.info("GitHub client authenticated as %s", self._user.login)
+
+    def read_file(self, repo_name: str, path: str, ref: str = "main") -> dict[str, Any]:
+        """Read a file (or directory listing) from a repo."""
+        try:
+            repo = self.g.get_repo(repo_name)
+            content = repo.get_contents(path, ref=ref)
+            if isinstance(content, list):
+                return {
+                    "type": "directory",
+                    "entries": [
+                        {"name": item.name, "type": item.type, "path": item.path}
+                        for item in content
+                    ],
+                }
+            decoded = content.decoded_content.decode("utf-8", errors="replace")
+            return {
+                "type": "file",
+                "content": decoded,
+                "size": content.size,
+                "sha": content.sha,
+                "url": content.html_url,
+            }
+        except Exception as e:
+            logger.error("Failed to read %s/%s: %s", repo_name, path, e)
+            return {"type": "error", "error": str(e)}
 
     def fetch_workflow_log(self, repo_name: str, run_id: str, max_lines: int = 200) -> str:
         """Fetch the tail of a workflow run log."""

@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from .config import settings
 from .github_client import GitHubClient
 from .llm_client import LLMClient, LLMError
+from .fix_agent import FixAgent
 
 logger = logging.getLogger("autopilot.email")
 
@@ -156,6 +157,9 @@ class EmailPoller:
         logger.info("Diagnosis: %s", diagnosis.get("root_cause", "N/A"))
 
         if diagnosis.get("proposed_fix") and not settings.dry_run:
-            # TODO: implement actual code edit + PR open
-            # self.github.open_fix_pr(repo, diagnosis)
-            pass
+            agent = FixAgent()
+            pr_url = agent.run(repo, diagnosis)
+            if pr_url:
+                logger.info("Opened fix PR: %s", pr_url)
+            else:
+                logger.info("Fix agent did not produce a PR")
