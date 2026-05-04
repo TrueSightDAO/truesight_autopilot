@@ -35,6 +35,17 @@ if [ -f ".env" ]; then
     scp -i "$EC2_KEY" .env "$EC2_HOST:$REMOTE_DIR/.env"
 fi
 
+echo "=== Syncing agentic_ai_context ==="
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    mkdir -p $REMOTE_DIR/context
+    if [ -d $REMOTE_DIR/context/agentic_ai_context/.git ]; then
+        cd $REMOTE_DIR/context/agentic_ai_context && git pull --ff-only
+    else
+        rm -rf $REMOTE_DIR/context/agentic_ai_context
+        git clone --depth 1 https://github.com/TrueSightDAO/agentic_ai_context.git $REMOTE_DIR/context/agentic_ai_context
+    fi
+"
+
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     cd $REMOTE_DIR

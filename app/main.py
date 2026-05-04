@@ -9,7 +9,12 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, status
+import base64
+import mimetypes
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -31,6 +36,8 @@ logger = logging.getLogger("autopilot")
 email_poller: EmailPoller | None = None
 aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
+UPLOAD_DIR = Path("/tmp/autopilot_uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -164,12 +171,12 @@ async def _run_tool(func_name: str, func_args: dict) -> str:
     return f"Unknown tool: {func_name}"
 
 
-async def _stream_chat(user_message: str, history: list[dict], session_id: str):
+async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None):
     system_prompt = get_system_prompt()
     client = LLMClient()
     tools = get_tool_schemas()
     req_id = int(time.time() * 1000) % 1000000
-    logger.info("[%d] CHAT REQ: session=%s msg=%.150s", req_id, session_id[:16], user_message)
+    logger.info("[%d] CHAT REQ: session=%s msg=%.150s attach=%s", req_id, session_id[:16], user_message, attachment_info is not None)
 
     try:
         completion = client.chat(system_prompt, history, tools=tools)
@@ -290,6 +297,77 @@ async def chat(request: Request):
 
     return StreamingResponse(
         _stream_chat(user_message, history, session_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/chat/upload")
+async def chat_upload(
+    request: Request,
+    message: str = Form(...),
+    file: UploadFile | None = File(None),
+):
+    """Accepts a chat message + optional file attachment. Saves the file to /tmp
+    and includes a reference in the conversation so the LLM can analyze it."""
+    public_key = request.headers.get("X-Public-Key", "")
+    payload_raw = request.headers.get("X-Payload", "")
+    signature = request.headers.get("X-Signature", "")
+
+    if payload_raw and signature and public_key:
+        payload = json.loads(payload_raw)
+        verify_payload(payload, signature, public_key)
+    else:
+        public_key = verify_jwt(request)
+
+    session_id = public_key
+    attachment_info = None
+
+    if file and file.filename:
+        ext = Path(file.filename).suffix or ""
+        safe_name = f"{uuid.uuid4().hex}{ext}"
+        dest = UPLOAD_DIR / safe_name
+        content = await file.read()
+        dest.write_bytes(content)
+
+        mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
+        size_kb = round(len(content) / 1024, 1)
+
+        attachment_info = {
+            "filename": file.filename,
+            "saved_as": str(dest),
+            "mime_type": mime_type,
+            "size_kb": size_kb,
+        }
+
+        # Build a descriptive message for the LLM
+        content_part = (
+            f"[File attachment: {file.filename} ({mime_type}, {size_kb} KB)]\n"
+            f"File saved at: {dest}\n"
+        )
+
+        # For images, add base64 preview for vision-capable models
+        if mime_type and mime_type.startswith("image/") and len(content) < 5 * 1024 * 1024:
+            b64 = base64.b64encode(content).decode()
+            b64_data_url = f"data:{mime_type};base64,{b64}"
+            content_part += f"Image data URL: {b64_data_url}\n"
+
+        user_message = f"{message}\n\n{content_part}" if message.strip() else content_part.strip()
+    else:
+        user_message = message
+
+    if not user_message.strip():
+        raise HTTPException(status_code=400, detail="message or file is required.")
+
+    history = _sessions.get(session_id, [])
+    history.append({"role": "user", "content": user_message})
+
+    return StreamingResponse(
+        _stream_chat(user_message, history, session_id, attachment_info=attachment_info),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

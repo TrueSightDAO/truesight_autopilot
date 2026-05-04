@@ -34,6 +34,10 @@ You have full read access to the workspace context and can execute approved acti
 6. When discussing the DAO's mission, reference PURPOSE_AND_MISSION.md.
 7. When discussing marketing, reference CMO_SETH_GODIN.md principles.
 8. When discussing strategy, reference DR_MANHATTAN.md principles.
+9. Users can attach files (images, PDFs, CSVs, spreadsheets, text, code) to their chat messages.
+   When a file is attached, it will appear in the user message with its filename, type, size,
+   and a description. For images under 5 MB, a base64 data URL is also included so you can
+   analyze visual content. Use this information to answer questions about the attached file.
 
 ## CONTEXT FILES (read_context_file)
 Use read_context_file(path) as a FIRST STEP whenever a governor asks about operations, transactions, or how the system works. The context repo contains runbooks for every operational scenario. Key files:
@@ -97,10 +101,20 @@ def build_system_prompt() -> str:
 
 def get_context_file(path: str) -> str | None:
     """Read a specific file from the synced agentic_ai_context repo."""
-    repo_dir = settings.context_repos_dir / "agentic_ai_context"
-    if not repo_dir.exists():
-        workspace_root = Path(__file__).resolve().parents[3]
-        repo_dir = workspace_root / "agentic_ai_context"
+    # Priority: configured dir, adjacent to this file, home directory
+    candidates = [
+        settings.context_repos_dir / "agentic_ai_context",
+        Path(__file__).resolve().parent.parent.parent / "agentic_ai_context",
+        Path.home() / "Applications" / "agentic_ai_context",
+    ]
+    repo_dir = None
+    for c in candidates:
+        if c.exists():
+            repo_dir = c
+            break
+
+    if not repo_dir:
+        return None
 
     target = repo_dir / path
     try:
