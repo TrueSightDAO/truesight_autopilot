@@ -21,12 +21,13 @@ pip install -r requirements.txt
 echo "=== Syncing to EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "sudo mkdir -p $REMOTE_DIR && sudo chown ubuntu:ubuntu $REMOTE_DIR"
 
-# rsync code (excluding venv, .git, caches)
+# rsync code (excluding venv, .git, caches, and context dir — that's handled separately via git)
 rsync -avz --delete \
     --exclude='.venv' \
     --exclude='.git' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
+    --exclude='context' \
     ./ "$EC2_HOST:$REMOTE_DIR/"
 
 # Sync .env separately (gitignored locally, needed on EC2)
@@ -39,7 +40,7 @@ echo "=== Syncing agentic_ai_context ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     mkdir -p $REMOTE_DIR/context
     if [ -d $REMOTE_DIR/context/agentic_ai_context/.git ]; then
-        cd $REMOTE_DIR/context/agentic_ai_context && git pull --ff-only
+        cd $REMOTE_DIR/context/agentic_ai_context && git fetch --all && git reset --hard origin/main && git clean -fd
     else
         rm -rf $REMOTE_DIR/context/agentic_ai_context
         git clone --depth 1 https://github.com/TrueSightDAO/agentic_ai_context.git $REMOTE_DIR/context/agentic_ai_context
