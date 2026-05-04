@@ -11,6 +11,8 @@ from typing import Any
 
 import base64
 import mimetypes
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -338,6 +340,25 @@ async def chat_upload(
         mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
         size_kb = round(len(content) / 1024, 1)
 
+        # Convert HEIC/HEIF to JPEG for broader compatibility
+        converted = False
+        if ext.lower() in (".heic", ".heif") and len(content) < 10 * 1024 * 1024:
+            try:
+                jpg_dest = UPLOAD_DIR / f"{dest.stem}.jpg"
+                subprocess.run(
+                    ["sips", "-s", "format", "jpeg", str(dest), "--out", str(jpg_dest)],
+                    capture_output=True, timeout=30, check=True,
+                )
+                jpg_content = jpg_dest.read_bytes()
+                mime_type = "image/jpeg"
+                size_kb = round(len(jpg_content) / 1024, 1)
+                content = jpg_content
+                dest = jpg_dest
+                converted = True
+                logger.info("Converted HEIC %s to JPEG (%d KB)", file.filename, size_kb)
+            except Exception as e:
+                logger.warning("HEIC conversion failed for %s: %s", file.filename, e)
+
         attachment_info = {
             "filename": file.filename,
             "saved_as": str(dest),
@@ -350,8 +371,10 @@ async def chat_upload(
             f"[File attachment: {file.filename} ({mime_type}, {size_kb} KB)]\n"
             f"File saved at: {dest}\n"
         )
+        if converted:
+            content_part += f"(Converted from HEIC to JPEG for analysis)\n"
 
-        # For images, add base64 preview for vision-capable models
+        # For images under 5MB, include base64 preview for vision-capable models
         if mime_type and mime_type.startswith("image/") and len(content) < 5 * 1024 * 1024:
             b64 = base64.b64encode(content).decode()
             b64_data_url = f"data:{mime_type};base64,{b64}"
