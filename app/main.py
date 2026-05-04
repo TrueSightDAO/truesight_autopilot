@@ -309,7 +309,6 @@ async def chat(request: Request):
 @app.post("/chat/upload")
 async def chat_upload(
     request: Request,
-    message: str = Form(...),
     file: UploadFile | None = File(None),
 ):
     """Accepts a chat message + optional file attachment. Saves the file to /tmp
@@ -321,8 +320,10 @@ async def chat_upload(
     if payload_raw and signature and public_key:
         payload = json.loads(payload_raw)
         verify_payload(payload, signature, public_key)
+        user_message_text = payload.get("message", "")
     else:
         public_key = verify_jwt(request)
+        user_message_text = ""
 
     session_id = public_key
     attachment_info = None
@@ -356,11 +357,11 @@ async def chat_upload(
             b64_data_url = f"data:{mime_type};base64,{b64}"
             content_part += f"Image data URL: {b64_data_url}\n"
 
-        user_message = f"{message}\n\n{content_part}" if message.strip() else content_part.strip()
+        user_message = f"{user_message_text}\n\n{content_part}" if user_message_text.strip() else content_part.strip()
     else:
-        user_message = message
+        user_message = user_message_text
 
-    if not user_message.strip():
+    if not user_message.strip() and not user_message_text.strip():
         raise HTTPException(status_code=400, detail="message or file is required.")
 
     history = _sessions.get(session_id, [])
