@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
 import time
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, List
 
-import base64
 import mimetypes
 import subprocess
 import tempfile
@@ -18,14 +18,25 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
 from .context import get_system_prompt, refresh_system_prompt, get_context_file
 from .governor_registry import refresh_cache as refresh_governor_cache, load_governors
+
+
+def _gov_name_for_key(public_key_b64: str) -> str | None:
+    """Look up governor name from public key. Returns name or None."""
+    data = load_governors()
+    for g in data.get("governors", []):
+        if g.get("public_key") == public_key_b64:
+            return g.get("name")
+    return None
 from .llm_client import LLMClient, LLMError, get_tool_schemas
 from .tools.github_tools import read_repo_file
+from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
+from .grok_client import grok_analyze_images, GROK_MODEL
 from .fix_agent import FixAgent
 from .github_client import GitHubClient
 from .email_poller import EmailPoller
@@ -38,8 +49,48 @@ logger = logging.getLogger("autopilot")
 email_poller: EmailPoller | None = None
 aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
+_pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission awaiting approval
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+SESSION_LOG_DIR = settings.session_log_dir
+SESSION_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _session_key(public_key: str, request: Request) -> str:
+    """Build session key from public_key + X-Session-Id header.
+    - Same tab (same sessionStorage): persists across refreshes and server restarts
+    - New tab (new sessionStorage): new session, no cross-contamination
+    Falls back to public_key alone if no session header.
+    """
+    sid = request.headers.get("X-Session-Id", "")
+    return f"{public_key[:20]}:{sid}" if sid else public_key
+
+
+def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
+    """Load session from memory, then from disk if not found."""
+    if session_key in _sessions:
+        return _sessions[session_key]
+
+    import hashlib
+    sid_hash = hashlib.md5(session_key.encode()).hexdigest()[:12]
+    log_path = SESSION_LOG_DIR / f"{sid_hash}.json"
+    if log_path.exists():
+        try:
+            data = json.loads(log_path.read_text(encoding="utf-8"))
+            messages = data.get("full_history") or data.get("recent_messages") or []
+            # Clean legacy XML leaks from old sessions
+            for m in messages:
+                content = m.get("content", "")
+                if isinstance(content, str) and "<function_calls>" in content:
+                    m["content"] = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
+            _sessions[session_key] = messages
+            logger.info("Restored session %s with %d messages", sid_hash, len(messages))
+            return messages
+        except Exception:
+            pass
+
+    _sessions[session_key] = []
+    return _sessions[session_key]
 
 
 @asynccontextmanager
@@ -92,12 +143,89 @@ async def health():
         "github_pat_set": bool(settings.github_pat),
         "gmail_token_set": bool(settings.gmail_token_json),
         "deepseek_key_set": bool(settings.deepseek_api_key),
+        "grok_key_set": bool(settings.grok_api_key),
         "governors_count": len(gov_data.get("governors", [])),
         "governors_updated_at": gov_data.get("updated_at", ""),
     }
 
 
+@app.get("/uploads/{filename}")
+async def serve_upload(filename: str):
+    """Serve uploaded files (images, PDFs, etc.) for thumbnail display."""
+    file_path = UPLOAD_DIR / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404)
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    return FileResponse(file_path, media_type=mime_type or "application/octet-stream")
+
+
 # ───────────────────────────── Governor Chat ─────────────────────────────
+
+@app.get("/session")
+async def get_session(request: Request) -> JSONResponse:
+    """Return the current conversation history so the frontend can restore it on refresh.
+    Uses X-Public-Key + X-Session-Id headers (same as session keying)."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    history = _load_or_create_session(session_id)
+
+    # Filter out internal system messages and strip legacy XML leaks
+    visible = []
+    for msg in history:
+        role = msg.get("role", "")
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        # Strip legacy XML tool-call syntax if it leaked through
+        content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
+        if not content:
+            continue
+        if role in ("user", "assistant") and "GOVERNOR_IDENTITY:" not in content:
+            visible.append({"role": role, "content": content})
+
+    return JSONResponse({"messages": visible, "session_id": session_id})
+
+
+@app.get("/sessions")
+async def list_sessions(request: Request) -> JSONResponse:
+    """List all saved sessions for this governor."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    import hashlib
+    idx_file = SESSION_LOG_DIR / f"{hashlib.md5(public_key.encode()).hexdigest()[:12]}_sessions.json"
+    if not idx_file.exists():
+        return JSONResponse({"sessions": []})
+    data = json.loads(idx_file.read_text(encoding="utf-8"))
+    return JSONResponse({"sessions": data.get("sessions", [])})
+
+
+@app.post("/sessions/new")
+async def new_session(request: Request) -> JSONResponse:
+    """Create a new empty session and return its ID."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    sid = str(uuid.uuid4())
+    session_key = f"{public_key[:20]}:{sid}"
+    _sessions[session_key] = []
+    _save_session_index(public_key, sid)
+    return JSONResponse({"session_id": sid})
+
+
+@app.patch("/sessions/{sid}")
+async def rename_session(sid: str, request: Request) -> JSONResponse:
+    """Rename a session."""
+    public_key = request.headers.get("X-Public-Key", "")
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    _save_session_index(public_key, sid, name)
+    return JSONResponse({"status": "ok"})
+
 
 @app.post("/auth/challenge")
 async def auth_challenge(request: Request) -> JSONResponse:
@@ -129,7 +257,126 @@ def _sse_event(event_type: str, data: object) -> str:
     return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
 
 
-async def _run_tool(func_name: str, func_args: dict) -> str:
+# Canonical labels from dao_client modules — each event type has exact field names.
+# Source: truesight_dao_client/modules/{report_inventory_movement,report_sales,...}.py
+_CANONICAL_LABELS: dict[str, list[str]] = {
+    "INVENTORY MOVEMENT": [
+        "Manager Name", "Recipient Name", "Inventory Item", "QR Code",
+        "Quantity", "Latitude", "Longitude", "Attached Filename",
+        "Destination Inventory File Location", "Submission Source",
+    ],
+    "SALES EVENT": [
+        "Item", "Sales price", "Sold by", "Cash proceeds collected by",
+        "Owner email", "Stripe Session ID", "Shipping Provider",
+        "Tracking number", "Attached Filename", "Submission Source",
+    ],
+    "CONTRIBUTION EVENT": [
+        "Type", "Amount", "Description", "Contributor(s)", "TDG Issued",
+    ],
+    "QR CODE EVENT": [
+        "Attached Filename", "Submission Source",
+    ],
+    "QR CODE UPDATE EVENT": [],
+    "CAPITAL INJECTION EVENT": [
+        "Ledger", "Ledger URL", "Amount", "Description",
+    ],
+    "TREE PLANTING EVENT": [
+        "Number of trees planted", "Species", "Location", "Attached Filename", "Submission Source",
+    ],
+    "DAO Inventory Expense Event": [
+        "DAO Member Name", "Target Ledger", "Latitude", "Longitude",
+        "Inventory Type", "Inventory Quantity", "Description",
+        "Attached Filename", "Destination Inventory File Location",
+    ],
+}
+
+# Map of LLM-invented field names → canonical labels (case-insensitive matching)
+_FIELD_ALIASES: dict[str, str] = {
+    # Inventory Movement
+    "manager_name": "Manager Name", "manager": "Manager Name",
+    "manager (from)": "Manager Name", "from": "Manager Name",
+    "sender": "Manager Name", "source": "Manager Name",
+    "recipient_name": "Recipient Name", "recipient": "Recipient Name",
+    "recipient (to)": "Recipient Name", "to": "Recipient Name",
+    "receiver": "Recipient Name", "destination_name": "Recipient Name",
+    "inventory_item": "Inventory Item", "item": "Inventory Item",
+    "product": "Inventory Item", "item_name": "Inventory Item",
+    "qr_code": "QR Code", "qr": "QR Code", "code": "QR Code",
+    "quantity": "Quantity", "qty": "Quantity", "count": "Quantity",
+    "amount": "Quantity",
+    "destination_inventory_file_location": "Destination Inventory File Location",
+    "destination": "Destination Inventory File Location",
+    "ledger": "Destination Inventory File Location",
+    "ledger_name": "Destination Inventory File Location",
+    "location": "Destination Inventory File Location",
+    "attached_filename": "Attached Filename", "filename": "Attached Filename",
+    "attachment": "Attached Filename",
+    # Sales
+    "sales_price": "Sales price", "price": "Sales price",
+    "sold_by": "Sold by",
+    "cash_proceeds_collected_by": "Cash proceeds collected by",
+    "owner_email": "Owner email", "email": "Owner email",
+    "stripe_session_id": "Stripe Session ID", "stripe": "Stripe Session ID",
+    "shipping_provider": "Shipping Provider",
+    "tracking_number": "Tracking number", "tracking": "Tracking number",
+    # Contribution
+    "contributor": "Contributor(s)", "contributors": "Contributor(s)",
+    "contributor(s)": "Contributor(s)",
+    "tdg_issued": "TDG Issued", "tdgs": "TDG Issued",
+    # General
+    "submission_source": "Submission Source",
+}
+
+# Descriptive-only fields that should be dropped (not canonical labels)
+_NON_CANONICAL_KEYS = {
+    "type", "description", "notes", "status", "summary",
+    "details", "comment", "remarks", "tags",
+}
+
+
+def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
+    """Coerce LLM-generated attribute keys to canonical dao_client labels.
+    
+    Steps:
+    1. Map alias names to canonical labels
+    2. Drop non-canonical descriptive keys
+    3. Keep only canonical labels for the event type
+    """
+    canonical_set = set(_CANONICAL_LABELS.get(event_name, []))
+
+    normalized = {}
+    for key, value in attributes.items():
+        # Skip descriptive-only keys
+        if key.lower() in _NON_CANONICAL_KEYS:
+            continue
+        # Map aliases to canonical names
+        canonical_key = _FIELD_ALIASES.get(key.lower(), key)
+        # If event has defined canonical labels, only keep matching ones
+        if canonical_set and canonical_key not in canonical_set:
+            # For events with no defined labels (QR CODE UPDATE), keep all
+            if canonical_set:
+                continue
+        normalized[canonical_key] = str(value)
+
+    return normalized
+
+
+def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
+    """Return list of missing required fields. Empty list = valid."""
+    required = {
+        "INVENTORY MOVEMENT": ["Manager Name", "Recipient Name", "QR Code"],
+        "SALES EVENT": ["Item", "Sales price", "Sold by"],
+        "CONTRIBUTION EVENT": ["Type", "Amount"],
+        "CAPITAL INJECTION EVENT": ["Ledger", "Amount"],
+    }
+    missing = []
+    for field in required.get(event_name, []):
+        if field not in attributes:
+            missing.append(field)
+    return missing
+
+
+async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None = None) -> str:
     if func_name == "list_org_repos":
         gh = GitHubClient()
         repos = gh.list_org_repos()
@@ -154,9 +401,96 @@ async def _run_tool(func_name: str, func_args: dict) -> str:
             )
         return f"Error: {result.get('error', 'unknown')}"
     if func_name == "submit_contribution":
-        edgar = EdgarDirectClient()
+        # DUPLICATE GUARD: check DAO ledger (ground truth) before submitting
         event_name = func_args.get("event_name", "CONTRIBUTION EVENT")
         attributes = func_args.get("attributes", {})
+
+        # Normalize attribute keys to canonical labels
+        attributes = _normalize_submission_labels(event_name, attributes)
+
+        # Validate required fields
+        missing = _validate_required_fields(event_name, attributes)
+        if missing:
+            return json.dumps({
+                "status": "invalid",
+                "message": f"Missing required fields for {event_name}: {', '.join(missing)}. Canonical labels are: {', '.join(_CANONICAL_LABELS.get(event_name, ['(any)']))}",
+            })
+
+        qr = attributes.get("QR Code", "")
+        recipient = attributes.get("Recipient Name", "")
+
+        # 1. Check session history for prior submission
+        if qr and history:
+            for msg in history:
+                content = str(msg.get("content", ""))
+                if msg.get("role") == "tool" and qr in content and ("submitted successfully" in content.lower() or "duplicate" in content.lower()):
+                    return json.dumps({"status": "duplicate", "message": f"QR code {qr} was already submitted. Skipping."})
+
+        # 2. Check DAO ledger (ground truth)
+        if qr:
+            try:
+                ledger_state = lookup_qr_code(qr)
+                if ledger_state.get("status") == "success":
+                    current_status = ledger_state.get("qr_status", "").upper()
+                    current_manager = ledger_state.get("manager_name", "")
+                    if current_status not in ("MINTED", ""):
+                        return json.dumps({
+                            "status": "duplicate",
+                            "message": f"QR code {qr} has status '{current_status}' (manager: {current_manager}) — already processed. Ground truth from DAO ledger.",
+                            "ledger_state": ledger_state,
+                        })
+                    if recipient and current_manager and recipient.lower() == current_manager.lower():
+                        return json.dumps({
+                            "status": "duplicate",
+                            "message": f"QR code {qr} is already managed by {current_manager} (recipient is also {recipient}). Nothing to move.",
+                            "ledger_state": ledger_state,
+                        })
+            except Exception:
+                pass
+
+        # 3. APPROVAL GATE: check if user explicitly approved this submission
+        approved = False
+        if history:
+            for msg in reversed(history):
+                if msg.get("role") == "user":
+                    content = str(msg.get("content", "")).lower()
+                    if qr and qr.lower() in content:
+                        if any(kw in content for kw in ["approved", "approve", "go ahead", "yes", "confirm", "proceed", "execute", "do it", "submit it"]):
+                            approved = True
+                            break
+                        if any(kw in content for kw in ["reject", "cancel", "no", "stop", "don't"]):
+                            return json.dumps({"status": "cancelled", "message": "Submission cancelled by user."})
+
+        if not approved:
+            # Build proposal for frontend to render as Approve/Reject card
+            manager = attributes.get("Manager Name", "")
+            item = attributes.get("Inventory Item", "")
+            qty = attributes.get("Quantity", "1")
+            ledger = attributes.get("Destination Inventory File Location", "")
+            summary = f"Move {qty}x {item} from {manager} to {recipient}" if item else f"Submit {event_name} for {qr}"
+            command = f"truesight-dao-report-inventory-movement"
+            if manager: command += f' --manager-name "{manager}"'
+            if recipient: command += f' --recipient-name "{recipient}"'
+            if item: command += f' --inventory-item "{item}"'
+            if qr: command += f' --qr-code "{qr}"'
+            if qty: command += f' --quantity "{qty}"'
+            if ledger: command += f' --destination-inventory-file-location "{ledger}"'
+
+            proposal = {
+                "status": "pending_approval",
+                "proposal": {
+                    "action": "submit_contribution",
+                    "title": f"{event_name}: {qr}" if qr else event_name,
+                    "summary": summary,
+                    "command": command,
+                    "tool_args": {"event_name": event_name, "attributes": attributes},
+                },
+                "message": f"⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel."
+            }
+            return json.dumps(proposal)
+
+        # APPROVED — execute
+        edgar = EdgarDirectClient()
         ok = edgar.submit_contribution(event_name, attributes, description=attributes.get("Description", ""))
         return "Contribution submitted successfully." if ok else "Failed to submit contribution."
     if func_name == "open_fix_pr":
@@ -168,6 +502,22 @@ async def _run_tool(func_name: str, func_args: dict) -> str:
         fixer = FixAgent()
         pr_url = fixer.run_simple(repo_name, issue)
         return f"PR opened: {pr_url}" if pr_url else "Fix agent failed to produce a PR."
+    if func_name == "scan_qr_from_file":
+        file_path = func_args.get("file_path", "")
+        result = scan_qr_from_file(file_path)
+        return json.dumps(result, indent=2)
+    if func_name == "scan_qr_batch":
+        file_paths = func_args.get("file_paths", [])
+        result = scan_qr_batch(file_paths)
+        return json.dumps(result, indent=2)
+    if func_name == "lookup_qr_code":
+        qr_code = func_args.get("qr_code", "")
+        result = lookup_qr_code(qr_code)
+        return json.dumps(result, indent=2)
+    if func_name == "lookup_qr_batch":
+        qr_codes = func_args.get("qr_codes", [])
+        result = lookup_qr_batch(qr_codes)
+        return json.dumps(result, indent=2)
     if func_name == "create_dao_submission":
         return "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."
     return f"Unknown tool: {func_name}"
@@ -180,55 +530,72 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     req_id = int(time.time() * 1000) % 1000000
     logger.info("[%d] CHAT REQ: session=%s msg=%.150s attach=%s", req_id, session_id[:16], user_message, attachment_info is not None)
 
+    # Trim history to avoid context overflow (max ~400K chars = ~100K tokens for messages)
+    # deepseek-chat has 128K context; leave ~28K for system prompt, tools, and completion
+    MAX_HISTORY_CHARS = 400_000
+    total = sum(len(msg.get("content", "")) for msg in history)
+    while total > MAX_HISTORY_CHARS and len(history) > 4:
+        removed = history.pop(0)
+        total -= len(removed.get("content", ""))
+
+
     try:
-        completion = client.chat(system_prompt, history, tools=tools)
-        assistant_message = completion["choices"][0].get("message", {})
-        logger.info("[%d] DEEPSEEK RESP: tools=%d tokens=%s", req_id,
-                     len(assistant_message.get("tool_calls", [])),
-                     completion.get("usage", {}).get("total_tokens", "?"))
+        MAX_TOOL_ROUNDS = 5
+        assistant_text = ""
+        round_num = 0
 
-        tool_calls = assistant_message.get("tool_calls", [])
+        while round_num < MAX_TOOL_ROUNDS:
+            round_num += 1
+            completion = client.chat(system_prompt, history, tools=tools)
+            _log_raw_llm(session_id, f"deepseek-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
+            assistant_message = completion["choices"][0].get("message", {})
+            tool_calls = client.extract_tool_calls(completion)
+            logger.info("[%d] DEEPSEEK RESP round=%d tools=%d tokens=%s", req_id, round_num,
+                         len(tool_calls),
+                         completion.get("usage", {}).get("total_tokens", "?"))
 
-        if tool_calls:
-            # Stream initial thought
-            thought = assistant_message.get("content", "") or "Thinking..."
-            yield _sse_event("token", thought)
+            tool_calls = assistant_message.get("tool_calls", [])
 
-            history.append({
-                "role": "assistant",
-                "content": assistant_message.get("content", ""),
-                "reasoning_content": assistant_message.get("reasoning_content", ""),
-                "tool_calls": [
-                    {"id": tc["id"], "type": tc["type"],
-                     "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
-                    for tc in tool_calls
-                ],
-            })
-
-            for tc in tool_calls:
-                func_name = tc["function"]["name"]
-                func_args = json.loads(tc["function"]["arguments"])
-                tool_call_id = tc["id"]
-                logger.info("[%d] TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
-
-                # Announce tool call
-                yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-
-                result_text = await _run_tool(func_name, func_args)
-
-                yield _sse_event("tool", {"tool": func_name, "status": "done"})
-                logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
+            if tool_calls:
+                # Stream initial thought
+                thought = assistant_message.get("content", "") or "Thinking..."
+                yield _sse_event("token", thought)
 
                 history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result_text,
+                    "role": "assistant",
+                    "content": assistant_message.get("content", ""),
+                    "reasoning_content": assistant_message.get("reasoning_content", ""),
+                    "tool_calls": [
+                        {"id": tc["id"], "type": tc["type"],
+                         "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                        for tc in tool_calls
+                    ],
                 })
 
-            # Get final response after tool calls
-            completion = client.chat(system_prompt, history, tools=tools)
-            assistant_text = client.extract_text(completion)
-        else:
+                for tc in tool_calls:
+                    func_name = tc["function"]["name"]
+                    func_args = json.loads(tc["function"]["arguments"])
+                    tool_call_id = tc["id"]
+                    logger.info("[%d] TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
+
+                    yield _sse_event("tool", {"tool": func_name, "status": "calling"})
+                    result_text = await _run_tool(func_name, func_args, history)
+                    yield _sse_event("tool", {"tool": func_name, "status": "done"})
+                    logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
+
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    })
+            else:
+                assistant_text = client.extract_text(completion)
+                break  # no more tool calls — exit loop
+
+        # If still empty after all rounds (LLM only returned tool_calls), force text-only
+        if not assistant_text:
+            logger.info("[%d] Empty after %d tool rounds — forcing text-only completion", req_id, round_num)
+            completion = client.chat(system_prompt, history, tools=None)
             assistant_text = client.extract_text(completion)
 
     except LLMError as exc:
@@ -240,15 +607,20 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     # Log final response
     logger.info("[%d] CHAT RESP: len=%d tokens=%.150s", req_id, len(assistant_text), assistant_text[:150])
 
-    # Parse embedded proposal JSON
+    # Parse embedded proposal JSON — supports both single and batch proposals
     proposal = None
+    proposals = None  # batch mode
     try:
-        json_match = re.search(r"```json\s*(\{.*?\})\s*```", assistant_text, re.DOTALL)
+        json_match = re.search(r"```json\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```", assistant_text, re.DOTALL)
         if json_match:
             embedded = json.loads(json_match.group(1))
-            if "proposal" in embedded:
+            if isinstance(embedded, list):
+                proposals = embedded  # batch of proposals
+            elif isinstance(embedded, dict) and "proposal" in embedded:
                 proposal = embedded["proposal"]
-                assistant_text = re.sub(r"```json\s*\{.*?\}\s*```", "", assistant_text, flags=re.DOTALL).strip()
+            elif isinstance(embedded, dict) and "proposals" in embedded:
+                proposals = embedded["proposals"]
+            assistant_text = re.sub(r"```json\s*[\[\{][\s\S]*?[\]\}]\s*```", "", assistant_text, flags=re.DOTALL).strip()
     except Exception:
         pass
 
@@ -258,9 +630,19 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
     # Stream done event
     done_data: dict[str, object] = {"response": assistant_text}
-    if proposal:
+    if proposals:
+        done_data["proposals"] = proposals
+    elif proposal:
         done_data["proposal"] = proposal
     yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
+
+    # Persist assistant response to session history
+    history.append({"role": "assistant", "content": assistant_text})
+    _sessions[session_id] = history
+    _log_session(session_id, history)
+
+    # Publish transcript to public GitHub repo for DAO transparency
+    asyncio.create_task(_publish_transcript(session_id, history))
 
 
 def _chunk_text(text: str, size: int = 80) -> list[str]:
@@ -274,6 +656,147 @@ def _chunk_text(text: str, size: int = 80) -> list[str]:
             paragraph = paragraph[size:]
         chunks.append(paragraph)
     return chunks
+
+
+def _log_session(session_id: str, history: list[dict]) -> None:
+    """Write FULL session history to disk for debugging broken conversations."""
+    try:
+        import hashlib
+        sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
+        log_path = SESSION_LOG_DIR / f"{sid_hash}.json"
+        log_data = {
+            "session_hash": sid_hash,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "message_count": len(history),
+            "full_history": history,
+        }
+        log_path.write_text(json.dumps(log_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Ease-of-access: symlink/pointer to latest session
+        latest = SESSION_LOG_DIR / "_latest.json"
+        latest.write_text(json.dumps({"session_hash": sid_hash, "updated_at": log_data["updated_at"], "message_count": log_data["message_count"]}))
+    except Exception:
+        pass
+
+
+def _log_raw_llm(session_id: str, label: str, payload: object) -> None:
+    """Log raw LLM request/response for post-mortem debugging (XML leaks, QR misreads, etc)."""
+    try:
+        import hashlib
+        sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
+        debug_log = SESSION_LOG_DIR / f"{sid_hash}_debug.log"
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        entry = f"\n=== {ts} {label} ===\n{json.dumps(payload, indent=2, ensure_ascii=False, default=str)}\n"
+        with open(debug_log, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception:
+        pass
+
+
+def _save_session_index(public_key: str, sid: str, name: str | None = None) -> None:
+    """Update the session index file for a governor."""
+    import hashlib
+    idx_file = SESSION_LOG_DIR / f"{hashlib.md5(public_key.encode()).hexdigest()[:12]}_sessions.json"
+    data: dict[str, list] = {"sessions": []}
+    if idx_file.exists():
+        try:
+            data = json.loads(idx_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    sessions = data.get("sessions", [])
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    found = False
+    for s in sessions:
+        if s["id"] == sid:
+            if name:
+                s["name"] = name
+            s["updated_at"] = now
+            found = True
+            break
+    if not found:
+        sessions.insert(0, {
+            "id": sid,
+            "name": name or f"New Session",
+            "created_at": now,
+            "updated_at": now,
+        })
+    data["sessions"] = sessions[:50]  # keep max 50
+    idx_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _auto_name_session(public_key: str, request: Request, history: list, user_message: str) -> None:
+    """Auto-name the session from the first user message (non-attachment text)."""
+    sid = request.headers.get("X-Session-Id", "")
+    if not sid:
+        return
+    user_count = sum(1 for m in history if m.get("role") == "user")
+    if user_count != 2:
+        return
+    clean = user_message.replace("[GOVERNOR_IDENTITY:", "").split("[File attachment:")[0].strip()
+    name = clean[:50].replace("\n", " ") if clean else ""
+    if name:
+        _save_session_index(public_key, sid, name)
+
+
+_TRANSCRIPT_REPO = "truesight_autopilot_transcript"
+
+
+async def _publish_transcript(session_id: str, history: list[dict]) -> None:
+    """Publish conversation transcript + uploaded images to public GitHub repo
+    for DAO transparency. Runs as background task, never blocks the response."""
+    try:
+        import hashlib as _hlib
+        sid_hash = _hlib.md5(session_id.encode()).hexdigest()[:12]
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+
+        gh = GitHubClient()
+
+        # Build markdown transcript
+        lines = [f"# Autopilot Session — {today}\n"]
+        lines.append(f"**Session**: `{sid_hash}`\n")
+        gov_name = _gov_name_for_key(session_id.split(":")[0]) if ":" in session_id else ""
+        if gov_name:
+            lines.append(f"**Governor**: {gov_name}\n")
+        lines.append("\n---\n\n")
+
+        for msg in history:
+            role = msg.get("role", "")
+            content = (msg.get("content", "") or "").strip()
+            if not content:
+                continue
+            if role == "user":
+                # Strip internal markers for public transcript
+                content = content.replace("[GOVERNOR_IDENTITY:", "").split("[GOVERNOR_IDENTITY:")[-1]
+                lines.append(f"### 🧑 Governor\n\n{content}\n\n")
+            elif role == "assistant":
+                # Strip XML tool-call syntax
+                content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
+                if content:
+                    lines.append(f"### 🤖 Autopilot\n\n{content}\n\n")
+
+        transcript = "\n".join(lines)
+        path = f"sessions/{today}/{sid_hash}/transcript.md"
+        gh.commit_file(_TRANSCRIPT_REPO, "main", path, transcript,
+                       f"[autopilot] Session {sid_hash} — {today}")
+
+        # Publish uploaded images referenced in the conversation
+        for msg in history:
+            content = str(msg.get("content", ""))
+            for match in re.finditer(r"\[IMG:(/uploads/[^\|]+)\|", content):
+                img_src = UPLOAD_DIR / Path(match.group(1)).name
+                if img_src.exists() and img_src.stat().st_size < 1_000_000:
+                    img_bytes = img_src.read_bytes()
+                    img_path = f"sessions/{today}/{sid_hash}/images/{img_src.name}"
+                    try:
+                        gh.commit_file(_TRANSCRIPT_REPO, "main", img_path,
+                                      base64.b64encode(img_bytes).decode(),
+                                      f"[autopilot] Image for session {sid_hash}")
+                    except Exception:
+                        pass  # images are best-effort
+
+        logger.info("Published transcript to %s/%s", _TRANSCRIPT_REPO, path)
+    except Exception as e:
+        logger.debug("Transcript publish skipped: %s", e)
 
 
 @app.post("/chat")
@@ -293,9 +816,16 @@ async def chat(request: Request):
         if not user_message:
             raise HTTPException(status_code=400, detail="message is required.")
 
-    session_id = public_key
-    history = _sessions.get(session_id, [])
+    session_id = _session_key(public_key, request)
+    history = _load_or_create_session(session_id)
+    # Inject governor identity so the LLM knows who "I" / "me" refers to
+    gov_name = _gov_name_for_key(public_key)
+    if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+        user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+
     history.append({"role": "user", "content": user_message})
+    _auto_name_session(public_key, request, history, user_message)
+    _log_session(session_id, history)
 
     return StreamingResponse(
         _stream_chat(user_message, history, session_id),
@@ -311,10 +841,10 @@ async def chat(request: Request):
 @app.post("/chat/upload")
 async def chat_upload(
     request: Request,
-    file: UploadFile | None = File(None),
+    files: List[UploadFile] = File(...),
 ):
-    """Accepts a chat message + optional file attachment. Saves the file to /tmp
-    and includes a reference in the conversation so the LLM can analyze it."""
+    """Accepts a chat message + one or more file attachments. Processes all
+    images with pyzbar + Grok, then hands combined analysis to DeepSeek."""
     public_key = request.headers.get("X-Public-Key", "")
     payload_raw = request.headers.get("X-Payload", "")
     signature = request.headers.get("X-Signature", "")
@@ -327,21 +857,26 @@ async def chat_upload(
         public_key = verify_jwt(request)
         user_message_text = ""
 
-    session_id = public_key
+    session_id = _session_key(public_key, request)
     attachment_info = None
 
-    if file and file.filename:
-        ext = Path(file.filename).suffix or ""
+    # Process all uploaded files
+    processed_files: list[dict] = []
+    for upload_file in files:
+        if not upload_file.filename:
+            continue
+        if not upload_file.filename:
+            continue
+        ext = Path(upload_file.filename).suffix or ""
         safe_name = f"{uuid.uuid4().hex}{ext}"
         dest = UPLOAD_DIR / safe_name
-        content = await file.read()
+        content = await upload_file.read()
         dest.write_bytes(content)
 
-        mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
+        mime_type = upload_file.content_type or mimetypes.guess_type(upload_file.filename)[0] or "application/octet-stream"
         size_kb = round(len(content) / 1024, 1)
-
-        # Convert HEIC/HEIF to JPEG for broader compatibility
         converted = False
+
         if ext.lower() in (".heic", ".heif") and len(content) < 10 * 1024 * 1024:
             try:
                 jpg_dest = UPLOAD_DIR / f"{dest.stem}.jpg"
@@ -354,44 +889,128 @@ async def chat_upload(
                 size_kb = round(len(jpg_content) / 1024, 1)
                 content = jpg_content
                 dest = jpg_dest
+                safe_name = jpg_dest.name
                 converted = True
-                logger.info("Converted HEIC %s to JPEG (%d KB)", file.filename, size_kb)
+                logger.info("Converted HEIC %s to JPEG (%d KB)", upload_file.filename, size_kb)
             except Exception as e:
-                logger.warning("HEIC conversion failed for %s: %s", file.filename, e)
+                logger.warning("HEIC conversion failed for %s: %s", upload_file.filename, e)
 
-        attachment_info = {
-            "filename": file.filename,
-            "saved_as": str(dest),
+        processed_files.append({
+            "filename": upload_file.filename,
+            "dest": str(dest),
             "mime_type": mime_type,
             "size_kb": size_kb,
-        }
+            "converted": converted,
+            "img_url": f"/uploads/{safe_name}",
+        })
 
-        # Build a descriptive message for the LLM
-        content_part = (
-            f"[File attachment: {file.filename} ({mime_type}, {size_kb} KB)]\n"
-            f"File saved at: {dest}\n"
+    if not processed_files:
+        raise HTTPException(status_code=400, detail="No valid files to process.")
+
+    # Build a streaming generator that processes all files
+    async def _upload_chat_stream():
+        all_pyzbar: list[dict] = []
+        all_grok: dict | None = None
+        total = len(processed_files)
+
+        yield _sse_event("status", {"stage": "upload", "message": f"Processing {total} file{'s' if total > 1 else ''}..."})
+
+        # Pyzbar scan all files
+        yield _sse_event("status", {"stage": "pyzbar", "message": f"Scanning {total} image{'s' if total > 1 else ''} for barcodes..."})
+        jpg_paths: list[str] = []
+        for pf in processed_files:
+            if pf["mime_type"].startswith("image/"):
+                try:
+                    result = scan_qr_from_file(pf["dest"])
+                    all_pyzbar.append({"file": pf["filename"], "result": result})
+                except Exception:
+                    pass
+            jpg_paths.append(pf["dest"])
+
+        # Grok vision — send all images in one batch call
+        if jpg_paths:
+            yield _sse_event("status", {"stage": "grok", "message": f"Analyzing {len(jpg_paths)} image{'s' if len(jpg_paths) > 1 else ''} with Grok..."})
+            try:
+                all_grok = await asyncio.wait_for(
+                    asyncio.to_thread(grok_analyze_images, jpg_paths, "", GROK_MODEL, 0.2, 60.0),
+                    timeout=70.0,
+                )
+            except Exception:
+                pass
+
+        yield _sse_event("status", {"stage": "done", "message": "Analysis complete, preparing response..."})
+
+        # Build combined content part
+        content_parts = []
+        for pf in processed_files:
+            cp = (
+                f"[IMG:{pf['img_url']}|{pf['filename']}|{pf['mime_type']}]\n"
+                f"[File: {pf['filename']} ({pf['mime_type']}, {pf['size_kb']} KB)]\n"
+            )
+            if pf["converted"]:
+                cp += "(Converted from HEIC to JPEG)\n"
+            content_parts.append(cp)
+
+        # Pyzbar results
+        any_pyzbar = [p for p in all_pyzbar if p["result"].get("status") == "success" and p["result"].get("codes")]
+        if any_pyzbar:
+            cp = "\n=== PYZBAR SCAN RESULTS ===\n"
+            for p in any_pyzbar:
+                codes = p["result"]["codes"]
+                cp += f"\n{p['file']}: {len(codes)} code(s)\n"
+                for c in codes:
+                    cp += f"  - {c['type']}: {c['data']}\n"
+            content_parts.append(cp)
+
+        # Grok results
+        if all_grok and all_grok.get("status") == "success":
+            cp = "\n=== GROK VISION ANALYSIS ===\n"
+            if desc := all_grok.get("image_description"):
+                cp += f"Scene: {desc}\n"
+            if guess := all_grok.get("product_type_guess"):
+                cp += f"Product: {guess}\n"
+            if labels := all_grok.get("label_text_visible"):
+                cp += f"Label text: {'; '.join(labels)}\n"
+            if quality := all_grok.get("photo_quality"):
+                cp += f"Photo quality: {quality}\n"
+            if qr_guesses := all_grok.get("qr_codes_guessed"):
+                for g in qr_guesses:
+                    conf_pct = int(g.get('confidence', 0) * 100)
+                    cp += f"Grok GUESSED QR: {g['data']} (confidence: {conf_pct}%)\n"
+            if bc_guesses := all_grok.get("barcodes_guessed"):
+                for g in bc_guesses:
+                    conf_pct = int(g.get('confidence', 0) * 100)
+                    cp += f"Grok GUESSED barcode: {g.get('type','?')}: {g['data']} (confidence: {conf_pct}%)\n"
+            if notes := all_grok.get("notes"):
+                cp += f"Notes: {notes}\n"
+            content_parts.append(cp)
+
+        content_parts.append(
+            "\n## INSTRUCTIONS\n"
+            "For EACH Agroverse QR code found above, output a batch approval JSON array in this format:\n"
+            "```json\n"
+            "[{\"action\": \"submit_contribution\", \"title\": \"Move QR 2024OSCAR_...\", \"qr_code\": \"2024OSCAR_...\", \"summary\": \"Ceremonial Cacao Kraft Pouch from Kirsten Ritschel to Gary Teh\"}]\n"
+            "```\n"
+            "Include ALL found QR codes. The user will click Approve on each one individually."
         )
-        if converted:
-            content_part += f"(Converted from HEIC to JPEG for analysis)\n"
 
-        # For images under 5MB, include base64 preview for vision-capable models
-        if mime_type and mime_type.startswith("image/") and len(content) < 5 * 1024 * 1024:
-            b64 = base64.b64encode(content).decode()
-            b64_data_url = f"data:{mime_type};base64,{b64}"
-            content_part += f"Image data URL: {b64_data_url}\n"
+        content_part = "\n".join(content_parts)
+        filenames = ", ".join(pf["filename"] for pf in processed_files)
+        user_message = f"{user_message_text}\n\nAttached: {filenames}\n{content_part}" if user_message_text.strip() else f"Attached: {filenames}\n{content_part}"
 
-        user_message = f"{user_message_text}\n\n{content_part}" if user_message_text.strip() else content_part.strip()
-    else:
-        user_message = user_message_text
+        history = _load_or_create_session(session_id)
+        gov_name = _gov_name_for_key(public_key)
+        if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+            user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+        history.append({"role": "user", "content": user_message})
+        _auto_name_session(public_key, request, history, user_message)
+        _log_session(session_id, history)
 
-    if not user_message.strip() and not user_message_text.strip():
-        raise HTTPException(status_code=400, detail="message or file is required.")
-
-    history = _sessions.get(session_id, [])
-    history.append({"role": "user", "content": user_message})
+        async for event in _stream_chat(user_message, history, session_id, attachment_info=attachment_info):
+            yield event
 
     return StreamingResponse(
-        _stream_chat(user_message, history, session_id, attachment_info=attachment_info),
+        _upload_chat_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -420,8 +1039,11 @@ async def chat_blocking(request: Request) -> JSONResponse:
         if not user_message:
             raise HTTPException(status_code=400, detail="message is required.")
 
-    session_id = public_key
-    history = _sessions.get(session_id, [])
+    session_id = _session_key(public_key, request)
+    history = _load_or_create_session(session_id)
+    gov_name = _gov_name_for_key(public_key)
+    if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+        user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
     history.append({"role": "user", "content": user_message})
 
     system_prompt = get_system_prompt()

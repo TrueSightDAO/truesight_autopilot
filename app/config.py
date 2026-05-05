@@ -4,31 +4,32 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", env_file=".env", env_file_encoding="utf-8")
     # Service
-    port: int = int(os.getenv("PORT", "8001"))
-    host: str = os.getenv("HOST", "0.0.0.0")
-    dry_run: bool = os.getenv("DRY_RUN", "false").lower() == "true"
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    max_pr_per_day: int = int(os.getenv("MAX_PR_PER_DAY", "5"))
+    port: int = Field(default=8001, validation_alias="PORT")
+    host: str = Field(default="0.0.0.0", validation_alias="HOST")
+    dry_run: bool = Field(default=False, validation_alias="DRY_RUN")
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    max_pr_per_day: int = Field(default=5, validation_alias="MAX_PR_PER_DAY")
 
     # CORS
     cors_origins: list[str] = ["*"]  # TODO: restrict to dapp.truesight.me in production
 
     # Security
-    jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production")
+    jwt_secret: str = Field(default="change-me-in-production", validation_alias="JWT_SECRET")
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
     nonce_ttl_seconds: int = 300
     timestamp_skew_seconds: int = 120
-    disable_governor_check: bool = os.getenv("DISABLE_GOVERNOR_CHECK", "false").lower() == "true"
+    disable_governor_check: bool = Field(default=False, validation_alias="DISABLE_GOVERNOR_CHECK")
 
     # GitHub
-    github_pat: str = os.getenv("TRUESIGHT_DAO_AUTOPILOT", "")
+    github_pat: str = Field(default="", validation_alias="TRUESIGHT_DAO_AUTOPILOT")
 
     # Allowed repos for code modifications
     allowed_repos: list[str] = [
@@ -47,6 +48,9 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
     deepseek_temperature: float = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3"))
 
+    # Grok (xAI) — vision analysis for uploaded images
+    grok_api_key: str = os.getenv("GROK_API_KEY", "")
+
     # Edgar
     email: str = os.getenv("EMAIL", "")
     public_key: str = os.getenv("PUBLIC_KEY", "")
@@ -63,6 +67,9 @@ class Settings(BaseSettings):
         "AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git"
     )
     static_governors_json: Path | None = None
+
+    # Session logging (production: use persistent path, not /tmp)
+    session_log_dir: Path = Path(os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions"))
 
 
 settings = Settings()
