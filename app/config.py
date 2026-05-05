@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
     nonce_ttl_seconds: int = 300
-    timestamp_skew_seconds: int = 120
+    timestamp_skew_seconds: int = 600
     disable_governor_check: bool = Field(default=False, validation_alias="DISABLE_GOVERNOR_CHECK")
 
     # GitHub
