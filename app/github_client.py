@@ -16,6 +16,8 @@ logger = logging.getLogger("autopilot.github")
 
 
 class GitHubClient:
+    ORG = "TrueSightDAO"
+
     def __init__(self):
         if not settings.github_pat:
             raise RuntimeError("TRUESIGHT_DAO_AUTOPILOT not set")
@@ -23,6 +25,10 @@ class GitHubClient:
         self.g = Github(auth=auth)
         self._user = self.g.get_user()
         logger.info("GitHub client authenticated as %s", self._user.login)
+
+    def _full_name(self, repo_name: str) -> str:
+        """Prepend ORG if repo_name doesn't already include a slash."""
+        return repo_name if "/" in repo_name else f"{self.ORG}/{repo_name}"
 
     def list_org_repos(self, org: str = "TrueSightDAO") -> list[dict[str, str]]:
         """List all repos in the org (name, description, default_branch)."""
@@ -47,7 +53,7 @@ class GitHubClient:
     def read_file(self, repo_name: str, path: str, ref: str = "main") -> dict[str, Any]:
         """Read a file (or directory listing) from a repo."""
         try:
-            repo = self.g.get_repo(repo_name)
+            repo = self.g.get_repo(self._full_name(repo_name))
             content = repo.get_contents(path, ref=ref)
             if isinstance(content, list):
                 return {
@@ -72,7 +78,7 @@ class GitHubClient:
     def fetch_workflow_log(self, repo_name: str, run_id: str, max_lines: int = 200) -> str:
         """Fetch the tail of a workflow run log."""
         try:
-            repo = self.g.get_repo(repo_name)
+            repo = self.g.get_repo(self._full_name(repo_name))
             run = repo.get_workflow_run(int(run_id))
             # GitHub API doesn't give raw logs directly; we get the jobs
             jobs = run.jobs()
@@ -93,7 +99,7 @@ class GitHubClient:
     def create_branch(self, repo_name: str, base_branch: str, new_branch: str) -> bool:
         """Create a new branch from base."""
         try:
-            repo = self.g.get_repo(repo_name)
+            repo = self.g.get_repo(self._full_name(repo_name))
             base = repo.get_branch(base_branch)
             repo.create_git_ref(ref=f"refs/heads/{new_branch}", sha=base.commit.sha)
             logger.info("Created branch %s on %s", new_branch, repo_name)
@@ -112,7 +118,7 @@ class GitHubClient:
     ) -> bool:
         """Commit a file to a branch."""
         try:
-            repo = self.g.get_repo(repo_name)
+            repo = self.g.get_repo(self._full_name(repo_name))
             # Check if file exists to get sha for update
             try:
                 existing = repo.get_contents(path, ref=branch)
@@ -141,7 +147,7 @@ class GitHubClient:
     ) -> bool:
         """Delete a file from a branch."""
         try:
-            repo = self.g.get_repo(repo_name)
+            repo = self.g.get_repo(self._full_name(repo_name))
             existing = repo.get_contents(path, ref=branch)
             repo.delete_file(
                 path=path,
@@ -165,7 +171,7 @@ class GitHubClient:
     ) -> str | None:
         """Open a pull request. Returns PR URL or None."""
         try:
-            repo = self.g.get_repo(repo_name)
+            repo = self.g.get_repo(self._full_name(repo_name))
             pr = repo.create_pull(title=title, body=body, head=head, base=base)
             logger.info("Opened PR #%d: %s", pr.number, pr.html_url)
             return pr.html_url

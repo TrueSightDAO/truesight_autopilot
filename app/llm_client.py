@@ -98,11 +98,79 @@ class LLMClient:
         return content or "(empty response)"
 
     def extract_tool_calls(self, completion: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract tool calls from completion, with fallback for DeepSeek's XML syntax.
+
+        DeepSeek-chat sometimes emits tool calls as XML in the content field
+        instead of in the standard OpenAI `tool_calls` array. This fallback
+        detects `<function_calls>` / `<invoke>` XML and converts to proper format.
+        """
         choices = completion.get("choices", [])
         if not choices:
             return []
         message = choices[0].get("message", {})
-        return message.get("tool_calls", []) or []
+
+        # Standard OpenAI format
+        std_calls = message.get("tool_calls", []) or []
+        if std_calls:
+            return std_calls
+
+        # Fallback: parse DeepSeek XML tool-call syntax from content
+        content = message.get("content", "") or ""
+        if not content:
+            return []
+
+        parsed = self._parse_xml_tool_calls(content)
+        if parsed:
+            logger.info("XML tool-call fallback: parsed %d calls from content", len(parsed))
+            # Rewrite completion in-place so standard path works
+            choices[0]["message"]["tool_calls"] = parsed
+            # Strip the XML from content so it doesn't leak to the user
+            cleaned = self._strip_xml_from_content(content)
+            choices[0]["message"]["content"] = cleaned
+            return parsed
+        return []
+
+    def _parse_xml_tool_calls(self, text: str) -> list[dict[str, Any]]:
+        """Parse DeepSeek XML tool-call syntax: <function_calls><invoke name="..."><parameter name="...">value</parameter></invoke></function_calls>"""
+        import re as _re
+        calls: list[dict[str, Any]] = []
+
+        # Pattern: <invoke name="func_name">...optional params...</invoke>
+        invoke_pattern = _re.compile(
+            r'<invoke\s+name="([^"]+)"\s*>(.*?)</invoke>',
+            _re.DOTALL,
+        )
+        param_pattern = _re.compile(
+            r'<parameter\s+name="([^"]+)"\s*>(.*?)</parameter>',
+            _re.DOTALL,
+        )
+
+        for idx, match in enumerate(invoke_pattern.finditer(text)):
+            func_name = match.group(1)
+            params_body = match.group(2)
+            args: dict[str, object] = {}
+            for pm in param_pattern.finditer(params_body):
+                args[pm.group(1)] = pm.group(2).strip()
+            calls.append({
+                "id": f"call_xml_{idx:02d}",
+                "type": "function",
+                "function": {
+                    "name": func_name,
+                    "arguments": json.dumps(args),
+                },
+            })
+        return calls
+
+    @staticmethod
+    def _strip_xml_from_content(text: str) -> str:
+        """Remove <function_calls>...</function_calls> block from text."""
+        import re as _re
+        return _re.sub(
+            r'<function_calls>.*?</function_calls>',
+            '',
+            text,
+            flags=_re.DOTALL,
+        ).strip()
 
     def diagnose_github_failure(
         self,
@@ -268,6 +336,76 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                         "tdg_issued": {"type": "string", "default": "0"},
                     },
                     "required": ["title", "body", "pr_urls"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_qr_from_file",
+                "description": "Scan a single image file for QR codes and return the decoded values. Use this when the user uploads photos of QR codes (e.g. from cacao bags).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Full path to the image file on disk (e.g. /tmp/autopilot_uploads/abc123.jpg).",
+                        },
+                    },
+                    "required": ["file_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_qr_batch",
+                "description": "Batch-scan multiple image files for QR codes. Returns a summary of all QR codes found across all images. Use when the user uploads many photos at once.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of full paths to image files.",
+                        },
+                    },
+                    "required": ["file_paths"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_qr_code",
+                "description": "Look up a single Agroverse QR code in the DAO ledger (read-only). Returns the QR code's currency, ledger shortcut, status, owner, manager, and shipping info. Use this to check what a QR code represents before recording a transaction.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "qr_code": {
+                            "type": "string",
+                            "description": "The QR code identifier (e.g. 2024OSCAR_20260121_12).",
+                        },
+                    },
+                    "required": ["qr_code"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_qr_batch",
+                "description": "Look up multiple QR codes at once. Returns a summary of found/missing records. Use after scan_qr_batch to resolve all detected codes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "qr_codes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of QR code identifiers to look up.",
+                        },
+                    },
+                    "required": ["qr_codes"],
                 },
             },
         },
