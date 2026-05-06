@@ -104,15 +104,19 @@ When the governor asks you to fix something, create something, or check infrastr
 - Always gather context (read_context_file) before making changes — never guess
 - When a user asks you to make code changes, use open_fix_pr to execute them
 - For QR code operations: use scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
-- **TRANSACTION APPROVAL GATE**: Before calling submit_contribution, you MUST describe the transaction and ask for explicit confirmation. For single transactions, use:
+- **TRANSACTION APPROVAL GATE**: Before calling submit_contribution, you MUST output a JSON proposal so the frontend renders Approve/Reject buttons. The user CANNOT approve without these buttons.
+
+  For SINGLE transactions:
   ```json
-  {"proposal": {"action": "submit_contribution", "title": "Move 2024OSCAR_20260330_22", "qr_code": "2024OSCAR_20260330_22", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}}
+  {"proposal": {"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_22", "qr_code": "2024OSCAR_20260330_22", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}}
   ```
-  For BATCH transactions (multiple QR codes to process), output a JSON array. Each item has its own Approve button:
+
+  For BATCH transactions (MUST use this format when presenting multiple QRs):
   ```json
-  [{"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_12", "qr_code": "2024OSCAR_20260330_12", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}, {"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_14", "qr_code": "2024OSCAR_20260330_14", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}]
+  [{"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_19", "qr_code": "2024OSCAR_20260330_19", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}, {"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_20", "qr_code": "2024OSCAR_20260330_20", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}]
   ```
-  The frontend renders each as an individual Approve/Ignore card.
+
+  **CRITICAL**: Whenever you present transactions that need user approval, you MUST include the JSON array/object in your response. The frontend renders these as clickable Approve/Reject buttons. Plain text descriptions without the JSON block will NOT show buttons — the user will be stuck.
 - **DUPLICATE GUARD**: Before submitting, check conversation history for prior submissions of the same QR code.
 - Keep responses concise. Prefer tables for structured data.
 

@@ -162,7 +162,7 @@ async def serve_upload(filename: str):
 # ───────────────────────────── Governor Chat ─────────────────────────────
 
 @app.get("/session")
-async def get_session(request: Request) -> JSONResponse:
+async def get_session(request: Request, limit: int = 30) -> JSONResponse:
     """Return the current conversation history so the frontend can restore it on refresh.
     Uses X-Public-Key + X-Session-Id headers (same as session keying)."""
     public_key = request.headers.get("X-Public-Key", "")
@@ -171,13 +171,19 @@ async def get_session(request: Request) -> JSONResponse:
     session_id = _session_key(public_key, request)
     history = _load_or_create_session(session_id)
 
+    # Only return last N messages for performance
+    recent = history[-limit:] if len(history) > limit else history
+
     # Filter out internal system messages and strip legacy XML leaks
     visible = []
-    for msg in history:
+    for msg in recent:
         role = msg.get("role", "")
         content = (msg.get("content") or "").strip()
         if not content:
             continue
+        # Truncate very long messages (context files can be 10K+ chars)
+        if len(content) > 2000:
+            content = content[:2000] + "\n...(truncated)"
         # Strip legacy XML tool-call syntax if it leaked through
         content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
         if not content:
@@ -200,6 +206,40 @@ async def list_sessions(request: Request) -> JSONResponse:
         return JSONResponse({"sessions": []})
     data = json.loads(idx_file.read_text(encoding="utf-8"))
     return JSONResponse({"sessions": data.get("sessions", [])})
+
+
+@app.get("/pending")
+async def get_pending(request: Request) -> JSONResponse:
+    """Return pending approvals for this governor (persistent, survives refresh)."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    pending = _load_pending(public_key)
+    return JSONResponse({"pending": pending})
+
+
+@app.post("/pending/resolve")
+async def resolve_pending(request: Request) -> JSONResponse:
+    """Mark a pending proposal as resolved (approved or rejected)."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    body = await request.json()
+    qr_code = body.get("qr_code", "")
+    action = body.get("action", "approved")
+    _resolve_pending(public_key, qr_code, action)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/pending/add")
+async def add_pending(request: Request) -> JSONResponse:
+    """Add a pending proposal (called by frontend when batch proposals are rendered)."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    body = await request.json()
+    _add_pending(public_key, body)
+    return JSONResponse({"status": "ok"})
 
 
 @app.post("/sessions/new")
@@ -376,7 +416,7 @@ def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
     return missing
 
 
-async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None = None) -> str:
+async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None = None, session_id: str | None = None, governor_name: str | None = None) -> str:
     if func_name == "list_org_repos":
         gh = GitHubClient()
         repos = gh.list_org_repos()
@@ -487,9 +527,31 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
                 },
                 "message": f"⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel."
             }
+
+            # Persist pending approval to server + GitHub for durability
+            if qr:
+                pub_key = session_key.split(":")[0] if hasattr(session_key, 'split') else ""
+                if pub_key:
+                    _add_pending(pub_key, {
+                        "title": f"{event_name}: {qr}" if qr else event_name,
+                        "qr_code": qr,
+                        "summary": summary,
+                        "action": "submit_contribution",
+                    })
+
             return json.dumps(proposal)
 
         # APPROVED — execute
+        # Add agentic traceability: who approved this, with proof of their authenticated session
+        if governor_name and event_name == "INVENTORY MOVEMENT":
+            import hashlib
+            key_seed = (session_id or "").split(":")[0]
+            fingerprint = hashlib.sha256(key_seed.encode()).hexdigest()[:8]
+            today = time.strftime("%Y-%m-%d", time.gmtime())
+            sid_hash = hashlib.md5((session_id or "").encode()).hexdigest()[:12]
+            transcript_url = f"https://github.com/TrueSightDAO/{_TRANSCRIPT_REPO}/blob/main/sessions/{today}/{sid_hash}/transcript.md"
+            attributes["Approved By"] = f"{governor_name} | Key FP: {fingerprint} | Session: {transcript_url}"
+
         edgar = EdgarDirectClient()
         ok = edgar.submit_contribution(event_name, attributes, description=attributes.get("Description", ""))
         return "Contribution submitted successfully." if ok else "Failed to submit contribution."
@@ -523,7 +585,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     return f"Unknown tool: {func_name}"
 
 
-async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None):
+async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None, governor_name: str | None = None):
     system_prompt = get_system_prompt()
     client = LLMClient()
     tools = get_tool_schemas()
@@ -579,7 +641,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                     logger.info("[%d] TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
 
                     yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-                    result_text = await _run_tool(func_name, func_args, history)
+                    result_text = await _run_tool(func_name, func_args, history, session_id, governor_name)
                     yield _sse_event("tool", {"tool": func_name, "status": "done"})
                     logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
 
@@ -642,7 +704,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     _log_session(session_id, history)
 
     # Publish transcript to public GitHub repo for DAO transparency
-    asyncio.create_task(_publish_transcript(session_id, history))
+    asyncio.create_task(_publish_transcript(session_id, history, governor_name))
 
 
 def _chunk_text(text: str, size: int = 80) -> list[str]:
@@ -738,10 +800,78 @@ def _auto_name_session(public_key: str, request: Request, history: list, user_me
         _save_session_index(public_key, sid, name)
 
 
+def _pending_file(public_key: str) -> Path:
+    import hashlib
+    h = hashlib.md5(public_key.encode()).hexdigest()[:12]
+    return SESSION_LOG_DIR / f"pending_{h}.json"
+
+
+def _load_pending(public_key: str) -> list[dict]:
+    pf = _pending_file(public_key)
+    # 1. Try local file first
+    if pf.exists():
+        try:
+            return json.loads(pf.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # 2. Fallback: load from GitHub (survives server restarts)
+    try:
+        import hashlib
+        h = hashlib.md5(public_key.encode()).hexdigest()[:12]
+        gh = GitHubClient()
+        result = gh.read_file(_TRANSCRIPT_REPO, f"pending/{h}.json")
+        if result.get("type") == "file":
+            return json.loads(result["content"])
+    except Exception:
+        pass
+    return []
+
+
+def _save_pending(public_key: str, items: list[dict]) -> None:
+    pf = _pending_file(public_key)
+    pf.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    # Mirror to GitHub for durability
+    asyncio.create_task(_sync_pending_to_github(public_key, items))
+
+
+def _add_pending(public_key: str, proposal: dict) -> None:
+    items = _load_pending(public_key)
+    key = proposal.get("qr_code", "") or proposal.get("title", "")
+    if key and not any(p.get("qr_code") == key or p.get("title") == key for p in items):
+        items.append({
+            "title": proposal.get("title", "Transaction"),
+            "qr_code": proposal.get("qr_code", ""),
+            "summary": proposal.get("summary", ""),
+            "action": proposal.get("action", "submit_contribution"),
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        _save_pending(public_key, items)
+
+
+def _resolve_pending(public_key: str, qr_code: str, resolution: str) -> None:
+    items = _load_pending(public_key)
+    items = [p for p in items if p.get("qr_code") != qr_code]
+    _save_pending(public_key, items)
+
+
+async def _sync_pending_to_github(public_key: str, items: list[dict]) -> None:
+    """Mirror pending approvals to GitHub for cross-server durability."""
+    try:
+        import hashlib
+        h = hashlib.md5(public_key.encode()).hexdigest()[:12]
+        gh = GitHubClient()
+        content = json.dumps(items, indent=2)
+        gh.commit_file(_TRANSCRIPT_REPO, "main", f"pending/{h}.json", content,
+                       f"[autopilot] Update pending approvals ({len(items)} items)")
+        logger.debug("Pending synced to GitHub: %d items", len(items))
+    except Exception as e:
+        logger.debug("Pending GitHub sync skipped: %s", e)
+
+
 _TRANSCRIPT_REPO = "truesight_autopilot_transcript"
 
 
-async def _publish_transcript(session_id: str, history: list[dict]) -> None:
+async def _publish_transcript(session_id: str, history: list[dict], governor_name: str | None = None) -> None:
     """Publish conversation transcript + uploaded images to public GitHub repo
     for DAO transparency. Runs as background task, never blocks the response."""
     try:
@@ -754,7 +884,7 @@ async def _publish_transcript(session_id: str, history: list[dict]) -> None:
         # Build markdown transcript
         lines = [f"# Autopilot Session — {today}\n"]
         lines.append(f"**Session**: `{sid_hash}`\n")
-        gov_name = _gov_name_for_key(session_id.split(":")[0]) if ":" in session_id else ""
+        gov_name = governor_name
         if gov_name:
             lines.append(f"**Governor**: {gov_name}\n")
         lines.append("\n---\n\n")
@@ -828,7 +958,7 @@ async def chat(request: Request):
     _log_session(session_id, history)
 
     return StreamingResponse(
-        _stream_chat(user_message, history, session_id),
+        _stream_chat(user_message, history, session_id, governor_name=gov_name),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1006,7 +1136,7 @@ async def chat_upload(
         _auto_name_session(public_key, request, history, user_message)
         _log_session(session_id, history)
 
-        async for event in _stream_chat(user_message, history, session_id, attachment_info=attachment_info):
+        async for event in _stream_chat(user_message, history, session_id, attachment_info=attachment_info, governor_name=gov_name):
             yield event
 
     return StreamingResponse(

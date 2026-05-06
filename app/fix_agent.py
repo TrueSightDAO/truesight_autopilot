@@ -61,12 +61,11 @@ class FixAgent:
     def run_simple(self, repo: str, issue_description: str) -> str | None:
         """Run a fix loop from a plain-text issue description.
         The LLM does its own diagnosis as part of the agentic loop.
-        """
-        if settings.dry_run:
-            logger.info("[dry-run] would fix %s: %s", repo, issue_description)
-            return None
-
-        branch = f"autopilot/fix-{int(time.time())}"
+        
+        DRY_RUN does NOT gate the fix agent — it always opens DRAFT PRs,
+        never auto-merges, and has safety hooks for dangerous operations.
+        DRY_RUN only gates background tasks (email poller, AWS monitor).
+        """        branch = f"autopilot/fix-{int(time.time())}"
         if not self.github.create_branch(repo, "main", branch):
             logger.error("Failed to create branch on %s", repo)
             return None
