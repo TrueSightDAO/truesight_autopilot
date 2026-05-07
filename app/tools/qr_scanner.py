@@ -18,6 +18,8 @@ from typing import Any
 
 from PIL import Image
 
+from .inventory_lookup import _cache_qr_result
+
 logger = logging.getLogger("autopilot.qr_scanner")
 
 
