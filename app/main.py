@@ -567,7 +567,23 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             return f"Error: repo '{repo_name}' not in allowed list."
         fixer = FixAgent()
         pr_url = fixer.run_simple(repo_name, issue)
-        return f"PR opened: {pr_url}" if pr_url else "Fix agent failed to produce a PR."
+        if not pr_url:
+            return "Fix agent failed to produce a PR."
+        # Extract PR number from URL like https://github.com/TrueSightDAO/dapp/pull/218
+        import re as _re
+        m = _re.search(r"/pull/(\d+)$", pr_url)
+        pr_number = int(m.group(1)) if m else 0
+        # Build a merge_pr proposal so the frontend renders an Approve/Reject card
+        proposal = {
+            "proposal": {
+                "action": "merge_pr",
+                "title": f"Merge PR #{pr_number} on {repo_name}",
+                "pr_number": pr_number,
+                "repo": repo_name,
+                "summary": issue[:200],
+            }
+        }
+        return f"PR opened: {pr_url}\n\n```json\n{json.dumps(proposal)}\n```"
     if func_name == "merge_pr":
         repo_name = func_args.get("repo", "")
         pr_number = func_args.get("pr_number", 0)
