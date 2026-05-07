@@ -567,6 +567,20 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         fixer = FixAgent()
         pr_url = fixer.run_simple(repo_name, issue)
         return f"PR opened: {pr_url}" if pr_url else "Fix agent failed to produce a PR."
+    if func_name == "merge_pr":
+        repo_name = func_args.get("repo", "")
+        pr_number = func_args.get("pr_number", 0)
+        merge_method = func_args.get("merge_method", "squash")
+        allowed = settings.allowed_repos
+        if repo_name not in allowed:
+            return f"Error: repo '{repo_name}' not in allowed list."
+        if not pr_number:
+            return "Error: pr_number is required."
+        gh = GitHubClient()
+        result = gh.merge_pr(repo_name, int(pr_number), merge_method)
+        if result["merged"]:
+            return f"✅ PR #{pr_number} on {repo_name} merged successfully (sha: {result['sha']}). {result['message']}"
+        return f"❌ Failed to merge PR #{pr_number} on {repo_name}: {result['message']}"
     if func_name == "scan_qr_from_file":
         file_path = func_args.get("file_path", "")
         result = scan_qr_from_file(file_path)

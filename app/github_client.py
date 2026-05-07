@@ -178,3 +178,42 @@ class GitHubClient:
         except Exception as e:
             logger.error("Failed to open PR: %s", e)
             return None
+
+    def merge_pr(
+        self,
+        repo_name: str,
+        pr_number: int,
+        merge_method: str = "squash",
+    ) -> dict:
+        """Merge a pull request. Returns dict with sha, merged, message.
+
+        merge_method: 'merge', 'squash', or 'rebase'.
+        Handles already-merged, merge conflicts, and other errors gracefully.
+        """
+        try:
+            repo = self.g.get_repo(self._full_name(repo_name))
+            pr = repo.get_pull(pr_number)
+            if pr.merged:
+                return {
+                    "sha": pr.merge_commit_sha or "",
+                    "merged": True,
+                    "message": f"PR #{pr_number} was already merged.",
+                }
+            result = pr.merge(merge_method=merge_method)
+            logger.info(
+                "Merged PR #%d on %s (method=%s, sha=%s)",
+                pr_number, repo_name, merge_method, result.sha,
+            )
+            return {
+                "sha": result.sha,
+                "merged": result.merged,
+                "message": result.message,
+            }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error("Failed to merge PR #%d on %s: %s", pr_number, repo_name, error_msg)
+            return {
+                "sha": "",
+                "merged": False,
+                "message": f"Failed to merge PR #{pr_number}: {error_msg}",
+            }
