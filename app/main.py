@@ -36,6 +36,7 @@ def _gov_name_for_key(public_key_b64: str) -> str | None:
 from .llm_client import LLMClient, LLMError, get_tool_schemas
 from .tools.github_tools import read_repo_file
 from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
+from .tools.dao_identity import register_identity
 from .grok_client import grok_analyze_images, GROK_MODEL
 from .fix_agent import FixAgent
 from .github_client import GitHubClient
@@ -580,6 +581,12 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     if func_name == "lookup_qr_batch":
         qr_codes = func_args.get("qr_codes", [])
         result = lookup_qr_batch(qr_codes)
+        return json.dumps(result, indent=2)
+    if func_name == "register_identity":
+        email = func_args.get("email", "")
+        if not email:
+            return json.dumps({"success": False, "error": "email is required"})
+        result = register_identity(email)
         return json.dumps(result, indent=2)
     if func_name == "create_dao_submission":
         return "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."

@@ -409,4 +409,21 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "register_identity",
+                "description": "Register a new DAO identity by generating an RSA-2048 keypair, signing an [EMAIL REGISTERED EVENT], submitting to Edgar, and saving the keys to .env. Use this to register yourself or a new contributor in Contributors Digital Signatures.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email": {
+                            "type": "string",
+                            "description": "The email address to register as the DAO contributor identity (e.g. admin@truesight.me).",
+                        },
+                    },
+                    "required": ["email"],
+                },
+            },
+        },
     ]
