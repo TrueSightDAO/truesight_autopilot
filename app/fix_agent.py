@@ -74,17 +74,20 @@ class FixAgent:
         logger.info("Fix loop started: repo=%s branch=%s", repo, branch)
 
         repos = ", ".join(settings.allowed_repos)
+        desc = issue_description[:3000]
+        if len(issue_description) > 3000:
+            desc += "\n\n[... truncated ...]"
         system = (
             "You are an autonomous code fixer for TrueSight DAO.\n\n"
             f"Repo: {repo}\n"
-            f"Issue: {issue_description}\n\n"
+            f"Issue: {desc}\n\n"
             f"Allowed repos: {repos}\n\n"
             "Rules:\n"
-            "1. First, read the relevant files to understand the current code.\n"
+            "1. First, use list_files to discover the repo structure, then read relevant files.\n"
             "2. Make MINIMAL changes — fix only what's broken.\n"
-            "3. After editing a Python file, run py_compile to validate syntax.\n"
-            "4. If you need to create a new file, use create_file.\n"
-            "5. If you need to delete a file, use delete_file.\n"
+            "3. When using edit_file, COPY the old_string EXACTLY from the read_file output — same indentation, same whitespace.\n"
+            "4. After editing a Python file, run py_compile to validate syntax.\n"
+            "5. If you need to create a new file, use create_file.\n"
             "6. If you're stuck after 3 attempts, say 'I give up' and stop.\n"
             "7. When done, do not call any more tools.\n"
         )
@@ -309,6 +312,27 @@ class FixAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "list_files",
+                    "description": "List files in a directory of any TrueSightDAO repo. Use this to discover file structure before reading.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo": {
+                                "type": "string",
+                                "description": "Repo name under TrueSightDAO",
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Directory path relative to repo root, e.g. 'app/tools/' or '' for root",
+                            },
+                        },
+                        "required": ["repo", "path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "read_file",
                     "description": "Read a file from any TrueSightDAO repo.",
                     "parameters": {
@@ -455,6 +479,8 @@ class FixAgent:
 
         if func_name == "read_file":
             return self._tool_read_file(target_repo, args["path"], branch)
+        if func_name == "list_files":
+            return self._tool_read_file(target_repo, args["path"], branch)
         if func_name == "edit_file":
             return self._tool_edit_file(
                 target_repo, branch, args["path"], args["old_string"], args["new_string"]
@@ -487,17 +513,23 @@ class FixAgent:
 
         content = result["content"]
         if old_string not in content:
-            return "Error: old_string not found in file. The text must match exactly."
+            # Show context so the LLM can self-correct
+            snippet = content[:2000] if len(content) > 2000 else content
+            lines = snippet.split("\n")
+            numbered = "\n".join(f"{i+1:4d}: {line}" for i, line in enumerate(lines))
+            return (
+                "Error: old_string not found. Copy the exact text from the file content below.\n"
+                f"The file has {len(content)} chars. Here are the first {len(lines)} lines:\n\n"
+                f"{numbered}\n\n"
+                "Retry edit_file with the EXACT text you want to replace, copied verbatim from above."
+            )
 
         new_content = content.replace(old_string, new_string, 1)
         if new_content == content:
             return "Error: replacement did not change anything"
 
         ok = self.github.commit_file(
-            repo,
-            branch,
-            path,
-            new_content,
+            repo, branch, path, new_content,
             message=f"[autopilot] Fix {path}",
         )
         return "File updated successfully" if ok else "Failed to commit file"
