@@ -218,6 +218,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
         "agroverse_shop", "agroverse_shop_prod", "dao_client",
         "market_research", "sentiment_importer", "truesight_autopilot",
+        ".github", "agentic_ai_context", "agroverse-inventory",
     ])
     return [
         {
@@ -423,6 +424,40 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                         },
                     },
                     "required": ["email"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "upload_file_to_github",
+                "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API. Useful for archiving invoice PDFs, receipts, or other evidence files. Returns the blob URL for use in offchain transaction descriptions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Repo name under TrueSightDAO, e.g. '.github' for the assets repo.",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Path inside the repo, e.g. 'assets/20260506_amazon_invoice.pdf'.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Base64-encoded file content.",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Commit message for the upload.",
+                        },
+                        "branch": {
+                            "type": "string",
+                            "description": "Branch name. Default: main",
+                            "default": "main",
+                        },
+                    },
+                    "required": ["repo", "path", "content", "message"],
                 },
             },
         },
