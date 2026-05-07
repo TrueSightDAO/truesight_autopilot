@@ -909,9 +909,9 @@ def _add_pending(public_key: str, proposal: dict) -> None:
         _save_pending(public_key, items)
 
 
-def _resolve_pending(public_key: str, qr_code: str, resolution: str) -> None:
+def _resolve_pending(public_key: str, key: str, resolution: str) -> None:
     items = _load_pending(public_key)
-    items = [p for p in items if p.get("qr_code") != qr_code]
+    items = [p for p in items if p.get("qr_code") != key and p.get("title") != key]
     _save_pending(public_key, items)
 
 
