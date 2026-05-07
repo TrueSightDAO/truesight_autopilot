@@ -131,26 +131,52 @@ class LLMClient:
         return []
 
     def _parse_xml_tool_calls(self, text: str) -> list[dict[str, Any]]:
-        """Parse DeepSeek XML tool-call syntax: <function_calls><invoke name="..."><parameter name="...">value</parameter></invoke></function_calls>"""
+        """Parse DeepSeek XML/DSML tool-call syntax from content.
+
+        Handles two variants DeepSeek emits:
+        1. Standard XML: <function_calls><invoke name="..."><parameter name="...">value</parameter></invoke></function_calls>
+        2. DSML-prefixed: <||DSML||tool_calls><||DSML||invoke name="..."><||DSML||parameter name="..." string="true">value</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>
+        """
         import re as _re
         calls: list[dict[str, Any]] = []
 
-        # Pattern: <invoke name="func_name">...optional params...</invoke>
+        # Normalize DSML prefixes to standard XML tags for unified parsing
+        normalized = text
+        # Replace ||DSML|| prefixed tags: <||DSML||tag -> <tag, </||DSML||tag -> </tag
+        normalized = _re.sub(r'<\|\|DSML\|\|', '<', normalized)
+        normalized = _re.sub(r'</\|\|DSML\|\|', '</', normalized)
+
+        # Pattern: <invoke name="func_name">...params...</invoke>
         invoke_pattern = _re.compile(
             r'<invoke\s+name="([^"]+)"\s*>(.*?)</invoke>',
             _re.DOTALL,
         )
+        # Pattern: <parameter name="name" string="true">value</parameter> or <parameter name="name">value</parameter>
         param_pattern = _re.compile(
-            r'<parameter\s+name="([^"]+)"\s*>(.*?)</parameter>',
+            r'<parameter\s+name="([^"]+)"[^>]*>\s*(.*?)\s*</parameter>',
             _re.DOTALL,
         )
 
-        for idx, match in enumerate(invoke_pattern.finditer(text)):
+        # Also match <function_calls> or <tool_calls> wrapper
+        body = text
+        wrapper_match = _re.search(
+            r'<(?:function_calls|tool_calls|(?:\|\|DSML\|\|)?tool_calls)>\s*(.*?)\s*</(?:function_calls|tool_calls|(?:\|\|DSML\|\|)?tool_calls)>',
+            text,
+            _re.DOTALL,
+        )
+        if wrapper_match:
+            body = wrapper_match.group(1)
+
+        for idx, match in enumerate(invoke_pattern.finditer(body)):
             func_name = match.group(1)
             params_body = match.group(2)
             args: dict[str, object] = {}
             for pm in param_pattern.finditer(params_body):
-                args[pm.group(1)] = pm.group(2).strip()
+                key = pm.group(1)
+                val = pm.group(2).strip()
+                # Remove string="true" boolean attribute values if present (already handled by regex)
+                if val:
+                    args[key] = val
             calls.append({
                 "id": f"call_xml_{idx:02d}",
                 "type": "function",
@@ -163,14 +189,23 @@ class LLMClient:
 
     @staticmethod
     def _strip_xml_from_content(text: str) -> str:
-        """Remove <function_calls>...</function_calls> block from text."""
+        """Remove <function_calls>...</function_calls> or DSML equivalent from text."""
         import re as _re
-        return _re.sub(
-            r'<function_calls>.*?</function_calls>',
+        # Strip both standard XML and DSML-prefixed tool call wrappers
+        text = _re.sub(
+            r'<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>',
             '',
             text,
             flags=_re.DOTALL,
-        ).strip()
+        )
+        # Also strip any remaining DSML invoke blocks not wrapped in a parent tag
+        text = _re.sub(
+            r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>',
+            '',
+            text,
+            flags=_re.DOTALL,
+        )
+        return text.strip()
 
     def diagnose_github_failure(
         self,
