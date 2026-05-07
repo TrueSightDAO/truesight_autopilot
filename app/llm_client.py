@@ -478,4 +478,31 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "merge_pr",
+                "description": "Merge a pull request. Only use this when a governor explicitly tells you to merge (e.g. 'merge it', 'merge the PR', 'go ahead and merge'). Never auto-merge on your own. The PR must be from an allowed repo.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Repo name under TrueSightDAO, e.g. 'truesight_autopilot'.",
+                        },
+                        "pr_number": {
+                            "type": "integer",
+                            "description": "The pull request number to merge.",
+                        },
+                        "merge_method": {
+                            "type": "string",
+                            "description": "Merge method: 'squash' (default), 'merge', or 'rebase'.",
+                            "enum": ["squash", "merge", "rebase"],
+                            "default": "squash",
+                        },
+                    },
+                    "required": ["repo", "pr_number"],
+                },
+            },
+        },
     ]
