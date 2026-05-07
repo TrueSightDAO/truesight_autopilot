@@ -28,14 +28,20 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
         echo 'Git repo exists — pulling latest...'
         cd $REMOTE_DIR && git fetch origin main && git reset --hard origin/main && git clean -fd
     else
-        echo 'First deploy or migration from rsync — cloning repo...'
+        echo 'First deploy or migration from rsync — initializing git repo...'
         # Preserve .env if it exists (will be re-synced below anyway)
         if [ -f $REMOTE_DIR/.env ]; then
             cp $REMOTE_DIR/.env /tmp/truesight_autopilot_env_backup
         fi
-        # Remove old rsync'd files (keep context dir which is git-managed separately)
-        find $REMOTE_DIR -mindepth 1 -not -name context -not -path '*/context/*' -delete
-        git clone --depth 1 --branch main https://github.com/TrueSightDAO/truesight_autopilot.git $REMOTE_DIR
+        # Remove all old rsynced files
+        rm -rf $REMOTE_DIR/*
+        rm -rf $REMOTE_DIR/.*  2>/dev/null || true
+        # Init git repo and pull from origin
+        cd $REMOTE_DIR
+        git init
+        git remote add origin https://github.com/TrueSightDAO/truesight_autopilot.git
+        git fetch --depth 1 origin main
+        git checkout -B main origin/main
         if [ -f /tmp/truesight_autopilot_env_backup ]; then
             mv /tmp/truesight_autopilot_env_backup $REMOTE_DIR/.env
         fi
