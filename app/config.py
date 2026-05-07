@@ -36,6 +36,7 @@ class Settings(BaseSettings):
         "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
         "agroverse_shop", "agroverse_shop_prod", "dao_client",
         "market_research", "sentiment_importer", "truesight_autopilot",
+        "agentic_ai_context",
     ]
 
     # Gmail
