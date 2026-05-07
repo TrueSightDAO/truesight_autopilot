@@ -776,6 +776,90 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     # Publish transcript to public GitHub repo for DAO transparency
     asyncio.create_task(_publish_transcript(session_id, history, governor_name))
 
+    # ── Queue processing: after done, check for queued messages ──
+    queue = _message_queues.get(session_id, [])
+    while queue:
+        next_msg = queue.pop(0)
+        logger.info("[%d] Processing queued message: %s", req_id, next_msg["id"])
+        yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "processing"})
+
+        # Append queued message to history as a user message
+        queued_content = next_msg["content"]
+        if governor_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+            queued_content = f"[GOVERNOR_IDENTITY: You are speaking with {governor_name}. When they say 'I', 'me', or 'my', they mean {governor_name}.]\n\n{queued_content}"
+        history.append({"role": "user", "content": queued_content})
+        _log_session(session_id, history)
+
+        # Process this queued message (reuse the same loop logic)
+        try:
+            MAX_TOOL_ROUNDS = 5
+            assistant_text = ""
+            round_num = 0
+
+            while round_num < MAX_TOOL_ROUNDS:
+                round_num += 1
+                completion = client.chat(system_prompt, history, tools=tools)
+                _log_raw_llm(session_id, f"deepseek-queue-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
+                assistant_message = completion["choices"][0].get("message", {})
+                tool_calls = assistant_message.get("tool_calls", [])
+
+                if tool_calls:
+                    thought = assistant_message.get("content", "") or "Thinking..."
+                    yield _sse_event("token", thought)
+
+                    history.append({
+                        "role": "assistant",
+                        "content": assistant_message.get("content", ""),
+                        "reasoning_content": assistant_message.get("reasoning_content", ""),
+                        "tool_calls": [
+                            {"id": tc["id"], "type": tc["type"],
+                             "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                            for tc in tool_calls
+                        ],
+                    })
+
+                    for tc in tool_calls:
+                        func_name = tc["function"]["name"]
+                        func_args = json.loads(tc["function"]["arguments"])
+                        tool_call_id = tc["id"]
+                        logger.info("[%d] QUEUE TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
+                        yield _sse_event("tool", {"tool": func_name, "status": "calling"})
+                        result_text = await _run_tool(func_name, func_args, history, session_id, governor_name)
+                        yield _sse_event("tool", {"tool": func_name, "status": "done"})
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        })
+                else:
+                    assistant_text = client.extract_text(completion)
+                    break
+
+            if not assistant_text:
+                logger.info("[%d] Queue: empty after %d tool rounds — forcing text-only", req_id, round_num)
+                completion = client.chat(system_prompt, history, tools=None)
+                assistant_text = client.extract_text(completion)
+
+        except LLMError as exc:
+            logger.error("[%d] QUEUE CHAT ERROR: %s", req_id, exc)
+            _record_chat_error(str(exc))
+            yield _sse_event("error", str(exc))
+            break
+
+        # Stream queued response tokens
+        for chunk in _chunk_text(assistant_text):
+            yield _sse_event("token", chunk)
+
+        # Stream done event for this queued message
+        done_data = {"response": assistant_text, "queued": True, "msg_id": next_msg["id"]}
+        yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
+
+        # Persist assistant response to session history
+        history.append({"role": "assistant", "content": assistant_text})
+        _sessions[session_id] = history
+        _log_session(session_id, history)
+        asyncio.create_task(_publish_transcript(session_id, history, governor_name))
+
 
 def _chunk_text(text: str, size: int = 80) -> list[str]:
     """Split text into chunks for streaming, keeping newlines."""
