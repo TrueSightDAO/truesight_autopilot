@@ -53,6 +53,7 @@ aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
 _pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission awaiting approval
 _active_streams: dict[str, float] = {}  # session_key -> last activity timestamp
+_message_queues: dict[str, list[dict]] = {}  # session_key -> list of queued messages
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_LOG_DIR = settings.session_log_dir
