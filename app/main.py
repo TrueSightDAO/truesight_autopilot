@@ -583,6 +583,16 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
                 "summary": issue[:200],
             }
         }
+        # Persist pending approval so it shows in the hamburger menu
+        if session_id:
+            pub_key = session_id.split(":")[0]
+            if pub_key:
+                _add_pending(pub_key, {
+                    "title": f"Merge PR #{pr_number} on {repo_name}",
+                    "qr_code": "",
+                    "summary": issue[:200],
+                    "action": "merge_pr",
+                })
         return f"PR opened: {pr_url}\n\n```json\n{json.dumps(proposal)}\n```"
     if func_name == "merge_pr":
         repo_name = func_args.get("repo", "")
@@ -909,9 +919,9 @@ def _add_pending(public_key: str, proposal: dict) -> None:
         _save_pending(public_key, items)
 
 
-def _resolve_pending(public_key: str, qr_code: str, resolution: str) -> None:
+def _resolve_pending(public_key: str, key: str, resolution: str) -> None:
     items = _load_pending(public_key)
-    items = [p for p in items if p.get("qr_code") != qr_code]
+    items = [p for p in items if p.get("qr_code") != key and p.get("title") != key]
     _save_pending(public_key, items)
 
 
