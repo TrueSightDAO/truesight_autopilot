@@ -1001,6 +1001,89 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
         logger.debug("Transcript publish skipped: %s", e)
 
 
+# ───────────────────────────── Message Queue ─────────────────────────────
+
+@app.post("/chat/queue")
+async def queue_message(request: Request) -> JSONResponse:
+    """Queue a message for async processing. Returns position in queue."""
+    body = await request.json()
+    payload = body.get("payload")
+    signature = body.get("signature")
+    public_key = request.headers.get("X-Public-Key", "")
+
+    if payload and signature and public_key:
+        verify_payload(payload, signature, public_key)
+        user_message = payload.get("message", "")
+    else:
+        public_key = verify_jwt(request)
+        user_message = body.get("message", "")
+        if not user_message:
+            raise HTTPException(status_code=400, detail="message is required.")
+
+    session_id = _session_key(public_key, request)
+    msg_id = str(uuid.uuid4())
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    queued_msg = {
+        "id": msg_id,
+        "content": user_message,
+        "timestamp": timestamp,
+    }
+
+    if session_id not in _message_queues:
+        _message_queues[session_id] = []
+    _message_queues[session_id].append(queued_msg)
+    position = len(_message_queues[session_id])
+
+    return JSONResponse({"queued": True, "position": position, "msg_id": msg_id})
+
+
+@app.get("/chat/queue")
+async def get_queue(request: Request) -> JSONResponse:
+    """Return the current message queue for this session."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    queue = _message_queues.get(session_id, [])
+    return JSONResponse({"queue": queue})
+
+
+@app.delete("/chat/queue/{msg_id}")
+async def delete_queued_message(msg_id: str, request: Request) -> JSONResponse:
+    """Remove a specific message from the queue by ID."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    queue = _message_queues.get(session_id, [])
+    for i, msg in enumerate(queue):
+        if msg["id"] == msg_id:
+            queue.pop(i)
+            return JSONResponse({"status": "removed"})
+    raise HTTPException(status_code=404, detail="Message not found in queue")
+
+
+@app.patch("/chat/queue/{msg_id}")
+async def update_queued_message(msg_id: str, request: Request) -> JSONResponse:
+    """Update a queued message's content."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    body = await request.json()
+    new_content = body.get("content", "").strip()
+    if not new_content:
+        raise HTTPException(status_code=400, detail="content is required")
+    session_id = _session_key(public_key, request)
+    queue = _message_queues.get(session_id, [])
+    for msg in queue:
+        if msg["id"] == msg_id:
+            msg["content"] = new_content
+            msg["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            return JSONResponse({"status": "updated"})
+    raise HTTPException(status_code=404, detail="Message not found in queue")
+
+
 @app.post("/chat")
 async def chat(request: Request):
     """SSE-streaming chat endpoint."""
