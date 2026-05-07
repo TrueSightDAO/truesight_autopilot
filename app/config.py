@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     )
     static_governors_json: Path | None = None
 
+    # SSH / Deploy
+    ec2_host: str = os.getenv("EC2_HOST", "truesight-autopilot")
+    ec2_key_path: str = os.getenv("EC2_KEY_PATH", os.path.expanduser("~/.ssh/agentic_ai_github/id_ed25519"))
+    ec2_remote_dir: str = os.getenv("EC2_REMOTE_DIR", "/opt/truesight_autopilot")
+
     # Session logging (production: use persistent path, not /tmp)
     session_log_dir: Path = Path(os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions"))
 
