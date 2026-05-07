@@ -53,6 +53,7 @@ aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
 _pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission awaiting approval
 _active_streams: dict[str, float] = {}  # session_key -> last activity timestamp
+_message_queues: dict[str, list[dict]] = {}  # session_key -> list of queued messages
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_LOG_DIR = settings.session_log_dir
@@ -778,6 +779,90 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     # Publish transcript to public GitHub repo for DAO transparency
     asyncio.create_task(_publish_transcript(session_id, history, governor_name))
 
+    # ── Queue processing: after done, check for queued messages ──
+    queue = _message_queues.get(session_id, [])
+    while queue:
+        next_msg = queue.pop(0)
+        logger.info("[%d] Processing queued message: %s", req_id, next_msg["id"])
+        yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "processing"})
+
+        # Append queued message to history as a user message
+        queued_content = next_msg["content"]
+        if governor_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+            queued_content = f"[GOVERNOR_IDENTITY: You are speaking with {governor_name}. When they say 'I', 'me', or 'my', they mean {governor_name}.]\n\n{queued_content}"
+        history.append({"role": "user", "content": queued_content})
+        _log_session(session_id, history)
+
+        # Process this queued message (reuse the same loop logic)
+        try:
+            MAX_TOOL_ROUNDS = 5
+            assistant_text = ""
+            round_num = 0
+
+            while round_num < MAX_TOOL_ROUNDS:
+                round_num += 1
+                completion = client.chat(system_prompt, history, tools=tools)
+                _log_raw_llm(session_id, f"deepseek-queue-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
+                assistant_message = completion["choices"][0].get("message", {})
+                tool_calls = assistant_message.get("tool_calls", [])
+
+                if tool_calls:
+                    thought = assistant_message.get("content", "") or "Thinking..."
+                    yield _sse_event("token", thought)
+
+                    history.append({
+                        "role": "assistant",
+                        "content": assistant_message.get("content", ""),
+                        "reasoning_content": assistant_message.get("reasoning_content", ""),
+                        "tool_calls": [
+                            {"id": tc["id"], "type": tc["type"],
+                             "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                            for tc in tool_calls
+                        ],
+                    })
+
+                    for tc in tool_calls:
+                        func_name = tc["function"]["name"]
+                        func_args = json.loads(tc["function"]["arguments"])
+                        tool_call_id = tc["id"]
+                        logger.info("[%d] QUEUE TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
+                        yield _sse_event("tool", {"tool": func_name, "status": "calling"})
+                        result_text = await _run_tool(func_name, func_args, history, session_id, governor_name)
+                        yield _sse_event("tool", {"tool": func_name, "status": "done"})
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        })
+                else:
+                    assistant_text = client.extract_text(completion)
+                    break
+
+            if not assistant_text:
+                logger.info("[%d] Queue: empty after %d tool rounds — forcing text-only", req_id, round_num)
+                completion = client.chat(system_prompt, history, tools=None)
+                assistant_text = client.extract_text(completion)
+
+        except LLMError as exc:
+            logger.error("[%d] QUEUE CHAT ERROR: %s", req_id, exc)
+            _record_chat_error(str(exc))
+            yield _sse_event("error", str(exc))
+            break
+
+        # Stream queued response tokens
+        for chunk in _chunk_text(assistant_text):
+            yield _sse_event("token", chunk)
+
+        # Stream done event for this queued message
+        done_data = {"response": assistant_text, "queued": True, "msg_id": next_msg["id"]}
+        yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
+
+        # Persist assistant response to session history
+        history.append({"role": "assistant", "content": assistant_text})
+        _sessions[session_id] = history
+        _log_session(session_id, history)
+        asyncio.create_task(_publish_transcript(session_id, history, governor_name))
+
 
 def _chunk_text(text: str, size: int = 80) -> list[str]:
     """Split text into chunks for streaming, keeping newlines."""
@@ -1001,6 +1086,89 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
         logger.info("Published transcript to %s/%s", _TRANSCRIPT_REPO, path)
     except Exception as e:
         logger.debug("Transcript publish skipped: %s", e)
+
+
+# ───────────────────────────── Message Queue ─────────────────────────────
+
+@app.post("/chat/queue")
+async def queue_message(request: Request) -> JSONResponse:
+    """Queue a message for async processing. Returns position in queue."""
+    body = await request.json()
+    payload = body.get("payload")
+    signature = body.get("signature")
+    public_key = request.headers.get("X-Public-Key", "")
+
+    if payload and signature and public_key:
+        verify_payload(payload, signature, public_key)
+        user_message = payload.get("message", "")
+    else:
+        public_key = verify_jwt(request)
+        user_message = body.get("message", "")
+        if not user_message:
+            raise HTTPException(status_code=400, detail="message is required.")
+
+    session_id = _session_key(public_key, request)
+    msg_id = str(uuid.uuid4())
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    queued_msg = {
+        "id": msg_id,
+        "content": user_message,
+        "timestamp": timestamp,
+    }
+
+    if session_id not in _message_queues:
+        _message_queues[session_id] = []
+    _message_queues[session_id].append(queued_msg)
+    position = len(_message_queues[session_id])
+
+    return JSONResponse({"queued": True, "position": position, "msg_id": msg_id})
+
+
+@app.get("/chat/queue")
+async def get_queue(request: Request) -> JSONResponse:
+    """Return the current message queue for this session."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    queue = _message_queues.get(session_id, [])
+    return JSONResponse({"queue": queue})
+
+
+@app.delete("/chat/queue/{msg_id}")
+async def delete_queued_message(msg_id: str, request: Request) -> JSONResponse:
+    """Remove a specific message from the queue by ID."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    queue = _message_queues.get(session_id, [])
+    for i, msg in enumerate(queue):
+        if msg["id"] == msg_id:
+            queue.pop(i)
+            return JSONResponse({"status": "removed"})
+    raise HTTPException(status_code=404, detail="Message not found in queue")
+
+
+@app.patch("/chat/queue/{msg_id}")
+async def update_queued_message(msg_id: str, request: Request) -> JSONResponse:
+    """Update a queued message's content."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    body = await request.json()
+    new_content = body.get("content", "").strip()
+    if not new_content:
+        raise HTTPException(status_code=400, detail="content is required")
+    session_id = _session_key(public_key, request)
+    queue = _message_queues.get(session_id, [])
+    for msg in queue:
+        if msg["id"] == msg_id:
+            msg["content"] = new_content
+            msg["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            return JSONResponse({"status": "updated"})
+    raise HTTPException(status_code=404, detail="Message not found in queue")
 
 
 @app.post("/chat")
