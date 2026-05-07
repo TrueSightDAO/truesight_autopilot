@@ -91,39 +91,25 @@ def deploy_autopilot() -> str:
         )
         steps.append({"step": "pip_install", "status": "ok"})
 
-        # Step 3: restart systemd service
+        # Step 3: restart systemd service (async — this kills us, so do it last)
         logger.info("Step 3: restart systemd service")
-        _run_remote(client, "su -c 'systemctl restart truesight-autopilot'", timeout=30)
-        steps.append({"step": "restart_service", "status": "ok"})
-
-        # Step 4: wait and check health
-        logger.info("Step 4: wait 5s then check health")
-        time.sleep(5)
-        health_out = _run_remote(
+        # Use nohup so the restart survives the SSH session closing
+        _run_remote(
             client,
-            "curl -s http://localhost:8001/health",
+            "sudo nohup systemctl restart truesight-autopilot > /dev/null 2>&1 &",
             timeout=10,
         )
-        try:
-            health_data = json.loads(health_out)
-        except json.JSONDecodeError:
-            raise DeployError(f"Health endpoint returned invalid JSON: {health_out[:300]}")
-
-        if health_data.get("status") != "ok":
-            raise DeployError(
-                f"Health check failed: status={health_data.get('status')!r}. "
-                f"Response: {json.dumps(health_data)[:300]}"
-            )
-        steps.append({"step": "health_check", "status": "ok", "detail": health_data})
+        steps.append({"step": "restart_service", "status": "ok"})
+        client.close()
 
         elapsed = round(time.time() - start, 1)
         result = {
             "status": "success",
-            "message": f"Deploy completed successfully in {elapsed}s. Health: {health_data.get('status')}",
+            "message": f"Deploy triggered in {elapsed}s. Service restarting — check health after ~10s.",
             "steps": steps,
             "elapsed_seconds": elapsed,
         }
-        logger.info("Deploy SUCCESS: %s", result["message"])
+        logger.info("Deploy triggered: %s", result["message"])
         return json.dumps(result)
 
     except DeployError as e:
