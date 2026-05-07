@@ -93,7 +93,7 @@ def deploy_autopilot() -> str:
 
         # Step 3: restart systemd service
         logger.info("Step 3: restart systemd service")
-        _run_remote(client, "systemctl restart truesight-autopilot", timeout=30)
+        _run_remote(client, "su -c 'systemctl restart truesight-autopilot'", timeout=30)
         steps.append({"step": "restart_service", "status": "ok"})
 
         # Step 4: wait and check health
