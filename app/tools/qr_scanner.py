@@ -310,6 +310,7 @@ def lookup_qr_batch(qr_codes: list[str]) -> dict[str, Any]:
         results.append(r)
         if r.get("status") == "success":
             found.append(r)
+            _cache_qr_result(code, r)
         elif r.get("status") == "error":
             lookup_errors.append(r)
         else:
