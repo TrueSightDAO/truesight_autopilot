@@ -352,32 +352,6 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "create_dao_submission",
-                "description": "Compile and submit a [CONTRIBUTION EVENT] to Edgar for AI agent work.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string", "description": "Short one-line title."},
-                        "body": {"type": "string", "description": "Multi-line description with what changed and why."},
-                        "pr_urls": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "At least one https://github.com/TrueSightDAO/.../pull/N URL.",
-                        },
-                        "contributors": {
-                            "type": "string",
-                            "description": "Display name. Defaults to EMAIL local-part.",
-                        },
-                        "amount": {"type": "string", "default": "0"},
-                        "tdg_issued": {"type": "string", "default": "0"},
-                    },
-                    "required": ["title", "body", "pr_urls"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "scan_qr_from_file",
                 "description": "Scan a single image file for QR codes and return the decoded values. Use this when the user uploads photos of QR codes (e.g. from cacao bags).",
                 "parameters": {
