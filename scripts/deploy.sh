@@ -94,6 +94,17 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot.service /etc/systemd/system/
     sudo systemctl daemon-reload
     sudo systemctl enable truesight-autopilot
+    # Graceful restart: wait for any in-flight requests to drain before killing
+    echo "Waiting for active requests to drain..."
+    for i in \$(seq 1 10); do
+        ACTIVE=\$(ss -tn state established sport = :8001 2>/dev/null | wc -l)
+        if [ "\$ACTIVE" -le 1 ]; then
+            echo "No active requests — restarting"
+            break
+        fi
+        echo "Still \$ACTIVE active connection(s) — waiting 3s..."
+        sleep 3
+    done
     sudo systemctl restart truesight-autopilot
     sleep 2
     sudo systemctl status truesight-autopilot --no-pager
