@@ -21,14 +21,26 @@ pip install -r requirements.txt
 echo "=== Syncing to EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "sudo mkdir -p $REMOTE_DIR && sudo chown ubuntu:ubuntu $REMOTE_DIR"
 
-# rsync code (excluding venv, .git, caches, and context dir — that's handled separately via git)
-rsync -avz --delete \
-    --exclude='.venv' \
-    --exclude='.git' \
-    --exclude='__pycache__' \
-    --exclude='*.pyc' \
-    --exclude='context' \
-    ./ "$EC2_HOST:$REMOTE_DIR/"
+# Use git instead of rsync so the EC2 has a proper repo with version history
+# This enables autopilot to self-deploy via git pull + restart
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    if [ -d $REMOTE_DIR/.git ]; then
+        echo 'Git repo exists — pulling latest...'
+        cd $REMOTE_DIR && git fetch origin main && git reset --hard origin/main && git clean -fd
+    else
+        echo 'First deploy or migration from rsync — cloning repo...'
+        # Preserve .env if it exists (will be re-synced below anyway)
+        if [ -f $REMOTE_DIR/.env ]; then
+            cp $REMOTE_DIR/.env /tmp/truesight_autopilot_env_backup
+        fi
+        # Remove old rsync'd files (keep context dir which is git-managed separately)
+        find $REMOTE_DIR -mindepth 1 -not -name context -not -path '*/context/*' -delete
+        git clone --depth 1 --branch main https://github.com/TrueSightDAO/truesight_autopilot.git $REMOTE_DIR
+        if [ -f /tmp/truesight_autopilot_env_backup ]; then
+            mv /tmp/truesight_autopilot_env_backup $REMOTE_DIR/.env
+        fi
+    fi
+"
 
 # Sync .env separately (gitignored locally, needed on EC2)
 if [ -f ".env" ]; then
