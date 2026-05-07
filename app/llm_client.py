@@ -551,4 +551,66 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_prs",
+                "description": "List recent pull requests on a TrueSightDAO repo. Returns PR numbers, titles, states, and URLs. Use this to find PRs for DAO contribution evidence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Repo name under TrueSightDAO, e.g. 'dapp' or 'truesight_autopilot'.",
+                        },
+                        "state": {
+                            "type": "string",
+                            "description": "PR state: 'open', 'closed', or 'all' (default).",
+                            "enum": ["open", "closed", "all"],
+                            "default": "all",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max PRs to return (default 20).",
+                            "default": 20,
+                        },
+                    },
+                    "required": ["repo"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_dao_submission",
+                "description": "Submit a [CONTRIBUTION EVENT] to Edgar for DAO contribution tracking. Use for time-based (Time) or USD contributions. Requires at least one TrueSightDAO PR URL as evidence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short one-line title for the contribution."},
+                        "body": {"type": "string", "description": "Multi-line description: what changed, why, evidence."},
+                        "pr_urls": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "At least one https://github.com/TrueSightDAO/.../pull/N URL.",
+                        },
+                        "contributors": {
+                            "type": "string",
+                            "description": "Display name. Defaults to governor name.",
+                        },
+                        "amount": {
+                            "type": "string",
+                            "description": "For Time: total minutes. For USD: dollar amount.",
+                            "default": "0",
+                        },
+                        "tdg_issued": {
+                            "type": "string",
+                            "description": "TDG to issue. For Time: hours * 100. For USD: same as amount.",
+                            "default": "0",
+                        },
+                    },
+                    "required": ["title", "body", "pr_urls"],
+                },
+            },
+        },
     ]

@@ -637,8 +637,40 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             return json.dumps({"success": False, "error": "email is required"})
         result = register_identity(email)
         return json.dumps(result, indent=2)
+    if func_name == "list_prs":
+        repo = func_args.get("repo", "")
+        state = func_args.get("state", "all")
+        limit = int(func_args.get("limit", 20))
+        if not repo:
+            return json.dumps({"status": "error", "message": "repo is required"})
+        gh = GitHubClient()
+        prs = gh.list_prs(repo, state=state, limit=limit)
+        return json.dumps(prs, indent=2)
     if func_name == "create_dao_submission":
-        return "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."
+        title = func_args.get("title", "")
+        body = func_args.get("body", "")
+        pr_urls = func_args.get("pr_urls", [])
+        contributors = func_args.get("contributors", governor_name or "autopilot@agroverse.shop")
+        amount = func_args.get("amount", "0")
+        tdg_issued = func_args.get("tdg_issued", "0")
+        if not title or not body or not pr_urls:
+            return json.dumps({"status": "error", "message": "title, body, and pr_urls are required"})
+        edgar = EdgarDirectClient()
+        if not edgar.is_configured():
+            return json.dumps({"status": "error", "message": "Edgar credentials not configured — cannot submit"})
+        pr_block = "Pull requests (GitHub evidence):\n" + "\n".join(f"- {u.strip()}" for u in pr_urls)
+        description = f"{title}\n\n{pr_block}\n\nDetails:\n{body}"
+        attrs = {
+            "Type": "Time (Minutes)" if amount == "0" or float(amount) > 60 else "USD",
+            "Amount": amount,
+            "Description": description,
+            "Contributor(s)": contributors,
+            "TDG Issued": tdg_issued,
+            "Attached Filename": "N/A",
+            "Destination Contribution File Location": "N/A",
+        }
+        ok = edgar.submit_contribution("CONTRIBUTION EVENT", attrs, description=title)
+        return json.dumps({"status": "success" if ok else "error", "message": "Contribution submitted" if ok else "Submission failed"})
     if func_name == "upload_file_to_github":
         from .tools.upload_file_to_github import upload_file_to_github as _upload
         result = _upload(

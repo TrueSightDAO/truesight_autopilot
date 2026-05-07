@@ -217,3 +217,28 @@ class GitHubClient:
                 "merged": False,
                 "message": f"Failed to merge PR #{pr_number}: {error_msg}",
             }
+
+    def list_prs(
+        self,
+        repo_name: str,
+        state: str = "all",
+        limit: int = 20,
+    ) -> list[dict]:
+        """List pull requests on a repo. Returns list of dicts with number, title, state, merged_at, url."""
+        try:
+            repo = self.g.get_repo(self._full_name(repo_name))
+            pulls = repo.get_pulls(state=state, sort="updated", direction="desc")
+            result = []
+            for pr in pulls[:limit]:
+                result.append({
+                    "number": pr.number,
+                    "title": pr.title,
+                    "state": pr.state,
+                    "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                    "url": pr.html_url,
+                    "created_at": pr.created_at.isoformat() if pr.created_at else None,
+                })
+            return result
+        except Exception as e:
+            logger.error("Failed to list PRs on %s: %s", repo_name, e)
+            return []
