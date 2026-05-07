@@ -430,6 +430,23 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "list_matching_qr_codes",
+                "description": "Search previously looked-up QR codes by prefix. Use this when you have a partial QR code (e.g. from a blurry photo) and need to find matching full codes. Only returns codes that have been previously cached via lookup_qr_code.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prefix": {
+                            "type": "string",
+                            "description": "QR code prefix to match against cached lookups, e.g. '2024OSCAR_20260330_' or 'LA_CC_'.",
+                        },
+                    },
+                    "required": ["prefix"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "upload_file_to_github",
                 "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API. Useful for archiving invoice PDFs, receipts, or other evidence files. Returns the blob URL for use in offchain transaction descriptions.",
                 "parameters": {
