@@ -8,7 +8,7 @@ User=ubuntu
 WorkingDirectory=/opt/truesight_autopilot
 Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/opt/truesight_autopilot/.env
-ExecStart=/opt/truesight_autopilot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+ExecStart=/opt/truesight_autopilot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 2
 Restart=always
 RestartSec=10
 StandardOutput=journal
