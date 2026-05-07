@@ -488,18 +488,19 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             except Exception:
                 pass
 
-        # 3. APPROVAL GATE: check if user explicitly approved this submission
+        # 3. APPROVAL GATE: check if the most recent user message explicitly approved this submission
         approved = False
         if history:
             for msg in reversed(history):
                 if msg.get("role") == "user":
                     content = str(msg.get("content", "")).lower()
-                    if qr and qr.lower() in content:
-                        if any(kw in content for kw in ["approved", "approve", "go ahead", "yes", "confirm", "proceed", "execute", "do it", "submit it"]):
+                    clean_content = content.replace("[governor_identity:", "").split("\n## instructions\n")[0]
+                    if qr and qr.lower() in clean_content:
+                        if any(kw in clean_content for kw in ["approved", "approve", "go ahead", "yes", "confirm", "proceed", "execute", "do it", "submit it"]):
                             approved = True
-                            break
-                        if any(kw in content for kw in ["reject", "cancel", "no", "stop", "don't"]):
+                        elif any(kw in clean_content for kw in ["reject", "cancel", "no", "stop", "don't"]):
                             return json.dumps({"status": "cancelled", "message": "Submission cancelled by user."})
+                    break  # Only check the single most recent user message
 
         if not approved:
             # Build proposal for frontend to render as Approve/Reject card
@@ -1121,7 +1122,7 @@ async def chat_upload(
             "```json\n"
             "[{\"action\": \"submit_contribution\", \"title\": \"Move QR 2024OSCAR_...\", \"qr_code\": \"2024OSCAR_...\", \"summary\": \"Ceremonial Cacao Kraft Pouch from Kirsten Ritschel to Gary Teh\"}]\n"
             "```\n"
-            "Include ALL found QR codes. The user will click Approve on each one individually."
+            "Include ALL found QR codes. The user will click Accept on each one individually."
         )
 
         content_part = "\n".join(content_parts)
