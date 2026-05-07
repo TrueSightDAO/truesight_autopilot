@@ -256,6 +256,7 @@ def lookup_qr_code(qr_code: str) -> dict[str, Any]:
         from truesight_dao_client.modules.lookup_qr_code import lookup
         data = lookup(qr_code)
         if data.get("status") == "success":
+            _cache_qr_result(qr_code, data)
             return data
         return {
             "status": "error",
@@ -264,7 +265,10 @@ def lookup_qr_code(qr_code: str) -> dict[str, Any]:
         }
     except ImportError:
         # Fallback: run the module as a subprocess
-        return _lookup_qr_via_cli(qr_code)
+        result = _lookup_qr_via_cli(qr_code)
+        if result.get("status") == "success":
+            _cache_qr_result(qr_code, result)
+        return result
     except Exception as e:
         logger.error("QR lookup failed for %s: %s", qr_code, e)
         return {"status": "error", "message": str(e), "qr_code": qr_code}
