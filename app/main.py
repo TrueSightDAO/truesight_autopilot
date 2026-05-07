@@ -52,6 +52,7 @@ email_poller: EmailPoller | None = None
 aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
 _pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission awaiting approval
+_active_streams: dict[str, float] = {}  # session_key -> last activity timestamp
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_LOG_DIR = settings.session_log_dir
@@ -796,10 +797,11 @@ def _log_raw_llm(session_id: str, label: str, payload: object) -> None:
         pass
 
 
-def _save_session_index(public_key: str, sid: str, name: str | None = None) -> None:
-    """Update the session index file for a governor."""
+def _save_session_index(user_key: str, sid: str, name: str | None = None) -> None:
+    """Update the session index file for a user. user_key should be a contributor name."""
     import hashlib
-    idx_file = SESSION_LOG_DIR / f"{hashlib.md5(public_key.encode()).hexdigest()[:12]}_sessions.json"
+    idx_key = _gov_name_for_key(user_key) if len(user_key) > 50 else user_key
+    idx_file = SESSION_LOG_DIR / f"{hashlib.md5((idx_key or user_key[:20]).encode()).hexdigest()[:12]}_sessions.json"
     data: dict[str, list] = {"sessions": []}
     if idx_file.exists():
         try:
@@ -839,7 +841,8 @@ def _auto_name_session(public_key: str, request: Request, history: list, user_me
     clean = user_message.replace("[GOVERNOR_IDENTITY:", "").split("[File attachment:")[0].strip()
     name = clean[:50].replace("\n", " ") if clean else ""
     if name:
-        _save_session_index(public_key, sid, name)
+        user_key = _user_name_for_key(public_key)
+        _save_session_index(user_key, sid, name)
 
 
 def _pending_file(public_key: str) -> Path:
@@ -999,8 +1002,18 @@ async def chat(request: Request):
     _auto_name_session(public_key, request, history, user_message)
     _log_session(session_id, history)
 
+    # Track session as active — survives client disconnect
+    _active_streams[session_id] = time.time()
+
+    async def _stream_with_cleanup():
+        try:
+            async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name):
+                yield event
+        finally:
+            _active_streams.pop(session_id, None)
+
     return StreamingResponse(
-        _stream_chat(user_message, history, session_id, governor_name=gov_name),
+        _stream_with_cleanup(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
