@@ -65,7 +65,8 @@ class FixAgent:
         DRY_RUN does NOT gate the fix agent — it always opens DRAFT PRs,
         never auto-merges, and has safety hooks for dangerous operations.
         DRY_RUN only gates background tasks (email poller, AWS monitor).
-        """        branch = f"autopilot/fix-{int(time.time())}"
+        """
+        branch = f"autopilot/fix-{int(time.time())}"
         if not self.github.create_branch(repo, "main", branch):
             logger.error("Failed to create branch on %s", repo)
             return None
