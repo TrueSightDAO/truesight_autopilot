@@ -1,19 +1,22 @@
-"""Deploy truesight_autopilot to EC2 via SSH.
+"""Deploy truesight_autopilot to EC2.
 
-Reads SSH config from settings (EC2_HOST, EC2_KEY_PATH, EC2_REMOTE_DIR)
+Auto-detects whether we're running on the EC2 instance itself (uses subprocess)
+or remotely (uses SSH via paramiko).
+
+Reads config from settings (EC2_HOST, EC2_KEY_PATH, EC2_REMOTE_DIR)
 and runs the equivalent of scripts/deploy.sh steps:
   1. git pull latest code
   2. pip install -r requirements.txt
   3. restart systemd service
-  4. Wait 5s and check health endpoint
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+import socket
+import subprocess
 import time
-
-import paramiko
 
 from ..config import settings
 
