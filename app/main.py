@@ -651,6 +651,9 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             blob_url = f"https://github.com/TrueSightDAO/{func_args.get('repo', '')}/blob/{func_args.get('branch', 'main')}/{func_args.get('path', '')}"
             return json.dumps({"status": "success", "blob_url": blob_url, "commit_sha": result.get("commit_sha", ""), "message": result.get("message", "")})
         return json.dumps(result)
+    if func_name == "deploy_autopilot":
+        from .tools.deploy import deploy_autopilot as _deploy
+        return _deploy()
     return f"Unknown tool: {func_name}"
 
 

@@ -540,4 +540,15 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "deploy_autopilot",
+                "description": "Deploy the latest version of truesight_autopilot to EC2 via SSH. Pulls latest code, installs deps, restarts systemd, and checks health. Only use this when a governor explicitly tells you to redeploy.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+        },
     ]
