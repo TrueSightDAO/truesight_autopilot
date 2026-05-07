@@ -590,6 +590,19 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         return json.dumps(result, indent=2)
     if func_name == "create_dao_submission":
         return "DAO submission tool is not yet enabled. Please describe your work and I will help you compile it."
+    if func_name == "upload_file_to_github":
+        from .tools.upload_file_to_github import upload_file_to_github as _upload
+        result = _upload(
+            repo=func_args.get("repo", ""),
+            path=func_args.get("path", ""),
+            content=func_args.get("content", ""),
+            message=func_args.get("message", "Upload via autopilot"),
+            branch=func_args.get("branch", "main"),
+        )
+        if result.get("status") == "success":
+            blob_url = f"https://github.com/TrueSightDAO/{func_args.get('repo', '')}/blob/{func_args.get('branch', 'main')}/{func_args.get('path', '')}"
+            return json.dumps({"status": "success", "blob_url": blob_url, "commit_sha": result.get("commit_sha", ""), "message": result.get("message", "")})
+        return json.dumps(result)
     return f"Unknown tool: {func_name}"
 
 
