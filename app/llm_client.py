@@ -1,42 +1,32 @@
-"""LLM client: DeepSeek-V3 for everything (chat, diagnosis, code)."""
+"""LLM client: shim delegating to DeepSeekProvider (app/llm/ package).
+
+Backwards-compatible — same constructor, same return shapes, same methods.
+XML/DSML tool-call parsing now lives in DeepSeekProvider, not here.
+"""
 from __future__ import annotations
 
 import json
 import logging
 from typing import Any
 
-import httpx
-
 from .config import settings
+from .llm.base import LLMError
+from .llm.registry import get_provider
 
 logger = logging.getLogger("autopilot.llm")
 
 
-class LLMError(Exception):
-    pass
-
-
 class LLMClient:
-    """DeepSeek client with OpenAI-compatible API.
+    """Thin shim around the LLM provider abstraction.
 
-    Used for both governor chat (with tools) and autopilot diagnosis.
+    Delegates to app/llm/ package. Same API as before Phase 2.
     """
 
-    def __init__(self) -> None:
-        if not settings.deepseek_api_key:
-            raise LLMError("DEEPSEEK_API_KEY is not set.")
-        self.base_url = settings.deepseek_base_url.rstrip("/")
-        self.api_key = settings.deepseek_api_key
-        self.model = settings.deepseek_model
+    def __init__(self, provider_name: str | None = None) -> None:
+        self._provider = get_provider(provider_name or settings.llm_provider)
+        self.model = self._provider.default_model
         self.max_tokens = settings.deepseek_max_tokens
         self.temperature = settings.deepseek_temperature
-        self._http = httpx.Client(timeout=120.0)
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
 
     def chat(
         self,
@@ -45,33 +35,44 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        **extra: Any,
     ) -> dict[str, Any]:
-        """Send a chat completion request to DeepSeek."""
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [{"role": "system", "content": system_prompt}, *messages],
-            "max_tokens": max_tokens or self.max_tokens,
-            "temperature": temperature if temperature is not None else self.temperature,
-        }
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-
+        """Send a chat completion. Returns dict matching the pre-Phase-2 shape.
+        
+        Extra kwargs forwarded to the provider (caller, session_id, turn, round_num).
+        """
         try:
-            resp = self._http.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
+            resp = self._provider.chat(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                temperature=temperature if temperature is not None else self.temperature,
+                max_tokens=max_tokens or self.max_tokens,
+                **extra,
             )
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as exc:
-            err_body = exc.response.text[:1000]
-            logger.error("DeepSeek API error %s: %s", exc.response.status_code, err_body)
-            raise LLMError(f"DeepSeek API error {exc.response.status_code}: {err_body}") from exc
-        except httpx.RequestError as exc:
-            logger.error("DeepSeek request failed: %s", exc)
-            raise LLMError(f"DeepSeek request failed: {exc}") from exc
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise LLMError(f"LLM call failed: {exc}") from exc
+
+        # Convert LLMResponse back to the legacy dict shape
+        return {
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": resp.text,
+                    "tool_calls": resp.tool_calls,
+                },
+                "finish_reason": resp.finish_reason,
+            }],
+            "usage": {
+                "prompt_tokens": resp.usage.prompt_tokens,
+                "completion_tokens": resp.usage.completion_tokens,
+                "total_tokens": resp.usage.total_tokens,
+            },
+            "_provider_resp": resp,  # for future consumers that want the full object
+        }
 
     def complete(
         self,
@@ -98,114 +99,16 @@ class LLMClient:
         return content or "(empty response)"
 
     def extract_tool_calls(self, completion: dict[str, Any]) -> list[dict[str, Any]]:
-        """Extract tool calls from completion, with fallback for DeepSeek's XML syntax.
+        """Extract tool calls from the completion.
 
-        DeepSeek-chat sometimes emits tool calls as XML in the content field
-        instead of in the standard OpenAI `tool_calls` array. This fallback
-        detects `<function_calls>` / `<invoke>` XML and converts to proper format.
+        XML/DSML fallback is handled by DeepSeekProvider — tool_calls are always
+        in the standard array by the time they reach this method.
         """
         choices = completion.get("choices", [])
         if not choices:
             return []
         message = choices[0].get("message", {})
-
-        # Standard OpenAI format
-        std_calls = message.get("tool_calls", []) or []
-        if std_calls:
-            return std_calls
-
-        # Fallback: parse DeepSeek XML tool-call syntax from content
-        content = message.get("content", "") or ""
-        if not content:
-            return []
-
-        parsed = self._parse_xml_tool_calls(content)
-        if parsed:
-            logger.info("XML tool-call fallback: parsed %d calls from content", len(parsed))
-            # Rewrite completion in-place so standard path works
-            choices[0]["message"]["tool_calls"] = parsed
-            # Strip the XML from content so it doesn't leak to the user
-            cleaned = self._strip_xml_from_content(content)
-            choices[0]["message"]["content"] = cleaned
-            return parsed
-        return []
-
-    def _parse_xml_tool_calls(self, text: str) -> list[dict[str, Any]]:
-        """Parse DeepSeek XML/DSML tool-call syntax from content.
-
-        Handles two variants DeepSeek emits:
-        1. Standard XML: <function_calls><invoke name="..."><parameter name="...">value</parameter></invoke></function_calls>
-        2. DSML-prefixed: <||DSML||tool_calls><||DSML||invoke name="..."><||DSML||parameter name="..." string="true">value</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>
-        """
-        import re as _re
-        calls: list[dict[str, Any]] = []
-
-        # Normalize DSML prefixes to standard XML tags for unified parsing
-        normalized = text
-        # Replace ||DSML|| prefixed tags: <||DSML||tag -> <tag, </||DSML||tag -> </tag
-        normalized = _re.sub(r'<\|\|DSML\|\|', '<', normalized)
-        normalized = _re.sub(r'</\|\|DSML\|\|', '</', normalized)
-
-        # Pattern: <invoke name="func_name">...params...</invoke>
-        invoke_pattern = _re.compile(
-            r'<invoke\s+name="([^"]+)"\s*>(.*?)</invoke>',
-            _re.DOTALL,
-        )
-        # Pattern: <parameter name="name" string="true">value</parameter> or <parameter name="name">value</parameter>
-        param_pattern = _re.compile(
-            r'<parameter\s+name="([^"]+)"[^>]*>\s*(.*?)\s*</parameter>',
-            _re.DOTALL,
-        )
-
-        # Also match <function_calls> or <tool_calls> wrapper
-        body = text
-        wrapper_match = _re.search(
-            r'<(?:function_calls|tool_calls|(?:\|\|DSML\|\|)?tool_calls)>\s*(.*?)\s*</(?:function_calls|tool_calls|(?:\|\|DSML\|\|)?tool_calls)>',
-            text,
-            _re.DOTALL,
-        )
-        if wrapper_match:
-            body = wrapper_match.group(1)
-
-        for idx, match in enumerate(invoke_pattern.finditer(body)):
-            func_name = match.group(1)
-            params_body = match.group(2)
-            args: dict[str, object] = {}
-            for pm in param_pattern.finditer(params_body):
-                key = pm.group(1)
-                val = pm.group(2).strip()
-                # Remove string="true" boolean attribute values if present (already handled by regex)
-                if val:
-                    args[key] = val
-            calls.append({
-                "id": f"call_xml_{idx:02d}",
-                "type": "function",
-                "function": {
-                    "name": func_name,
-                    "arguments": json.dumps(args),
-                },
-            })
-        return calls
-
-    @staticmethod
-    def _strip_xml_from_content(text: str) -> str:
-        """Remove <function_calls>...</function_calls> or DSML equivalent from text."""
-        import re as _re
-        # Strip both standard XML and DSML-prefixed tool call wrappers
-        text = _re.sub(
-            r'<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>',
-            '',
-            text,
-            flags=_re.DOTALL,
-        )
-        # Also strip any remaining DSML invoke blocks not wrapped in a parent tag
-        text = _re.sub(
-            r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>',
-            '',
-            text,
-            flags=_re.DOTALL,
-        )
-        return text.strip()
+        return message.get("tool_calls", []) or []
 
     def diagnose_github_failure(
         self,
@@ -261,10 +164,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "list_org_repos",
                 "description": "List all repositories in the TrueSightDAO GitHub organization. Use this to discover what repos exist.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                },
+                "parameters": {"type": "object", "properties": {}},
             },
         },
         {
@@ -274,12 +174,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 "description": "Read a file from the agentic_ai_context repository.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path inside agentic_ai_context, e.g. 'WORKSPACE_CONTEXT.md'",
-                        }
-                    },
+                    "properties": {"path": {"type": "string", "description": "Relative path inside agentic_ai_context, e.g. 'WORKSPACE_CONTEXT.md'"}},
                     "required": ["path"],
                 },
             },
@@ -292,16 +187,9 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": f"GitHub repo name under TrueSightDAO. Allowed: {ALLOWED_CHAT_REPOS}",
-                        },
+                        "repo": {"type": "string", "description": f"GitHub repo name under TrueSightDAO. Allowed: {ALLOWED_CHAT_REPOS}"},
                         "path": {"type": "string", "description": "File path in the repo."},
-                        "ref": {
-                            "type": "string",
-                            "description": "Branch or commit. Default: main",
-                            "default": "main",
-                        },
+                        "ref": {"type": "string", "description": "Branch or commit. Default: main", "default": "main"},
                     },
                     "required": ["repo", "path"],
                 },
@@ -311,18 +199,12 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "submit_contribution",
-                "description": "Submit a signed [CONTRIBUTION EVENT] or other event to Edgar (the DAO API). Use this to log transactions, cacao bags received, sales, contributions, or any DAO record.",
+                "description": "Submit a signed [CONTRIBUTION EVENT] or other event to Edgar (the DAO API).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "event_name": {
-                            "type": "string",
-                            "description": "Event name in square-bracket convention, e.g. 'CONTRIBUTION EVENT', 'BAG RECEIPT', 'SALE'",
-                        },
-                        "attributes": {
-                            "type": "object",
-                            "description": "Key-value pairs describing the event. Include Type, Amount, Description, Contributors, etc.",
-                        },
+                        "event_name": {"type": "string", "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT'."},
+                        "attributes": {"type": "object", "description": "Key-value pairs describing the event."},
                     },
                     "required": ["event_name", "attributes"],
                 },
@@ -332,18 +214,12 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "open_fix_pr",
-                "description": "Run a full agentic loop to diagnose and fix an issue in any TrueSightDAO repo. Opens a DRAFT PR that requires human review.",
+                "description": "Run a full agentic loop to diagnose and fix an issue in any TrueSightDAO repo. Opens a DRAFT PR.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": f"Repo name under TrueSightDAO. Allowed: {ALLOWED_CHAT_REPOS}",
-                        },
-                        "issue_description": {
-                            "type": "string",
-                            "description": "Description of the issue to fix — be specific about what needs to change",
-                        },
+                        "repo": {"type": "string", "description": f"Repo name under TrueSightDAO. Allowed: {ALLOWED_CHAT_REPOS}"},
+                        "issue_description": {"type": "string", "description": "Description of the issue to fix."},
                     },
                     "required": ["repo", "issue_description"],
                 },
@@ -353,15 +229,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "scan_qr_from_file",
-                "description": "Scan a single image file for QR codes and return the decoded values. Use this when the user uploads photos of QR codes (e.g. from cacao bags).",
+                "description": "Scan a single image file for QR codes and return the decoded values.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Full path to the image file on disk (e.g. /tmp/autopilot_uploads/abc123.jpg).",
-                        },
-                    },
+                    "properties": {"file_path": {"type": "string", "description": "Full path to the image file."}},
                     "required": ["file_path"],
                 },
             },
@@ -370,16 +241,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "scan_qr_batch",
-                "description": "Batch-scan multiple image files for QR codes. Returns a summary of all QR codes found across all images. Use when the user uploads many photos at once.",
+                "description": "Batch-scan multiple image files for QR codes.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "file_paths": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of full paths to image files.",
-                        },
-                    },
+                    "properties": {"file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of full paths to image files."}},
                     "required": ["file_paths"],
                 },
             },
@@ -388,15 +253,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "lookup_qr_code",
-                "description": "Look up a single Agroverse QR code in the DAO ledger (read-only). Returns the QR code's currency, ledger shortcut, status, owner, manager, and shipping info. Use this to check what a QR code represents before recording a transaction.",
+                "description": "Look up a single Agroverse QR code in the DAO ledger (read-only).",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "qr_code": {
-                            "type": "string",
-                            "description": "The QR code identifier (e.g. 2024OSCAR_20260121_12).",
-                        },
-                    },
+                    "properties": {"qr_code": {"type": "string", "description": "The QR code identifier."}},
                     "required": ["qr_code"],
                 },
             },
@@ -405,16 +265,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "lookup_qr_batch",
-                "description": "Look up multiple QR codes at once. Returns a summary of found/missing records. Use after scan_qr_batch to resolve all detected codes.",
+                "description": "Look up multiple QR codes at once.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "qr_codes": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of QR code identifiers to look up.",
-                        },
-                    },
+                    "properties": {"qr_codes": {"type": "array", "items": {"type": "string"}, "description": "List of QR code identifiers."}},
                     "required": ["qr_codes"],
                 },
             },
@@ -423,15 +277,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "register_identity",
-                "description": "Register a new DAO identity by generating an RSA-2048 keypair, signing an [EMAIL REGISTERED EVENT], submitting to Edgar, and saving the keys to .env. Use this to register yourself or a new contributor in Contributors Digital Signatures.",
+                "description": "Register a new DAO identity by generating an RSA-2048 keypair and submitting to Edgar.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "email": {
-                            "type": "string",
-                            "description": "The email address to register as the DAO contributor identity (e.g. admin@truesight.me).",
-                        },
-                    },
+                    "properties": {"email": {"type": "string", "description": "The email address to register."}},
                     "required": ["email"],
                 },
             },
@@ -440,15 +289,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "list_matching_qr_codes",
-                "description": "Search previously looked-up QR codes by prefix. Use this when you have a partial QR code (e.g. from a blurry photo) and need to find matching full codes. Only returns codes that have been previously cached via lookup_qr_code.",
+                "description": "Search previously looked-up QR codes by prefix.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "prefix": {
-                            "type": "string",
-                            "description": "QR code prefix to match against cached lookups, e.g. '2024OSCAR_20260330_' or 'LA_CC_'.",
-                        },
-                    },
+                    "properties": {"prefix": {"type": "string", "description": "QR code prefix to match."}},
                     "required": ["prefix"],
                 },
             },
@@ -456,66 +300,16 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "list_directory",
-                "description": "List files in a local directory on the server. Returns file names, sizes, and types. Use this to discover files before scanning QR codes or reading them.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "dir_path": {
-                            "type": "string",
-                            "description": "Full path to the directory to list, e.g. '/Users/garyjob/Downloads/'.",
-                        },
-                    },
-                    "required": ["dir_path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_local_file",
-                "description": "Read a local text file from the server filesystem. Use this to read .env files, google_credentials.json, or any gitignored local file. Returns the file contents as text.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Full path to the file on disk, e.g. '/home/ubuntu/truesight_autopilot/.env' or '/Users/garyjob/projects/truesight_autopilot/.env'.",
-                        },
-                    },
-                    "required": ["file_path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "upload_file_to_github",
-                "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API. Useful for archiving invoice PDFs, receipts, or other evidence files. Returns the blob URL for use in offchain transaction descriptions.",
+                "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "Repo name under TrueSightDAO, e.g. '.github' for the assets repo.",
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Path inside the repo, e.g. 'assets/20260506_amazon_invoice.pdf'.",
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Base64-encoded file content.",
-                        },
-                        "message": {
-                            "type": "string",
-                            "description": "Commit message for the upload.",
-                        },
-                        "branch": {
-                            "type": "string",
-                            "description": "Branch name. Default: main",
-                            "default": "main",
-                        },
+                        "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
+                        "path": {"type": "string", "description": "Path inside the repo."},
+                        "content": {"type": "string", "description": "Base64-encoded file content."},
+                        "message": {"type": "string", "description": "Commit message."},
+                        "branch": {"type": "string", "description": "Branch name. Default: main", "default": "main"},
                     },
                     "required": ["repo", "path", "content", "message"],
                 },
@@ -524,25 +318,38 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "list_directory",
+                "description": "List files in a local directory on the server.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"dir_path": {"type": "string", "description": "Full path to the directory."}},
+                    "required": ["dir_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_local_file",
+                "description": "Read a local text file from the server filesystem.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"file_path": {"type": "string", "description": "Full path to the file."}},
+                    "required": ["file_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "merge_pr",
-                "description": "Merge a pull request. Only use this when a governor explicitly tells you to merge (e.g. 'merge it', 'merge the PR', 'go ahead and merge'). Never auto-merge on your own. The PR must be from an allowed repo.",
+                "description": "Merge a pull request. Only use when a governor explicitly tells you to merge.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "Repo name under TrueSightDAO, e.g. 'truesight_autopilot'.",
-                        },
-                        "pr_number": {
-                            "type": "integer",
-                            "description": "The pull request number to merge.",
-                        },
-                        "merge_method": {
-                            "type": "string",
-                            "description": "Merge method: 'squash' (default), 'merge', or 'rebase'.",
-                            "enum": ["squash", "merge", "rebase"],
-                            "default": "squash",
-                        },
+                        "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
+                        "pr_number": {"type": "integer", "description": "The pull request number to merge."},
+                        "merge_method": {"type": "string", "description": "squash (default), merge, or rebase.", "enum": ["squash", "merge", "rebase"], "default": "squash"},
                     },
                     "required": ["repo", "pr_number"],
                 },
@@ -552,36 +359,21 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "deploy_autopilot",
-                "description": "Deploy the latest version of truesight_autopilot to EC2 via SSH. Pulls latest code, installs deps, restarts systemd, and checks health. Only use this when a governor explicitly tells you to redeploy.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                },
+                "description": "Deploy the latest version of truesight_autopilot to EC2 via SSH.",
+                "parameters": {"type": "object", "properties": {}},
             },
         },
         {
             "type": "function",
             "function": {
                 "name": "list_prs",
-                "description": "List recent pull requests on a TrueSightDAO repo. Returns PR numbers, titles, states, and URLs. Use this to find PRs for DAO contribution evidence.",
+                "description": "List recent pull requests on a TrueSightDAO repo.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "Repo name under TrueSightDAO, e.g. 'dapp' or 'truesight_autopilot'.",
-                        },
-                        "state": {
-                            "type": "string",
-                            "description": "PR state: 'open', 'closed', or 'all' (default).",
-                            "enum": ["open", "closed", "all"],
-                            "default": "all",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Max PRs to return (default 20).",
-                            "default": 20,
-                        },
+                        "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
+                        "state": {"type": "string", "description": "open, closed, or all.", "enum": ["open", "closed", "all"], "default": "all"},
+                        "limit": {"type": "integer", "description": "Max PRs to return.", "default": 20},
                     },
                     "required": ["repo"],
                 },
@@ -591,31 +383,16 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "create_dao_submission",
-                "description": "Submit a [CONTRIBUTION EVENT] to Edgar for DAO contribution tracking. Use for time-based (Time) or USD contributions. Requires at least one TrueSightDAO PR URL as evidence.",
+                "description": "Submit a [CONTRIBUTION EVENT] to Edgar for DAO contribution tracking.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "description": "Short one-line title for the contribution."},
-                        "body": {"type": "string", "description": "Multi-line description: what changed, why, evidence."},
-                        "pr_urls": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "At least one https://github.com/TrueSightDAO/.../pull/N URL.",
-                        },
-                        "contributors": {
-                            "type": "string",
-                            "description": "Display name. Defaults to governor name.",
-                        },
-                        "amount": {
-                            "type": "string",
-                            "description": "For Time: total minutes. For USD: dollar amount.",
-                            "default": "0",
-                        },
-                        "tdg_issued": {
-                            "type": "string",
-                            "description": "TDG to issue. For Time: hours * 100. For USD: same as amount.",
-                            "default": "0",
-                        },
+                        "title": {"type": "string", "description": "Short one-line title."},
+                        "body": {"type": "string", "description": "Multi-line description."},
+                        "pr_urls": {"type": "array", "items": {"type": "string"}, "description": "PR URLs as evidence."},
+                        "contributors": {"type": "string", "description": "Display name."},
+                        "amount": {"type": "string", "description": "Minutes or dollar amount.", "default": "0"},
+                        "tdg_issued": {"type": "string", "description": "TDG to issue.", "default": "0"},
                     },
                     "required": ["title", "body", "pr_urls"],
                 },
@@ -625,17 +402,11 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "read_oracle_logs",
-                "description": "Read oracle draw logs from TrueSightDAO/oracle_logs. Use 'latest' for the most recent draw, or pass YYYY-MM-DD. Omit date to list available draws. Use to surface issues from morning oracle draws for triage.",
+                "description": "Read oracle draw logs from TrueSightDAO/oracle_logs.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "date": {
-                            "type": "string",
-                            "description": "YYYY-MM-DD date, 'latest', or omit to list draws.",
-                            "default": "latest"
-                        }
-                    }
-                }
-            }
+                    "properties": {"date": {"type": "string", "description": "YYYY-MM-DD date, 'latest', or omit to list draws.", "default": "latest"}},
+                },
+            },
         },
     ]
