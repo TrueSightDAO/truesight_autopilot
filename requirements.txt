@@ -16,4 +16,5 @@ python-jose[cryptography]>=3.3.0
 pyzbar>=0.1.9
 Pillow>=10.0.0
 paramiko>=3.4.0
+google-generativeai>=0.8.0
 truesight-dao-client @ git+https://github.com/TrueSightDAO/dao_client.git
