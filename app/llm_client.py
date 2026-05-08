@@ -473,6 +473,23 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "read_local_file",
+                "description": "Read a local text file from the server filesystem. Use this to read .env files, google_credentials.json, or any gitignored local file. Returns the file contents as text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Full path to the file on disk, e.g. '/home/ubuntu/truesight_autopilot/.env' or '/Users/garyjob/projects/truesight_autopilot/.env'.",
+                        },
+                    },
+                    "required": ["file_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "upload_file_to_github",
                 "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API. Useful for archiving invoice PDFs, receipts, or other evidence files. Returns the blob URL for use in offchain transaction descriptions.",
                 "parameters": {
