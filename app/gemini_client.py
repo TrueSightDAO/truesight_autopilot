@@ -115,20 +115,6 @@ def gemini_analyze_image(
     # Configure API key
     genai.configure(api_key=api_key)
 
-    # Try service account credentials as fallback
-    creds_path = _load_google_credentials()
-    if creds_path:
-        try:
-            import google.auth
-            from google.oauth2 import service_account
-            credentials = service_account.Credentials.from_service_account_file(
-                creds_path,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
-            genai.configure(credentials=credentials)
-        except Exception as e:
-            logger.debug("Failed to load Google credentials from %s: %s", creds_path, e)
-
     # Read and encode image
     try:
         img_bytes = p.read_bytes()

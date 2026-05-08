@@ -163,8 +163,8 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
 
     # Grok vision fallback: if no codes found and file is an image, try Grok
     if not codes:
-        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
-        if p.suffix.lower() in image_exts:
+        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
+        if Path(decode_path).suffix.lower() in image_exts:
             try:
                 from app.grok_client import grok_analyze_images, GROK_MODEL
 
@@ -200,8 +200,8 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
 
     # Gemini vision fallback: if no codes found after Grok, try Gemini
     if not codes:
-        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
-        if p.suffix.lower() in image_exts:
+        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
+        if Path(decode_path).suffix.lower() in image_exts:
             try:
                 from app.gemini_client import gemini_analyze_image
 
