@@ -2,7 +2,7 @@
 
 - Safety hooks block dangerous operations (rm -rf, sudo, --force, etc.)
 - Branch-based isolation (no local git clone needed)
-- Max 10 iterations
+- Max 15 iterations (env: FIX_MAX_ITERATIONS)
 - py_compile validation before PR
 - Supports all TrueSightDAO repos — see ALLOWED_REPOS in config.py
 - Cost: ~$0.002 per fix loop (DeepSeek-V3)
@@ -56,7 +56,7 @@ class FixAgent:
     def __init__(self):
         self.github = GitHubClient()
         self.llm = LLMClient()
-        self.max_iterations = 10
+        self.max_iterations = int(os.getenv("FIX_MAX_ITERATIONS", "15"))
 
     def run_simple(self, repo: str, issue_description: str) -> str | None:
         """Run a fix loop from a plain-text issue description.
