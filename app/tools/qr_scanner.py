@@ -134,6 +134,18 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
     if not p.exists():
         return {"status": "error", "message": f"File not found: {file_path}", "file": file_path}
 
+    # Auto-convert HEIC/HEIF to JPEG since pyzbar/PIL cannot read them directly
+    decode_path = file_path
+    if p.suffix.lower() in (".heic", ".heif"):
+        jpg_path = _convert_heic_to_jpg(file_path)
+        if jpg_path is None:
+            return {
+                "status": "error",
+                "message": f"Failed to convert HEIC/HEIF file to JPEG: {file_path}",
+                "file": file_path,
+            }
+        decode_path = jpg_path
+
     codes: list[dict[str, str]] = []
 
     # Try pyzbar first (faster, more reliable)
