@@ -74,3 +74,47 @@ def list_directory(dir_path: str) -> dict[str, Any]:
         return {"status": "error", "message": f"Permission denied: {dir_path}"}
     except OSError as e:
         return {"status": "error", "message": f"Error reading directory: {e}"}
+
+
+def read_local_file(file_path: str) -> dict[str, Any]:
+    """Read a local text file and return its contents.
+
+    Args:
+        file_path: Full path to the file on disk.
+
+    Returns:
+        {"status": "success", "content": "...", "path": "...", "size": N}
+        or {"status": "error", "message": "..."}
+    """
+    # Sanitize: reject paths with ".." to prevent directory traversal
+    if ".." in file_path.split(os.sep):
+        return {"status": "error", "message": "Path traversal detected: '..' is not allowed."}
+
+    p = Path(file_path)
+    if not p.exists():
+        return {"status": "error", "message": f"File not found: {file_path}"}
+    if not p.is_file():
+        return {"status": "error", "message": f"Path is not a file: {file_path}"}
+
+    # Reject binary files (check first 8KB for null bytes)
+    try:
+        chunk = p.read_bytes()[:8192]
+        if b'\x00' in chunk:
+            return {"status": "error", "message": "Binary file detected — use list_directory instead"}
+    except Exception as e:
+        return {"status": "error", "message": f"Error reading file: {e}"}
+
+    try:
+        content = p.read_text(encoding="utf-8")
+        return {
+            "status": "success",
+            "content": content,
+            "path": str(p.resolve()),
+            "size": len(content),
+        }
+    except UnicodeDecodeError:
+        return {"status": "error", "message": "File is not valid UTF-8 text"}
+    except PermissionError:
+        return {"status": "error", "message": f"Permission denied: {file_path}"}
+    except OSError as e:
+        return {"status": "error", "message": f"Error reading file: {e}"}
