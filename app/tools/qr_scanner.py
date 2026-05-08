@@ -171,7 +171,7 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
                 grok_result = grok_analyze_images(
                     [decode_path],
                     user_context="",
-                    model="grok-4-1",
+                    model=GROK_MODEL,
                 )
                 if grok_result.get("status") == "success":
                     # Collect QR code guesses from Grok
