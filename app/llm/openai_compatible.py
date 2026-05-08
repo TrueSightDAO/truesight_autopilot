@@ -1,12 +1,13 @@
 """OpenAI-compatible provider base class.
 
-Handles HTTP transport, error handling, and response normalisation.
+Handles HTTP transport, error handling, response normalisation, and usage logging.
 Subclasses override _normalize_tool_calls and _strip_provider_artifacts
 for provider-specific quirks (e.g. DeepSeek's XML tool calls).
 """
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -75,8 +76,13 @@ class OpenAICompatibleProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        caller: str = "chat",
+        session_id: str | None = None,
+        turn: int | None = None,
+        round_num: int = 1,
     ) -> LLMResponse:
         """Send a chat completion and return a normalised LLMResponse."""
+        t0 = time.time()
         payload: dict[str, Any] = {
             "model": self.default_model,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
@@ -137,7 +143,10 @@ class OpenAICompatibleProvider(LLMProvider):
             cached_tokens=usage_raw.get("prompt_cache_hit_tokens", 0),
         )
 
-        return LLMResponse(
+        latency_ms = int((time.time() - t0) * 1000)
+        had_tools = bool(tool_calls)
+
+        response = LLMResponse(
             text=content,
             tool_calls=tool_calls,
             usage=usage,
@@ -147,3 +156,21 @@ class OpenAICompatibleProvider(LLMProvider):
             model=self.default_model,
             provider=self.name,
         )
+
+        # Usage logging (no-op unless LLM_USAGE_LOG_ENABLED=1)
+        from .usage_log import log_usage as _log
+
+        _log(
+            provider=self.name,
+            model=self.default_model,
+            usage=usage,
+            caller=caller,
+            session_id=session_id,
+            turn=turn,
+            round_num=round_num,
+            latency_ms=latency_ms,
+            had_tool_calls=had_tools,
+            finish_reason=finish_reason,
+        )
+
+        return response
