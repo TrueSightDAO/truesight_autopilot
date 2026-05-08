@@ -648,6 +648,10 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         gh = GitHubClient()
         prs = gh.list_prs(repo, state=state, limit=limit)
         return json.dumps(prs, indent=2)
+    if func_name == "read_oracle_logs":
+        from .tools.read_oracle_logs import read_oracle_logs as _read_logs
+        date = func_args.get("date", "latest")
+        return _read_logs(date)
     if func_name == "create_dao_submission":
         title = func_args.get("title", "")
         body = func_args.get("body", "")

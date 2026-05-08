@@ -230,7 +230,24 @@ class LLMClient:
                     "What failed and how do we fix it?"
                 ),
             }
-        ]
+        {
+            "type": "function",
+            "function": {
+                "name": "read_oracle_logs",
+                "description": "Read oracle draw logs from TrueSightDAO/oracle_logs. Use 'latest' to get the most recent draw, or pass a YYYY-MM-DD date. Pass no date to list available draws. Use this to check for issues surfaced by the morning oracle draw.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date": {
+                            "type": "string",
+                            "description": "Date in YYYY-MM-DD format, 'latest' for most recent, or omit to list draws.",
+                            "default": "latest",
+                        },
+                    },
+                },
+            },
+        },
+    ]
         try:
             raw = self.complete(system, messages, temperature=0.2, max_tokens=2048)
             if "```json" in raw:
