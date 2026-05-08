@@ -50,12 +50,13 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
     deepseek_temperature: float = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3"))
 
+    # BigModel (ZhipuAI / GLM)
+    bigmodel_api_key: str = Field(default="", validation_alias="BIGMODEL_CN_API")
+    bigmodel_base_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", validation_alias="BIGMODEL_BASE_URL")
+    bigmodel_model: str = Field(default="glm-4.5", validation_alias="BIGMODEL_MODEL")
+
     # Grok (xAI) — vision analysis for uploaded images
     grok_api_key: str = os.getenv("GROK_API_KEY", "")
-
-    # BigModel.cn / Zhipu AI — provided by Elizabeth Wong ($1,000 credit)
-    bigmodel_api_key: str = os.getenv("BIGMODEL_CN_API", "")
-    bigmodel_model: str = os.getenv("BIGMODEL_MODEL", "glm-4.6")
 
     # Edgar
     email: str = os.getenv("EMAIL", "")
