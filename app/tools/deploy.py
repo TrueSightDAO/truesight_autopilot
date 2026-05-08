@@ -18,6 +18,8 @@ import socket
 import subprocess
 import time
 
+import paramiko
+
 from ..config import settings
 
 logger = logging.getLogger("autopilot.deploy")
@@ -27,8 +29,21 @@ class DeployError(Exception):
     """Raised when a deploy step fails."""
 
 
+def _resolve_ssh_config(host: str) -> dict:
+    """Resolve an SSH config alias (e.g. 'truesight-autopilot') to concrete connection params.
+    Falls back to {hostname: host} when no ~/.ssh/config entry matches.
+    """
+    config_path = os.path.expanduser("~/.ssh/config")
+    if not os.path.exists(config_path):
+        return {"hostname": host}
+    cfg = paramiko.SSHConfig()
+    with open(config_path) as f:
+        cfg.parse(f)
+    return cfg.lookup(host)
+
+
 def _ssh_client() -> paramiko.SSHClient:
-    """Create and return an authenticated SSH client."""
+    """Create and return an authenticated SSH client. Honors ~/.ssh/config aliases."""
     host = settings.ec2_host
     key_path = settings.ec2_key_path
     if not host:
@@ -36,17 +51,27 @@ def _ssh_client() -> paramiko.SSHClient:
     if not key_path:
         raise DeployError("EC2_KEY_PATH is not configured.")
 
+    resolved = _resolve_ssh_config(host)
+    hostname = resolved.get("hostname", host)
+    user = resolved.get("user", "ubuntu")
+    port = int(resolved.get("port", 22))
+    identity_files = resolved.get("identityfile") or [key_path]
+    if isinstance(identity_files, str):
+        identity_files = [identity_files]
+    resolved_key = os.path.expanduser(identity_files[0]) if identity_files else key_path
+
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         client.connect(
-            hostname=host,
-            username="ubuntu",
-            key_filename=key_path,
+            hostname=hostname,
+            username=user,
+            key_filename=resolved_key,
+            port=port,
             timeout=15,
         )
     except Exception as e:
-        raise DeployError(f"SSH connection failed to {host}: {e}") from e
+        raise DeployError(f"SSH connection failed to {host} (resolved={hostname}:{port}): {e}") from e
     return client
 
 
