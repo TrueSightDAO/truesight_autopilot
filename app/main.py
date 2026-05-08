@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
 from contextlib import asynccontextmanager
@@ -716,7 +717,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
 
     try:
-        MAX_TOOL_ROUNDS = 5
+        MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "15"))
         assistant_text = ""
         round_num = 0
 
@@ -836,7 +837,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
         # Process this queued message (reuse the same loop logic)
         try:
-            MAX_TOOL_ROUNDS = 5
+            MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "15"))
             assistant_text = ""
             round_num = 0
 
