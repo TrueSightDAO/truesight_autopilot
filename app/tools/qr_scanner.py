@@ -150,16 +150,16 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
 
     # Try pyzbar first (faster, more reliable)
     try:
-        codes = _decode_pyzbar(file_path)
+        codes = _decode_pyzbar(decode_path)
     except Exception as e:
-        logger.debug("pyzbar decode failed for %s: %s", file_path, e)
+        logger.debug("pyzbar decode failed for %s: %s", decode_path, e)
 
     # Fall back to zbarimg CLI
     if not codes:
         try:
-            codes = _decode_zbarimg(file_path)
+            codes = _decode_zbarimg(decode_path)
         except Exception as e:
-            logger.debug("zbarimg decode failed for %s: %s", file_path, e)
+            logger.debug("zbarimg decode failed for %s: %s", decode_path, e)
 
     if not codes:
         return {
