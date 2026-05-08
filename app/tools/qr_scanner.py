@@ -161,6 +161,43 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
         except Exception as e:
             logger.debug("zbarimg decode failed for %s: %s", decode_path, e)
 
+    # Grok vision fallback: if no codes found and file is an image, try Grok
+    if not codes:
+        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+        if p.suffix.lower() in image_exts:
+            try:
+                from app.grok_client import grok_analyze_images, GROK_MODEL
+
+                grok_result = grok_analyze_images(
+                    [decode_path],
+                    user_context=(
+                        "Read any visible QR codes, barcodes, or alphanumeric product codes "
+                        "in this image. Look for Agroverse QR code patterns like "
+                        "2024OSCAR_20260330_33 or LA_CC_20260414_1. "
+                        "Return them with confidence levels."
+                    ),
+                    model=GROK_MODEL,
+                )
+                if grok_result.get("status") == "success":
+                    # Collect QR code guesses from Grok
+                    grok_codes: list[dict[str, str]] = []
+                    seen_grok: set[str] = set()
+                    for guess in grok_result.get("qr_codes_guessed", []):
+                        data = guess.get("data", "").strip()
+                        if data and data not in seen_grok:
+                            seen_grok.add(data)
+                            grok_codes.append({"type": "grok_vision", "data": data})
+                    # Also check barcodes_guessed
+                    for guess in grok_result.get("barcodes_guessed", []):
+                        data = guess.get("data", "").strip()
+                        if data and data not in seen_grok:
+                            seen_grok.add(data)
+                            grok_codes.append({"type": "grok_vision", "data": data})
+                    if grok_codes:
+                        codes = grok_codes
+            except Exception as e:
+                logger.debug("Grok vision fallback failed for %s: %s", decode_path, e)
+
     if not codes:
         return {
             "status": "no_code_found",
