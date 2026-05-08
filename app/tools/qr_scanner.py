@@ -170,13 +170,8 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
 
                 grok_result = grok_analyze_images(
                     [decode_path],
-                    user_context=(
-                        "Read any visible QR codes, barcodes, or alphanumeric product codes "
-                        "in this image. Look for Agroverse QR code patterns like "
-                        "2024OSCAR_20260330_33 or LA_CC_20260414_1. "
-                        "Return them with confidence levels."
-                    ),
-                    model=GROK_MODEL,
+                    user_context="",
+                    model="grok-4-1",
                 )
                 if grok_result.get("status") == "success":
                     # Collect QR code guesses from Grok
