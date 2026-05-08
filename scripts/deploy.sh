@@ -50,6 +50,28 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
 
 # Sync .env separately (gitignored locally, needed on EC2)
 if [ -f ".env" ]; then
+    echo "=== Checking .env key parity (local vs production) ==="
+    LOCAL_KEYS=$(grep -v '^#' .env | grep -v '^$' | cut -d= -f1 | sort)
+    REMOTE_KEYS=$(ssh -i "$EC2_KEY" "$EC2_HOST" \
+        "grep -v '^#' $REMOTE_DIR/.env 2>/dev/null | grep -v '^$' | cut -d= -f1 | sort" 2>/dev/null || echo "")
+    if [ -n "$REMOTE_KEYS" ]; then
+        MISSING_FROM_LOCAL=$(comm -13 <(echo "$LOCAL_KEYS") <(echo "$REMOTE_KEYS"))
+        MISSING_FROM_PROD=$(comm -23 <(echo "$LOCAL_KEYS") <(echo "$REMOTE_KEYS"))
+        if [ -n "$MISSING_FROM_LOCAL" ]; then
+            echo "WARNING: Keys in production .env but NOT in local .env:"
+            echo "$MISSING_FROM_LOCAL" | sed 's/^/  - /'
+            echo "These will be LOST when .env is synced. Add them to local .env first."
+            if [ "${SKIP_KEY_CHECK:-0}" != "1" ]; then
+                echo "Aborting. Set SKIP_KEY_CHECK=1 to bypass."
+                exit 1
+            fi
+        fi
+        if [ -n "$MISSING_FROM_PROD" ]; then
+            echo "Keys in local .env but NOT in production .env:"
+            echo "$MISSING_FROM_PROD" | sed 's/^/  + /'
+            echo "These will be ADDED to production."
+        fi
+    fi
     echo "=== Syncing .env ==="
     scp -i "$EC2_KEY" .env "$EC2_HOST:$REMOTE_DIR/.env"
 fi
