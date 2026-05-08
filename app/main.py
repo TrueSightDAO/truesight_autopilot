@@ -38,6 +38,7 @@ from .tools.github_tools import read_repo_file
 from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
 from .tools.dao_identity import register_identity
 from .tools.inventory_lookup import list_matching_qr_codes
+from .tools.fs_tools import list_directory
 from .grok_client import grok_analyze_images, GROK_MODEL
 from .fix_agent import FixAgent
 from .github_client import GitHubClient
@@ -687,6 +688,10 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     if func_name == "deploy_autopilot":
         from .tools.deploy import deploy_autopilot as _deploy
         return _deploy()
+    if func_name == "list_directory":
+        dir_path = func_args.get("dir_path", "")
+        result = list_directory(dir_path)
+        return json.dumps(result, indent=2)
     return f"Unknown tool: {func_name}"
 
 

@@ -456,6 +456,23 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "list_directory",
+                "description": "List files in a local directory on the server. Returns file names, sizes, and types. Use this to discover files before scanning QR codes or reading them.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "dir_path": {
+                            "type": "string",
+                            "description": "Full path to the directory to list, e.g. '/Users/garyjob/Downloads/'.",
+                        },
+                    },
+                    "required": ["dir_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "upload_file_to_github",
                 "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API. Useful for archiving invoice PDFs, receipts, or other evidence files. Returns the blob URL for use in offchain transaction descriptions.",
                 "parameters": {
