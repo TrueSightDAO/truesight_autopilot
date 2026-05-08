@@ -688,6 +688,10 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     if func_name == "deploy_autopilot":
         from .tools.deploy import deploy_autopilot as _deploy
         return _deploy()
+    if func_name == "list_directory":
+        dir_path = func_args.get("dir_path", "")
+        result = list_directory(dir_path)
+        return json.dumps(result, indent=2)
     return f"Unknown tool: {func_name}"
 
 
