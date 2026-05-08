@@ -168,11 +168,12 @@ class GitHubClient:
         body: str,
         head: str,
         base: str = "main",
+        draft: bool = True,
     ) -> str | None:
         """Open a pull request. Returns PR URL or None."""
         try:
             repo = self.g.get_repo(self._full_name(repo_name))
-            pr = repo.create_pull(title=title, body=body, head=head, base=base)
+            pr = repo.create_pull(title=title, body=body, head=head, base=base, draft=draft)
             logger.info("Opened PR #%d: %s", pr.number, pr.html_url)
             return pr.html_url
         except Exception as e:
