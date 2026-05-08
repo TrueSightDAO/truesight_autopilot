@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Grok (xAI) — vision analysis for uploaded images
     grok_api_key: str = os.getenv("GROK_API_KEY", "")
 
+    # BigModel.cn / Zhipu AI — provided by Elizabeth Wong ($1,000 credit)
+    bigmodel_api_key: str = os.getenv("BIGMODEL_CN_API", "")
+    bigmodel_model: str = os.getenv("BIGMODEL_MODEL", "glm-4.6")
+
     # Edgar
     email: str = os.getenv("EMAIL", "")
     public_key: str = os.getenv("PUBLIC_KEY", "")
