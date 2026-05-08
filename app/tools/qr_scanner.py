@@ -193,40 +193,6 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
             except Exception as e:
                 logger.debug("Grok vision fallback failed for %s: %s", decode_path, e)
 
-    # Gemini vision fallback: if no codes found after Grok, try Gemini
-    if not codes:
-        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
-        if Path(decode_path).suffix.lower() in image_exts:
-            try:
-                from app.gemini_client import gemini_analyze_image
-
-                gemini_result = gemini_analyze_image(
-                    decode_path,
-                    prompt=(
-                        "Read any visible QR codes, barcodes, or alphanumeric product codes "
-                        "in this image. Look for Agroverse QR code patterns like "
-                        "2024OSCAR_20260330_33 or LA_CC_20260414_1. "
-                        "Return them with confidence levels."
-                    ),
-                )
-                if gemini_result.get("status") == "success":
-                    gemini_codes: list[dict[str, str]] = []
-                    seen_gemini: set[str] = set()
-                    for guess in gemini_result.get("qr_codes_guessed", []):
-                        data = guess.get("data", "").strip()
-                        if data and data not in seen_gemini:
-                            seen_gemini.add(data)
-                            gemini_codes.append({"type": "gemini_vision", "data": data})
-                    for guess in gemini_result.get("barcodes_guessed", []):
-                        data = guess.get("data", "").strip()
-                        if data and data not in seen_gemini:
-                            seen_gemini.add(data)
-                            gemini_codes.append({"type": "gemini_vision", "data": data})
-                    if gemini_codes:
-                        codes = gemini_codes
-            except Exception as e:
-                logger.debug("Gemini vision fallback failed for %s: %s", decode_path, e)
-
     if not codes:
         return {
             "status": "no_code_found",
