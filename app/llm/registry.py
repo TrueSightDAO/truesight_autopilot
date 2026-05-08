@@ -30,6 +30,7 @@ def get_provider(name: str | None = None) -> LLMProvider:
     """Get a cached provider instance by name.
 
     Defaults to the LLM_PROVIDER setting if no name given.
+    Falls back to DeepSeek if the primary provider fails to initialize.
     """
     _ensure_providers()
     from ..config import settings as _settings
@@ -43,9 +44,17 @@ def get_provider(name: str | None = None) -> LLMProvider:
         )
 
     if key not in _INSTANCES:
-        cls = _PROVIDERS[key]
-        _INSTANCES[key] = cls()
-        logger.info("Initialized LLM provider: %s (%s)", _INSTANCES[key].name, _INSTANCES[key].default_model)
+        try:
+            cls = _PROVIDERS[key]
+            _INSTANCES[key] = cls()
+            logger.info("Initialized LLM provider: %s (%s)", _INSTANCES[key].name, _INSTANCES[key].default_model)
+        except Exception as e:
+            if key == "deepseek":
+                raise  # no fallback from the fallback
+            logger.warning(
+                "Failed to initialize %s provider: %s. Falling back to DeepSeek.", key, e
+            )
+            return get_provider("deepseek")
 
     return _INSTANCES[key]
 
