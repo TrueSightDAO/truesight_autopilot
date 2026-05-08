@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Grok (xAI) — vision analysis for uploaded images
     grok_api_key: str = os.getenv("GROK_API_KEY", "")
 
+    # Gemini (Google) — vision analysis fallback for uploaded images
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
     # Edgar
     email: str = os.getenv("EMAIL", "")
     public_key: str = os.getenv("PUBLIC_KEY", "")
