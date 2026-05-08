@@ -38,7 +38,7 @@ from .tools.github_tools import read_repo_file
 from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
 from .tools.dao_identity import register_identity
 from .tools.inventory_lookup import list_matching_qr_codes
-from .tools.fs_tools import list_directory
+from .tools.fs_tools import list_directory, read_local_file
 from .grok_client import grok_analyze_images, GROK_MODEL
 from .fix_agent import FixAgent
 from .github_client import GitHubClient
