@@ -170,8 +170,9 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
 
                 grok_result = grok_analyze_images(
                     [decode_path],
-                    user_context="",
+                    user_context="Read ONLY the batch code printed at the bottom of the white sticker on this cacao bag. The code format is YYYY_FARM_YYYYMMDD_NN like 2024SA_20251227_39 or 2024OSCAR_20260121_23. Report the exact code character-by-character, preserving underscores and digits. If the code is partially obscured, report what you can see and mark uncertain characters with a question mark. Do NOT describe the image, do NOT guess the product type — ONLY report the batch code.",
                     model=GROK_MODEL,
+                    temperature=0.0,
                 )
                 if grok_result.get("status") == "success":
                     # Collect QR code guesses from Grok
