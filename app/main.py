@@ -798,6 +798,149 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     return f"Unknown tool: {func_name}"
 
 
+async def _run_tool_round_loop(
+    *,
+    client: LLMClient,
+    system_prompt: str,
+    tools: list,
+    history: list[dict],
+    session_id: str,
+    governor_name: str | None,
+    req_id: int,
+    state: dict,
+    queue_msg_id: str | None = None,
+):
+    """One conversational turn: runs the LLM ↔ tool-call loop up to
+    MAX_TOOL_ROUNDS, yielding SSE event strings as it goes.
+
+    Handles: cancel checks, mid-round queue interjection (when not in queue
+    mode itself), heartbeat-wrapped LLM and tool calls, DSML sanitization,
+    `wanted_more_rounds` signal.
+
+    Writes `assistant_text`, `wanted_more_rounds`, and `cancelled` into
+    `state` so the caller can pick them up after iterating. Yielded values
+    are SSE event strings (already framed `data: …\\n\\n`).
+
+    `queue_msg_id` flips the labels and includes the ID in SSE events
+    when this turn is processing a queued (interjected-after-done) message.
+    """
+    MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "15"))
+    assistant_text = ""
+    round_num = 0
+    state["cancelled"] = False
+    state["wanted_more_rounds"] = False
+
+    log_prefix = "QUEUE " if queue_msg_id else ""
+    raw_label_prefix = "queue-" if queue_msg_id else ""
+
+    def _emit(payload_extra: dict | None = None) -> dict:
+        d = dict(payload_extra or {})
+        if queue_msg_id:
+            d["queue_msg_id"] = queue_msg_id
+        return d
+
+    while round_num < MAX_TOOL_ROUNDS:
+        round_num += 1
+
+        if _cancel_flags.get(session_id):
+            logger.info("[%d] %sCancelled by user before round %d", req_id, log_prefix, round_num)
+            yield _sse_event("cancelled", _emit({"round": round_num, "reason": "user_requested"}))
+            state["cancelled"] = True
+            state["assistant_text"] = assistant_text
+            return
+
+        # Mid-round interjection — only meaningful for the initial turn.
+        # The queue-processing turn already started from a queued message, so
+        # additional queued messages should accumulate behind it (handled by
+        # the caller's outer queue drain).
+        if not queue_msg_id:
+            pending = _message_queues.get(session_id, [])
+            while pending:
+                next_msg = pending.pop(0)
+                logger.info("[%d] Mid-round interjection: %s", req_id, next_msg["id"])
+                yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "interjected"})
+                history.append({"role": "user", "content": next_msg["content"]})
+
+        chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
+        try:
+            async for hb in _heartbeat_until_done(chat_task, phase="llm", session_id=session_id, round=round_num, **({"queue_msg_id": queue_msg_id} if queue_msg_id else {})):
+                yield hb
+            completion = await chat_task
+        except asyncio.CancelledError:
+            logger.info("[%d] %sLLM call cancelled by user", req_id, log_prefix)
+            yield _sse_event("cancelled", _emit({"phase": "llm", "round": round_num, "reason": "user_requested"}))
+            state["cancelled"] = True
+            state["assistant_text"] = assistant_text
+            return
+        _log_raw_llm(session_id, f"llm-{raw_label_prefix}round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
+        assistant_message = completion["choices"][0].get("message", {})
+        tool_calls = client.extract_tool_calls(completion)
+        logger.info("[%d] %sLLM RESP round=%d tools=%d tokens=%s", req_id, log_prefix, round_num,
+                     len(tool_calls),
+                     completion.get("usage", {}).get("total_tokens", "?"))
+
+        tool_calls = assistant_message.get("tool_calls", [])
+
+        if tool_calls:
+            thought = assistant_message.get("content", "") or "Thinking..."
+            yield _sse_event("token", thought)
+
+            history.append({
+                "role": "assistant",
+                "content": assistant_message.get("content", ""),
+                "reasoning_content": assistant_message.get("reasoning_content", ""),
+                "tool_calls": [
+                    {"id": tc["id"], "type": tc["type"],
+                     "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                    for tc in tool_calls
+                ],
+            })
+
+            for tc in tool_calls:
+                func_name = tc["function"]["name"]
+                func_args = json.loads(tc["function"]["arguments"])
+                tool_call_id = tc["id"]
+                logger.info("[%d] %sTOOL CALL: %s args=%.200s", req_id, log_prefix, func_name, json.dumps(func_args))
+
+                yield _sse_event("tool", {"tool": func_name, "status": "calling"})
+                tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
+                try:
+                    async for hb in _heartbeat_until_done(tool_task, phase="tool", session_id=session_id, tool=func_name, **({"queue_msg_id": queue_msg_id} if queue_msg_id else {})):
+                        yield hb
+                    result_text = await tool_task
+                except asyncio.CancelledError:
+                    logger.info("[%d] %sTool %s cancelled by user", req_id, log_prefix, func_name)
+                    yield _sse_event("cancelled", _emit({"phase": "tool", "tool": func_name, "reason": "user_requested"}))
+                    state["cancelled"] = True
+                    state["assistant_text"] = assistant_text
+                    return
+                yield _sse_event("tool", {"tool": func_name, "status": "done"})
+                logger.info("[%d] %sTOOL RESULT: %s result=%.300s", req_id, log_prefix, func_name, result_text[:300])
+
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": result_text,
+                })
+        else:
+            assistant_text = client.extract_text(completion)
+            break  # no more tool calls — exit loop
+
+    if not assistant_text:
+        logger.info("[%d] %sEmpty after %d tool rounds — forcing text-only completion", req_id, log_prefix, round_num)
+        state["wanted_more_rounds"] = True
+        completion = client.chat(system_prompt, history, tools=None)
+        assistant_text = client.extract_text(completion)
+
+    assistant_text, dsml_leaked = _strip_dsml(assistant_text)
+    if dsml_leaked:
+        state["wanted_more_rounds"] = True
+        logger.info("[%d] %sStripped DSML leakage from final response", req_id, log_prefix)
+    if state["wanted_more_rounds"]:
+        yield _sse_event("wanted_more_rounds", _emit({"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS}))
+    state["assistant_text"] = assistant_text
+
+
 async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None, governor_name: str | None = None, do_not_publish: bool = False):
     system_prompt = get_system_prompt()
     client = LLMClient()
@@ -806,117 +949,23 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     logger.info("[%d] CHAT REQ: session=%s msg=%.150s attach=%s", req_id, session_id[:16], user_message, attachment_info is not None)
 
     # Trim history to avoid context overflow (max ~400K chars = ~100K tokens for messages)
-    # deepseek-chat has 128K context; leave ~28K for system prompt, tools, and completion
     MAX_HISTORY_CHARS = 400_000
     total = sum(len(msg.get("content", "")) for msg in history)
     while total > MAX_HISTORY_CHARS and len(history) > 4:
         removed = history.pop(0)
         total -= len(removed.get("content", ""))
 
-
     try:
-        MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "15"))
-        assistant_text = ""
-        round_num = 0
-
-        while round_num < MAX_TOOL_ROUNDS:
-            round_num += 1
-
-            # Cancellation check — caller hit DELETE /chat/active/{session_id}
-            if _cancel_flags.get(session_id):
-                logger.info("[%d] Cancelled by user before round %d", req_id, round_num)
-                yield _sse_event("cancelled", {"round": round_num, "reason": "user_requested"})
-                return
-
-            # Mid-round interjection: drain any queued messages so the LLM
-            # sees them on this round (true mid-turn interjection without
-            # waiting for the entire MAX_TOOL_ROUNDS budget to finish).
-            pending = _message_queues.get(session_id, [])
-            while pending:
-                next_msg = pending.pop(0)
-                logger.info("[%d] Mid-round interjection: %s", req_id, next_msg["id"])
-                yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "interjected"})
-                history.append({"role": "user", "content": next_msg["content"]})
-
-            chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
-            try:
-                async for hb in _heartbeat_until_done(chat_task, phase="llm", session_id=session_id, round=round_num):
-                    yield hb
-                completion = await chat_task
-            except asyncio.CancelledError:
-                logger.info("[%d] LLM call cancelled by user", req_id)
-                yield _sse_event("cancelled", {"phase": "llm", "round": round_num, "reason": "user_requested"})
-                return
-            _log_raw_llm(session_id, f"deepseek-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
-            assistant_message = completion["choices"][0].get("message", {})
-            tool_calls = client.extract_tool_calls(completion)
-            logger.info("[%d] DEEPSEEK RESP round=%d tools=%d tokens=%s", req_id, round_num,
-                         len(tool_calls),
-                         completion.get("usage", {}).get("total_tokens", "?"))
-
-            tool_calls = assistant_message.get("tool_calls", [])
-
-            if tool_calls:
-                # Stream initial thought
-                thought = assistant_message.get("content", "") or "Thinking..."
-                yield _sse_event("token", thought)
-
-                history.append({
-                    "role": "assistant",
-                    "content": assistant_message.get("content", ""),
-                    "reasoning_content": assistant_message.get("reasoning_content", ""),
-                    "tool_calls": [
-                        {"id": tc["id"], "type": tc["type"],
-                         "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
-                        for tc in tool_calls
-                    ],
-                })
-
-                for tc in tool_calls:
-                    func_name = tc["function"]["name"]
-                    func_args = json.loads(tc["function"]["arguments"])
-                    tool_call_id = tc["id"]
-                    logger.info("[%d] TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
-
-                    yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-                    tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
-                    try:
-                        async for hb in _heartbeat_until_done(tool_task, phase="tool", session_id=session_id, tool=func_name):
-                            yield hb
-                        result_text = await tool_task
-                    except asyncio.CancelledError:
-                        logger.info("[%d] Tool %s cancelled by user", req_id, func_name)
-                        yield _sse_event("cancelled", {"phase": "tool", "tool": func_name, "reason": "user_requested"})
-                        return
-                    yield _sse_event("tool", {"tool": func_name, "status": "done"})
-                    logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
-
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": result_text,
-                    })
-            else:
-                assistant_text = client.extract_text(completion)
-                break  # no more tool calls — exit loop
-
-        # If still empty after all rounds (LLM only returned tool_calls), force text-only
-        wanted_more_rounds = False
-        if not assistant_text:
-            logger.info("[%d] Empty after %d tool rounds — forcing text-only completion", req_id, round_num)
-            wanted_more_rounds = True
-            completion = client.chat(system_prompt, history, tools=None)
-            assistant_text = client.extract_text(completion)
-
-        # Strip DSML leakage (DeepSeek occasionally streams raw `<｜｜DSML｜｜…>` blobs
-        # as content tokens instead of structured tool_calls — usually a sign the
-        # model wanted more rounds than the budget allowed).
-        assistant_text, dsml_leaked = _strip_dsml(assistant_text)
-        if dsml_leaked:
-            wanted_more_rounds = True
-            logger.info("[%d] Stripped DSML leakage from final response", req_id)
-        if wanted_more_rounds:
-            yield _sse_event("wanted_more_rounds", {"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS})
+        state: dict = {}
+        async for ev in _run_tool_round_loop(
+            client=client, system_prompt=system_prompt, tools=tools,
+            history=history, session_id=session_id, governor_name=governor_name,
+            req_id=req_id, state=state,
+        ):
+            yield ev
+        if state.get("cancelled"):
+            return
+        assistant_text = state.get("assistant_text", "")
 
     except LLMError as exc:
         logger.error("[%d] CHAT ERROR: %s", req_id, exc)
@@ -971,106 +1020,35 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
         logger.info("[%d] Processing queued message: %s", req_id, next_msg["id"])
         yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "processing"})
 
-        # Append queued message to history as a user message
         queued_content = next_msg["content"]
         if governor_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
             queued_content = f"[GOVERNOR_IDENTITY: You are speaking with {governor_name}. When they say 'I', 'me', or 'my', they mean {governor_name}.]\n\n{queued_content}"
         history.append({"role": "user", "content": queued_content})
         _log_session(session_id, history)
 
-        # Process this queued message (reuse the same loop logic)
         try:
-            MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "15"))
-            assistant_text = ""
-            round_num = 0
-
-            while round_num < MAX_TOOL_ROUNDS:
-                round_num += 1
-                if _cancel_flags.get(session_id):
-                    logger.info("[%d] Queue cancelled by user before round %d", req_id, round_num)
-                    yield _sse_event("cancelled", {"round": round_num, "queue_msg_id": next_msg["id"], "reason": "user_requested"})
-                    return
-                chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
-                try:
-                    async for hb in _heartbeat_until_done(chat_task, phase="llm", session_id=session_id, round=round_num, queue_msg_id=next_msg["id"]):
-                        yield hb
-                    completion = await chat_task
-                except asyncio.CancelledError:
-                    yield _sse_event("cancelled", {"phase": "llm", "queue_msg_id": next_msg["id"], "reason": "user_requested"})
-                    return
-                _log_raw_llm(session_id, f"deepseek-queue-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
-                assistant_message = completion["choices"][0].get("message", {})
-                tool_calls = assistant_message.get("tool_calls", [])
-
-                if tool_calls:
-                    thought = assistant_message.get("content", "") or "Thinking..."
-                    yield _sse_event("token", thought)
-
-                    history.append({
-                        "role": "assistant",
-                        "content": assistant_message.get("content", ""),
-                        "reasoning_content": assistant_message.get("reasoning_content", ""),
-                        "tool_calls": [
-                            {"id": tc["id"], "type": tc["type"],
-                             "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
-                            for tc in tool_calls
-                        ],
-                    })
-
-                    for tc in tool_calls:
-                        func_name = tc["function"]["name"]
-                        func_args = json.loads(tc["function"]["arguments"])
-                        tool_call_id = tc["id"]
-                        logger.info("[%d] QUEUE TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
-                        yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-                        tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
-                        try:
-                            async for hb in _heartbeat_until_done(tool_task, phase="tool", session_id=session_id, tool=func_name, queue_msg_id=next_msg["id"]):
-                                yield hb
-                            result_text = await tool_task
-                        except asyncio.CancelledError:
-                            yield _sse_event("cancelled", {"phase": "tool", "tool": func_name, "queue_msg_id": next_msg["id"], "reason": "user_requested"})
-                            return
-                        yield _sse_event("tool", {"tool": func_name, "status": "done"})
-                        history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call_id,
-                            "content": result_text,
-                        })
-                else:
-                    assistant_text = client.extract_text(completion)
-                    break
-
-            wanted_more_rounds = False
-            if not assistant_text:
-                logger.info("[%d] Queue: empty after %d tool rounds — forcing text-only", req_id, round_num)
-                wanted_more_rounds = True
-                completion = client.chat(system_prompt, history, tools=None)
-                assistant_text = client.extract_text(completion)
-
-            assistant_text, dsml_leaked = _strip_dsml(assistant_text)
-            if dsml_leaked:
-                wanted_more_rounds = True
-                logger.info("[%d] Queue: stripped DSML leakage from final response", req_id)
-            if wanted_more_rounds:
-                yield _sse_event("wanted_more_rounds", {"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS, "queue_msg_id": next_msg["id"]})
-
+            q_state: dict = {}
+            async for ev in _run_tool_round_loop(
+                client=client, system_prompt=system_prompt, tools=tools,
+                history=history, session_id=session_id, governor_name=governor_name,
+                req_id=req_id, state=q_state, queue_msg_id=next_msg["id"],
+            ):
+                yield ev
+            if q_state.get("cancelled"):
+                return
+            queued_text = q_state.get("assistant_text", "")
         except LLMError as exc:
             logger.error("[%d] QUEUE CHAT ERROR: %s", req_id, exc)
             _record_chat_error(str(exc))
             yield _sse_event("error", str(exc))
             break
 
-        # Stream queued response tokens
-        for chunk in _chunk_text(assistant_text):
+        for chunk in _chunk_text(queued_text):
             yield _sse_event("token", chunk)
-
-        # Stream done event for this queued message
-        done_data = {"response": assistant_text, "queued": True, "msg_id": next_msg["id"]}
+        done_data = {"response": queued_text, "queued": True, "msg_id": next_msg["id"]}
         yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
 
-        # Persist assistant response to session history
-        history.append({"role": "assistant", "content": assistant_text})
+        history.append({"role": "assistant", "content": queued_text})
         _sessions[session_id] = history
         _log_session(session_id, history)
         asyncio.create_task(_publish_transcript(session_id, history, governor_name, do_not_publish=do_not_publish))
