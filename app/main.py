@@ -55,6 +55,7 @@ aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
 _pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission awaiting approval
 _active_streams: dict[str, float] = {}  # session_key -> last activity timestamp
+_cancel_flags: dict[str, bool] = {}  # session_key -> True when caller hit DELETE /chat/active/{session_id}
 _message_queues: dict[str, list[dict]] = {}  # session_key -> list of queued messages
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -303,18 +304,49 @@ def _sse_event(event_type: str, data: object) -> str:
     return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
 
 
-async def _heartbeat_until_done(task: asyncio.Task, phase: str, **meta):
+async def _heartbeat_until_done(task: asyncio.Task, phase: str, session_id: str | None = None, **meta):
     """Async generator. Yields SSE `heartbeat` events every 15s while `task`
     is still pending. Caller awaits `task` after this generator exits to
     retrieve the result. Keeps the SSE connection alive across long-running
-    LLM calls and tool calls (fixes ChunkedEncodingError on idle streams)."""
+    LLM calls and tool calls (fixes ChunkedEncodingError on idle streams).
+
+    If `session_id` is provided, also polls `_cancel_flags[session_id]` and
+    cancels the inner task when the caller hits `DELETE /chat/active/{sid}`."""
     started = time.monotonic()
     while not task.done():
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=15.0)
         except asyncio.TimeoutError:
             elapsed = round(time.monotonic() - started, 1)
+            if session_id and _cancel_flags.get(session_id):
+                task.cancel()
+                yield _sse_event("cancelled", {"phase": phase, "elapsed_s": elapsed, **meta})
+                return
             yield _sse_event("heartbeat", {"phase": phase, "elapsed_s": elapsed, **meta})
+
+
+_DSML_OPEN_TOKEN = "<｜｜DSML｜｜"  # raw DSML opener seen leaking from DeepSeek
+_DSML_BLOCK_RE = re.compile(
+    r"<｜｜DSML｜｜tool_calls>.*?</｜｜DSML｜｜tool_calls>",
+    re.DOTALL,
+)
+_DSML_FRAGMENT_RE = re.compile(r"<｜｜DSML｜｜[^<]*?(?:>|$)")
+
+
+def _strip_dsml(text: str) -> tuple[str, bool]:
+    """Strip raw `<｜｜DSML｜｜…>` tool-call leakage from text.
+
+    DeepSeek occasionally emits the DSML XML format as plain content tokens
+    instead of as structured tool_calls (especially when the round budget is
+    exhausted). The DSML strings then stream straight to the user, which is
+    confusing and looks broken. This strips them and returns
+    (sanitized_text, had_leakage). Caller can use `had_leakage` to emit a
+    `wanted_more_rounds` signal."""
+    if _DSML_OPEN_TOKEN not in text:
+        return text, False
+    sanitized = _DSML_BLOCK_RE.sub("", text)
+    sanitized = _DSML_FRAGMENT_RE.sub("", sanitized)
+    return sanitized.strip(), True
 
 
 # Canonical labels from dao_client modules — each event type has exact field names.
@@ -742,6 +774,12 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
         while round_num < MAX_TOOL_ROUNDS:
             round_num += 1
 
+            # Cancellation check — caller hit DELETE /chat/active/{session_id}
+            if _cancel_flags.get(session_id):
+                logger.info("[%d] Cancelled by user before round %d", req_id, round_num)
+                yield _sse_event("cancelled", {"round": round_num, "reason": "user_requested"})
+                return
+
             # Mid-round interjection: drain any queued messages so the LLM
             # sees them on this round (true mid-turn interjection without
             # waiting for the entire MAX_TOOL_ROUNDS budget to finish).
@@ -753,9 +791,14 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                 history.append({"role": "user", "content": next_msg["content"]})
 
             chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
-            async for hb in _heartbeat_until_done(chat_task, phase="llm", round=round_num):
-                yield hb
-            completion = await chat_task
+            try:
+                async for hb in _heartbeat_until_done(chat_task, phase="llm", session_id=session_id, round=round_num):
+                    yield hb
+                completion = await chat_task
+            except asyncio.CancelledError:
+                logger.info("[%d] LLM call cancelled by user", req_id)
+                yield _sse_event("cancelled", {"phase": "llm", "round": round_num, "reason": "user_requested"})
+                return
             _log_raw_llm(session_id, f"deepseek-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
             assistant_message = completion["choices"][0].get("message", {})
             tool_calls = client.extract_tool_calls(completion)
@@ -789,9 +832,14 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
                     yield _sse_event("tool", {"tool": func_name, "status": "calling"})
                     tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
-                    async for hb in _heartbeat_until_done(tool_task, phase="tool", tool=func_name):
-                        yield hb
-                    result_text = await tool_task
+                    try:
+                        async for hb in _heartbeat_until_done(tool_task, phase="tool", session_id=session_id, tool=func_name):
+                            yield hb
+                        result_text = await tool_task
+                    except asyncio.CancelledError:
+                        logger.info("[%d] Tool %s cancelled by user", req_id, func_name)
+                        yield _sse_event("cancelled", {"phase": "tool", "tool": func_name, "reason": "user_requested"})
+                        return
                     yield _sse_event("tool", {"tool": func_name, "status": "done"})
                     logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
 
@@ -805,10 +853,22 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                 break  # no more tool calls — exit loop
 
         # If still empty after all rounds (LLM only returned tool_calls), force text-only
+        wanted_more_rounds = False
         if not assistant_text:
             logger.info("[%d] Empty after %d tool rounds — forcing text-only completion", req_id, round_num)
+            wanted_more_rounds = True
             completion = client.chat(system_prompt, history, tools=None)
             assistant_text = client.extract_text(completion)
+
+        # Strip DSML leakage (DeepSeek occasionally streams raw `<｜｜DSML｜｜…>` blobs
+        # as content tokens instead of structured tool_calls — usually a sign the
+        # model wanted more rounds than the budget allowed).
+        assistant_text, dsml_leaked = _strip_dsml(assistant_text)
+        if dsml_leaked:
+            wanted_more_rounds = True
+            logger.info("[%d] Stripped DSML leakage from final response", req_id)
+        if wanted_more_rounds:
+            yield _sse_event("wanted_more_rounds", {"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS})
 
     except LLMError as exc:
         logger.error("[%d] CHAT ERROR: %s", req_id, exc)
@@ -878,10 +938,18 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
             while round_num < MAX_TOOL_ROUNDS:
                 round_num += 1
+                if _cancel_flags.get(session_id):
+                    logger.info("[%d] Queue cancelled by user before round %d", req_id, round_num)
+                    yield _sse_event("cancelled", {"round": round_num, "queue_msg_id": next_msg["id"], "reason": "user_requested"})
+                    return
                 chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
-                async for hb in _heartbeat_until_done(chat_task, phase="llm", round=round_num, queue_msg_id=next_msg["id"]):
-                    yield hb
-                completion = await chat_task
+                try:
+                    async for hb in _heartbeat_until_done(chat_task, phase="llm", session_id=session_id, round=round_num, queue_msg_id=next_msg["id"]):
+                        yield hb
+                    completion = await chat_task
+                except asyncio.CancelledError:
+                    yield _sse_event("cancelled", {"phase": "llm", "queue_msg_id": next_msg["id"], "reason": "user_requested"})
+                    return
                 _log_raw_llm(session_id, f"deepseek-queue-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
                 assistant_message = completion["choices"][0].get("message", {})
                 tool_calls = assistant_message.get("tool_calls", [])
@@ -908,9 +976,13 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                         logger.info("[%d] QUEUE TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
                         yield _sse_event("tool", {"tool": func_name, "status": "calling"})
                         tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
-                        async for hb in _heartbeat_until_done(tool_task, phase="tool", tool=func_name, queue_msg_id=next_msg["id"]):
-                            yield hb
-                        result_text = await tool_task
+                        try:
+                            async for hb in _heartbeat_until_done(tool_task, phase="tool", session_id=session_id, tool=func_name, queue_msg_id=next_msg["id"]):
+                                yield hb
+                            result_text = await tool_task
+                        except asyncio.CancelledError:
+                            yield _sse_event("cancelled", {"phase": "tool", "tool": func_name, "queue_msg_id": next_msg["id"], "reason": "user_requested"})
+                            return
                         yield _sse_event("tool", {"tool": func_name, "status": "done"})
                         history.append({
                             "role": "tool",
@@ -921,10 +993,19 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                     assistant_text = client.extract_text(completion)
                     break
 
+            wanted_more_rounds = False
             if not assistant_text:
                 logger.info("[%d] Queue: empty after %d tool rounds — forcing text-only", req_id, round_num)
+                wanted_more_rounds = True
                 completion = client.chat(system_prompt, history, tools=None)
                 assistant_text = client.extract_text(completion)
+
+            assistant_text, dsml_leaked = _strip_dsml(assistant_text)
+            if dsml_leaked:
+                wanted_more_rounds = True
+                logger.info("[%d] Queue: stripped DSML leakage from final response", req_id)
+            if wanted_more_rounds:
+                yield _sse_event("wanted_more_rounds", {"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS, "queue_msg_id": next_msg["id"]})
 
         except LLMError as exc:
             logger.error("[%d] QUEUE CHAT ERROR: %s", req_id, exc)
@@ -1254,6 +1335,31 @@ async def update_queued_message(msg_id: str, request: Request) -> JSONResponse:
     raise HTTPException(status_code=404, detail="Message not found in queue")
 
 
+@app.delete("/chat/active/{session_short}")
+async def cancel_active_chat(session_short: str, request: Request) -> JSONResponse:
+    """Cancel an in-flight /chat stream for the calling governor.
+
+    `session_short` is the first 16 chars of the session_id (matches the
+    short id used in logs/UI). The actual session_id is reconstructed from
+    the caller's RSA public key + headers; the short id only confirms the
+    caller meant to cancel the right session (anti-typo guard).
+
+    Sets a cancel flag that the streaming loop checks at each round
+    boundary AND inside `_heartbeat_until_done`, so an in-flight LLM call
+    or tool call is cancelled within ~15s (the heartbeat interval)."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    if session_id[:16] != session_short:
+        raise HTTPException(status_code=400, detail=f"session_short does not match this caller's session ({session_id[:16]}...)")
+    if session_id not in _active_streams:
+        return JSONResponse({"status": "no_active_stream", "session_id_short": session_short}, status_code=404)
+    _cancel_flags[session_id] = True
+    logger.info("Cancel requested for session %s", session_id[:16])
+    return JSONResponse({"status": "cancel_requested", "session_id_short": session_short})
+
+
 @app.post("/chat")
 async def chat(request: Request):
     """SSE-streaming chat endpoint."""
@@ -1284,6 +1390,8 @@ async def chat(request: Request):
 
     # Track session as active — survives client disconnect
     _active_streams[session_id] = time.time()
+    # Clear any stale cancel flag from a prior turn so this fresh request runs
+    _cancel_flags.pop(session_id, None)
 
     async def _stream_with_cleanup():
         try:
@@ -1291,6 +1399,7 @@ async def chat(request: Request):
                 yield event
         finally:
             _active_streams.pop(session_id, None)
+            _cancel_flags.pop(session_id, None)
 
     return StreamingResponse(
         _stream_with_cleanup(),
