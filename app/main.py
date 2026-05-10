@@ -164,6 +164,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_branch_janitor_loop())
         except Exception as e:
             logger.warning("Branch janitor failed to start: %s", e)
+        try:
+            asyncio.create_task(_pending_janitor_loop())
+        except Exception as e:
+            logger.warning("Pending janitor failed to start: %s", e)
     else:
         logger.info("DRY_RUN=true — no background tasks started")
 
@@ -265,10 +269,19 @@ async def list_sessions(request: Request) -> JSONResponse:
 
 @app.get("/pending")
 async def get_pending(request: Request) -> JSONResponse:
-    """Return pending approvals for this governor (persistent, survives refresh)."""
+    """Return pending approvals for this governor (persistent, survives refresh).
+
+    Performs a best-effort sweep of stale `merge_pr` entries (PRs the
+    governor merged via GitHub directly without clicking Approve in the
+    chat UI) before returning, so the chat panel stops showing items
+    that are no longer actionable."""
     public_key = request.headers.get("X-Public-Key", "")
     if not public_key:
         raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    try:
+        _cleanup_resolved_pending(public_key)
+    except Exception as e:
+        logger.warning("Lazy pending cleanup failed: %s", e)
     pending = _load_pending(public_key)
     return JSONResponse({"pending": pending})
 
@@ -1201,6 +1214,113 @@ def _resolve_pending(public_key: str, key: str, resolution: str) -> None:
     items = _load_pending(public_key)
     items = [p for p in items if p.get("qr_code") != key and p.get("title") != key]
     _save_pending(public_key, items)
+
+
+_MERGE_PR_TITLE_RE = re.compile(r"^Merge PR #(\d+) on (\S+)")
+
+
+def _cleanup_resolved_pending(public_key: str, gh: "GitHubClient | None" = None) -> int:
+    """Drop pending merge_pr entries whose PR is no longer open.
+
+    Fixes a stale-entry class of bug: when a governor merges a PR directly
+    via GitHub instead of clicking Approve in the chat UI, the pending
+    entry is never resolved server-side and keeps showing in the chat
+    'Pending Approval' panel forever. This sweeps each `merge_pr` entry,
+    looks up the live PR state via the GitHub API, and drops entries whose
+    PR is `closed` or `merged`. Entries we can't verify (parse fail, API
+    error) are kept conservatively.
+
+    Returns the number of entries removed."""
+    items = _load_pending(public_key)
+    if not items:
+        return 0
+    if gh is None:
+        try:
+            gh = GitHubClient()
+        except Exception:
+            return 0
+    cleaned: list[dict] = []
+    removed = 0
+    for item in items:
+        if item.get("action") != "merge_pr":
+            cleaned.append(item)
+            continue
+        m = _MERGE_PR_TITLE_RE.match(item.get("title", ""))
+        if not m:
+            cleaned.append(item)
+            continue
+        pr_num, repo = int(m.group(1)), m.group(2)
+        try:
+            pr = gh.g.get_repo(gh._full_name(repo)).get_pull(pr_num)
+            if pr.state == "open":
+                cleaned.append(item)
+            else:
+                removed += 1
+                logger.info("Pending cleanup: dropped '%s' (PR is %s)", item.get("title"), pr.state)
+        except Exception as e:
+            # Conservative: keep entries we can't verify (typos, network blips, etc.)
+            logger.debug("Pending cleanup: skipped '%s' (verify failed: %s)", item.get("title"), e)
+            cleaned.append(item)
+    if removed:
+        _save_pending(public_key, cleaned)
+    return removed
+
+
+async def _pending_janitor_loop():
+    """Periodic sweep of every pending_*.json under SESSION_LOG_DIR. Runs
+    once shortly after startup, then every 12h. Skipped under DRY_RUN.
+
+    Catches stale entries even for governors who don't open the chat UI
+    (the lazy /pending GET path only cleans the active session's file)."""
+    if settings.dry_run:
+        logger.info("Pending janitor: DRY_RUN=true — skipping")
+        return
+    await asyncio.sleep(120)  # let other startup tasks finish
+    while True:
+        try:
+            try:
+                gh = GitHubClient()
+            except Exception as e:
+                logger.warning("Pending janitor: GitHubClient init failed (%s); sleeping", e)
+                await asyncio.sleep(12 * 60 * 60)
+                continue
+            total_removed = 0
+            for pf in SESSION_LOG_DIR.glob("pending_*.json"):
+                try:
+                    items = json.loads(pf.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                # Reverse-derive the public_key — we don't have it; the
+                # cleanup function takes it for the save path. Read+rewrite
+                # by file directly.
+                cleaned: list[dict] = []
+                removed = 0
+                for item in items:
+                    if item.get("action") != "merge_pr":
+                        cleaned.append(item)
+                        continue
+                    m = _MERGE_PR_TITLE_RE.match(item.get("title", ""))
+                    if not m:
+                        cleaned.append(item)
+                        continue
+                    pr_num, repo = int(m.group(1)), m.group(2)
+                    try:
+                        pr = gh.g.get_repo(gh._full_name(repo)).get_pull(pr_num)
+                        if pr.state == "open":
+                            cleaned.append(item)
+                        else:
+                            removed += 1
+                            logger.info("Pending janitor: dropped '%s' from %s (PR is %s)", item.get("title"), pf.name, pr.state)
+                    except Exception:
+                        cleaned.append(item)
+                if removed:
+                    pf.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+                    total_removed += removed
+            if total_removed:
+                logger.info("Pending janitor: pruned %d total stale pending entries across all sessions", total_removed)
+        except Exception as e:
+            logger.warning("Pending janitor pass failed: %s", e)
+        await asyncio.sleep(12 * 60 * 60)
 
 
 async def _sync_pending_to_github(public_key: str, items: list[dict]) -> None:
