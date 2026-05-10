@@ -303,6 +303,20 @@ def _sse_event(event_type: str, data: object) -> str:
     return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
 
 
+async def _heartbeat_until_done(task: asyncio.Task, phase: str, **meta):
+    """Async generator. Yields SSE `heartbeat` events every 15s while `task`
+    is still pending. Caller awaits `task` after this generator exits to
+    retrieve the result. Keeps the SSE connection alive across long-running
+    LLM calls and tool calls (fixes ChunkedEncodingError on idle streams)."""
+    started = time.monotonic()
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=15.0)
+        except asyncio.TimeoutError:
+            elapsed = round(time.monotonic() - started, 1)
+            yield _sse_event("heartbeat", {"phase": phase, "elapsed_s": elapsed, **meta})
+
+
 # Canonical labels from dao_client modules — each event type has exact field names.
 # Source: truesight_dao_client/modules/{report_inventory_movement,report_sales,...}.py
 _CANONICAL_LABELS: dict[str, list[str]] = {
@@ -727,7 +741,21 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
         while round_num < MAX_TOOL_ROUNDS:
             round_num += 1
-            completion = client.chat(system_prompt, history, tools=tools)
+
+            # Mid-round interjection: drain any queued messages so the LLM
+            # sees them on this round (true mid-turn interjection without
+            # waiting for the entire MAX_TOOL_ROUNDS budget to finish).
+            pending = _message_queues.get(session_id, [])
+            while pending:
+                next_msg = pending.pop(0)
+                logger.info("[%d] Mid-round interjection: %s", req_id, next_msg["id"])
+                yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "interjected"})
+                history.append({"role": "user", "content": next_msg["content"]})
+
+            chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
+            async for hb in _heartbeat_until_done(chat_task, phase="llm", round=round_num):
+                yield hb
+            completion = await chat_task
             _log_raw_llm(session_id, f"deepseek-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
             assistant_message = completion["choices"][0].get("message", {})
             tool_calls = client.extract_tool_calls(completion)
@@ -760,7 +788,10 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                     logger.info("[%d] TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
 
                     yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-                    result_text = await _run_tool(func_name, func_args, history, session_id, governor_name)
+                    tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
+                    async for hb in _heartbeat_until_done(tool_task, phase="tool", tool=func_name):
+                        yield hb
+                    result_text = await tool_task
                     yield _sse_event("tool", {"tool": func_name, "status": "done"})
                     logger.info("[%d] TOOL RESULT: %s result=%.300s", req_id, func_name, result_text[:300])
 
@@ -847,7 +878,10 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
 
             while round_num < MAX_TOOL_ROUNDS:
                 round_num += 1
-                completion = client.chat(system_prompt, history, tools=tools)
+                chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
+                async for hb in _heartbeat_until_done(chat_task, phase="llm", round=round_num, queue_msg_id=next_msg["id"]):
+                    yield hb
+                completion = await chat_task
                 _log_raw_llm(session_id, f"deepseek-queue-round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
                 assistant_message = completion["choices"][0].get("message", {})
                 tool_calls = assistant_message.get("tool_calls", [])
@@ -873,7 +907,10 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
                         tool_call_id = tc["id"]
                         logger.info("[%d] QUEUE TOOL CALL: %s args=%.200s", req_id, func_name, json.dumps(func_args))
                         yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-                        result_text = await _run_tool(func_name, func_args, history, session_id, governor_name)
+                        tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
+                        async for hb in _heartbeat_until_done(tool_task, phase="tool", tool=func_name, queue_msg_id=next_msg["id"]):
+                            yield hb
+                        result_text = await tool_task
                         yield _sse_event("tool", {"tool": func_name, "status": "done"})
                         history.append({
                             "role": "tool",
