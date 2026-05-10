@@ -9,6 +9,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
 import mimetypes
@@ -159,6 +160,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(aws_monitor.run_loop())
         except Exception as e:
             logger.warning("AWS monitor failed to start: %s", e)
+        try:
+            asyncio.create_task(_branch_janitor_loop())
+        except Exception as e:
+            logger.warning("Branch janitor failed to start: %s", e)
     else:
         logger.info("DRY_RUN=true — no background tasks started")
 
@@ -793,7 +798,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     return f"Unknown tool: {func_name}"
 
 
-async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None, governor_name: str | None = None):
+async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None, governor_name: str | None = None, do_not_publish: bool = False):
     system_prompt = get_system_prompt()
     client = LLMClient()
     tools = get_tool_schemas()
@@ -957,7 +962,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
     _log_session(session_id, history)
 
     # Publish transcript to public GitHub repo for DAO transparency
-    asyncio.create_task(_publish_transcript(session_id, history, governor_name))
+    asyncio.create_task(_publish_transcript(session_id, history, governor_name, do_not_publish=do_not_publish))
 
     # ── Queue processing: after done, check for queued messages ──
     queue = _message_queues.get(session_id, [])
@@ -1068,7 +1073,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str, 
         history.append({"role": "assistant", "content": assistant_text})
         _sessions[session_id] = history
         _log_session(session_id, history)
-        asyncio.create_task(_publish_transcript(session_id, history, governor_name))
+        asyncio.create_task(_publish_transcript(session_id, history, governor_name, do_not_publish=do_not_publish))
 
 
 def _chunk_text(text: str, size: int = 80) -> list[str]:
@@ -1237,9 +1242,43 @@ async def _sync_pending_to_github(public_key: str, items: list[dict]) -> None:
 _TRANSCRIPT_REPO = "truesight_autopilot_transcript"
 
 
-async def _publish_transcript(session_id: str, history: list[dict], governor_name: str | None = None) -> None:
+_REDACTION_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED:AWS_ACCESS_KEY]"),
+    (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "[REDACTED:LLM_API_KEY]"),
+    (re.compile(r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b"), "[REDACTED:GITHUB_TOKEN]"),
+    (re.compile(r"xox[abprs]-[A-Za-z0-9-]{20,}"), "[REDACTED:SLACK_TOKEN]"),
+    (re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY[ -]*-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY[ -]*-----"), "[REDACTED:PRIVATE_KEY_BLOCK]"),
+    # JWT-shaped tokens: 3 base64url segments separated by dots, each at least 8 chars
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), "[REDACTED:JWT]"),
+    # env-style line: KEY_LIKE=secret-shaped-value (long, no spaces, base64-ish)
+    (re.compile(r"^([A-Z][A-Z0-9_]{3,})=([A-Za-z0-9+/=_\-]{20,})$", re.MULTILINE), r"\1=[REDACTED:ENV_VALUE]"),
+]
+
+
+def _redact_secrets(text: str) -> tuple[str, list[str]]:
+    """Redact common secret-shaped strings before public transcript publish.
+    Returns (redacted_text, list_of_categories_that_matched)."""
+    if not text:
+        return text, []
+    matched: list[str] = []
+    for pattern, replacement in _REDACTION_PATTERNS:
+        if pattern.search(text):
+            tag = replacement.split(":", 1)[1].rstrip("]") if ":" in replacement else replacement
+            matched.append(tag)
+            text = pattern.sub(replacement, text)
+    return text, matched
+
+
+async def _publish_transcript(session_id: str, history: list[dict], governor_name: str | None = None, do_not_publish: bool = False) -> None:
     """Publish conversation transcript + uploaded images to public GitHub repo
-    for DAO transparency. Runs as background task, never blocks the response."""
+    for DAO transparency. Runs as background task, never blocks the response.
+
+    `do_not_publish=True` skips the publish entirely (set by caller via the
+    chat payload's `do_not_publish` field — useful when chat content is
+    sensitive and the governor doesn't want it on the public transcript repo)."""
+    if do_not_publish:
+        logger.info("Transcript publish skipped: do_not_publish=True for session %s", session_id[:16])
+        return
     try:
         import hashlib as _hlib
         sid_hash = _hlib.md5(session_id.encode()).hexdigest()[:12]
@@ -1255,6 +1294,7 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
             lines.append(f"**Governor**: {gov_name}\n")
         lines.append("\n---\n\n")
 
+        all_redactions: set[str] = set()
         for msg in history:
             role = msg.get("role", "")
             content = (msg.get("content", "") or "").strip()
@@ -1263,12 +1303,18 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
             if role == "user":
                 # Strip internal markers for public transcript
                 content = content.replace("[GOVERNOR_IDENTITY:", "").split("[GOVERNOR_IDENTITY:")[-1]
+                content, hits = _redact_secrets(content)
+                all_redactions.update(hits)
                 lines.append(f"### 🧑 Governor\n\n{content}\n\n")
             elif role == "assistant":
                 # Strip XML tool-call syntax
                 content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
                 if content:
+                    content, hits = _redact_secrets(content)
+                    all_redactions.update(hits)
                     lines.append(f"### 🤖 Autopilot\n\n{content}\n\n")
+        if all_redactions:
+            logger.info("Transcript redacted %d categories before publish: %s", len(all_redactions), sorted(all_redactions))
 
         transcript = "\n".join(lines)
         path = f"sessions/{today}/{sid_hash}/transcript.md"
@@ -1414,9 +1460,11 @@ async def chat(request: Request):
     if payload and signature and public_key:
         verify_payload(payload, signature, public_key)
         user_message = payload.get("message", "")
+        do_not_publish = bool(payload.get("do_not_publish", False))
     else:
         public_key = verify_jwt(request)
         user_message = body.get("message", "")
+        do_not_publish = bool(body.get("do_not_publish", False))
         if not user_message:
             raise HTTPException(status_code=400, detail="message is required.")
 
@@ -1438,7 +1486,7 @@ async def chat(request: Request):
 
     async def _stream_with_cleanup():
         try:
-            async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name):
+            async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish):
                 yield event
         finally:
             _active_streams.pop(session_id, None)
@@ -1834,10 +1882,70 @@ def _update_context_after_fix(repo: str, pr_url: str, summary: str) -> None:
     except Exception as e:
         logger.error("Failed to update context: %s", e)
 
+_AUTOPILOT_BRANCH_PREFIX = "autopilot/fix-"
+
+
 @app.post("/webhook/github")
 async def github_webhook(payload: dict):
-    logger.info("GitHub webhook received: %s", payload.get("action", "unknown"))
-    return {"status": "received"}
+    """GitHub webhook handler. Currently handles `pull_request.closed` events
+    to clean up the `autopilot/fix-*` branch the autopilot created for the PR.
+    Other event types are logged and ignored."""
+    action = payload.get("action", "unknown")
+    pr = payload.get("pull_request") or {}
+    head_ref = (pr.get("head") or {}).get("ref", "")
+    repo_name = ((payload.get("repository") or {}).get("name") or "").strip()
+
+    logger.info("GitHub webhook received: action=%s repo=%s head_ref=%s", action, repo_name, head_ref)
+
+    if action == "closed" and head_ref.startswith(_AUTOPILOT_BRANCH_PREFIX) and repo_name in settings.allowed_repos:
+        try:
+            gh = GitHubClient()
+            ok = gh.delete_branch(repo_name, head_ref)
+            if ok:
+                logger.info("Janitor: deleted closed-PR branch %s on %s", head_ref, repo_name)
+                return {"status": "branch_deleted", "repo": repo_name, "branch": head_ref}
+            return {"status": "branch_delete_failed", "repo": repo_name, "branch": head_ref}
+        except Exception as e:
+            logger.warning("Janitor webhook handler failed: %s", e)
+            return {"status": "error", "message": str(e)}
+    return {"status": "received", "action": action}
+
+
+async def _branch_janitor_loop():
+    """Periodic janitor that prunes orphan `autopilot/fix-*` branches >30 days
+    old across all allowed repos. Runs once at startup (after a short delay)
+    and then every 24h. Skipped under DRY_RUN."""
+    if settings.dry_run:
+        logger.info("Janitor: DRY_RUN=true — skipping branch janitor loop")
+        return
+    await asyncio.sleep(60)  # let the rest of startup finish
+    while True:
+        try:
+            gh = GitHubClient()
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(days=30)
+            total_deleted = 0
+            for repo in settings.allowed_repos:
+                try:
+                    branches = gh.list_branches_matching(repo, _AUTOPILOT_BRANCH_PREFIX)
+                except Exception as e:
+                    logger.warning("Janitor: list_branches failed on %s: %s", repo, e)
+                    continue
+                for b in branches:
+                    last_at = b.get("last_commit_at", "")
+                    try:
+                        ts = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    if ts > cutoff:
+                        continue
+                    if gh.delete_branch(repo, b["name"]):
+                        total_deleted += 1
+            if total_deleted:
+                logger.info("Janitor: pruned %d stale autopilot branches across allowed repos", total_deleted)
+        except Exception as e:
+            logger.warning("Janitor pass failed: %s", e)
+        await asyncio.sleep(24 * 60 * 60)
 
 
 @app.get("/metrics")

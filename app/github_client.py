@@ -108,6 +108,38 @@ class GitHubClient:
             logger.error("Failed to create branch: %s", e)
             return False
 
+    def delete_branch(self, repo_name: str, branch: str) -> bool:
+        """Delete a branch ref. Returns True on success, False otherwise."""
+        try:
+            repo = self.g.get_repo(self._full_name(repo_name))
+            ref = repo.get_git_ref(f"heads/{branch}")
+            ref.delete()
+            logger.info("Deleted branch %s on %s", branch, repo_name)
+            return True
+        except Exception as e:
+            logger.warning("Failed to delete branch %s on %s: %s", branch, repo_name, e)
+            return False
+
+    def list_branches_matching(self, repo_name: str, prefix: str) -> list[dict[str, Any]]:
+        """List branches whose name starts with `prefix`. Returns a list of
+        {name, sha, last_commit_at (iso8601)} dicts. Used by the autopilot
+        branch janitor to find orphan `autopilot/fix-*` branches."""
+        out: list[dict[str, Any]] = []
+        try:
+            repo = self.g.get_repo(self._full_name(repo_name))
+            for b in repo.get_branches():
+                if not b.name.startswith(prefix):
+                    continue
+                last_at = ""
+                try:
+                    last_at = b.commit.commit.author.date.isoformat()
+                except Exception:
+                    pass
+                out.append({"name": b.name, "sha": b.commit.sha, "last_commit_at": last_at})
+        except Exception as e:
+            logger.warning("Failed to list branches on %s: %s", repo_name, e)
+        return out
+
     def commit_file(
         self,
         repo_name: str,
