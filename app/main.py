@@ -100,10 +100,53 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
     return _sessions[session_key]
 
 
+def _install_signal_loggers():
+    """Log every kill signal we receive (with pid+ppid+signal name) before
+    chaining to the previous handler. Diagnoses 'why did the autopilot die
+    locally' — terminal hangup, OOM, parent shell exit, manual kill, etc.
+
+    Chains to whatever uvicorn (or the runtime default) had installed
+    before us so graceful shutdown still works."""
+    import signal as _signal
+
+    sig_names = ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2", "SIGPIPE"]
+    for sig_name in sig_names:
+        sig = getattr(_signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            prev = _signal.getsignal(sig)
+        except (ValueError, OSError):
+            continue
+
+        def handler(signum, frame, _sig_name=sig_name, _prev=prev):
+            try:
+                logger.warning(
+                    "LIFECYCLE: received %s (signum=%d) — pid=%d ppid=%d",
+                    _sig_name, signum, os.getpid(), os.getppid(),
+                )
+            except Exception:
+                pass
+            if callable(_prev) and _prev not in (_signal.SIG_DFL, _signal.SIG_IGN):
+                _prev(signum, frame)
+            elif _prev == _signal.SIG_DFL:
+                _signal.signal(signum, _signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+            # else SIG_IGN — swallow
+
+        try:
+            _signal.signal(sig, handler)
+        except (ValueError, OSError):
+            # Some signals can't be caught from non-main threads or in worker
+            # processes; just skip those silently.
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global email_poller, aws_monitor
-    logger.info("Autopilot starting up...")
+    logger.info("LIFECYCLE: Autopilot starting up — pid=%d ppid=%d", os.getpid(), os.getppid())
+    _install_signal_loggers()
 
     if not settings.dry_run:
         try:
@@ -121,7 +164,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("Autopilot shutting down...")
+    logger.info("LIFECYCLE: Autopilot shutting down — pid=%d ppid=%d", os.getpid(), os.getppid())
 
 
 app = FastAPI(
