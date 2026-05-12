@@ -77,6 +77,8 @@ class EmailPoller:
 
         for msg_meta in messages:
             msg_id = msg_meta["id"]
+            # users.messages.get does NOT modify read state (only modify/UI does),
+            # so fetching here is safe — the message stays UNREAD until we decide.
             msg = self.gmail.users().messages().get(userId="me", id=msg_id).execute()
             payload = msg.get("payload", {})
             headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
@@ -86,18 +88,27 @@ class EmailPoller:
             body = self._extract_body(payload)
 
             action = self._classify(subject, sender, body)
-            if action:
-                logger.info("Actionable email: %s from %s — %s", subject, sender, action)
-                if not settings.dry_run:
-                    self._handle(action, subject, sender, body, msg_id)
-                else:
-                    logger.info("[dry-run] would handle: %s", action)
-                processed += 1
+            if not action:
+                # Not actionable for autopilot — leave UNREAD so the operator
+                # reads it normally in Gmail. Previously we marked everything
+                # read after polling, which silently swallowed mail autopilot
+                # had no business touching.
+                continue
 
-            # Mark as read regardless (we processed it)
-            self.gmail.users().messages().modify(
-                userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
-            ).execute()
+            logger.info("Actionable email: %s from %s — %s", subject, sender, action)
+            if settings.dry_run:
+                # In dry-run we don't actually fix anything, so leaving the
+                # message UNREAD preserves the operator's ability to verify.
+                logger.info("[dry-run] would handle: %s — leaving UNREAD", action)
+            else:
+                self._handle(action, subject, sender, body, msg_id)
+                # Only after autopilot has actually handled the message is it
+                # safe to mark read — the action is captured (PR opened, log
+                # filed, etc.) and the email no longer needs operator attention.
+                self.gmail.users().messages().modify(
+                    userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+                ).execute()
+            processed += 1
 
         return processed
 
