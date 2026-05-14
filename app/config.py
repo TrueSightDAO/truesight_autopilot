@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     aws_secret_access_key: str | None = os.getenv("AWS_SECRET_ACCESS_KEY")
     aws_region: str = os.getenv("AWS_REGION", "us-east-1")
 
+    # Bugsnag — autopilot self-reports crashes + ERROR-level logs to Bugsnag.
+    # The same Bugsnag project then emits 'New error in autopilot' emails which
+    # email_poller's bugsnag_error classifier picks up, closing the
+    # self-improvement loop. Disabled when bugsnag_api_key is empty.
+    # Env var name BUG_SNAG_API matches the existing autopilot/.env convention.
+    bugsnag_api_key: str = os.getenv("BUG_SNAG_API", "") or os.getenv("BUGSNAG_API_KEY", "")
+    bugsnag_release_stage: str = os.getenv("BUGSNAG_RELEASE_STAGE", "production")
+
     # Context
     context_repos_dir: Path = Path(os.getenv("CONTEXT_REPOS_DIR", "/opt/truesight_autopilot/context"))
     agentic_context_repo: str = os.getenv(
