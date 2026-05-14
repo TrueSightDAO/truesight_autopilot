@@ -51,6 +51,42 @@ from .edgar_logger import EdgarLogger as EdgarDirectClient
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
 
+
+# Bugsnag self-reporting — autopilot reports its own crashes + ERROR-level
+# logs to Bugsnag so the same Bugsnag project's email notifications flow back
+# into autopilot's email_poller's bugsnag_error classifier. Closes the
+# self-improvement loop: autopilot crashes → Bugsnag → email → autopilot
+# triages → fix PR labeled `AI/proposed fix`. Disabled silently when no API
+# key is configured (preserves dev-environment ergonomics).
+def _init_bugsnag():
+    api_key = (settings.bugsnag_api_key or "").strip()
+    if not api_key:
+        logger.info("Bugsnag self-reporting disabled (no BUG_SNAG_API set)")
+        return
+    try:
+        import bugsnag
+        from bugsnag.handlers import BugsnagHandler
+        bugsnag.configure(
+            api_key=api_key,
+            project_root="/opt/truesight_autopilot",
+            release_stage=settings.bugsnag_release_stage,
+            app_type="autopilot",
+            notify_release_stages=["production", "staging"],
+        )
+        # Auto-report ERROR-level logs from any logger in this process
+        bs_handler = BugsnagHandler()
+        bs_handler.setLevel(logging.ERROR)
+        logging.getLogger().addHandler(bs_handler)
+        logger.info(
+            "Bugsnag self-reporting enabled (release_stage=%s, project_root=/opt/truesight_autopilot)",
+            settings.bugsnag_release_stage,
+        )
+    except Exception as e:
+        logger.warning("Bugsnag init failed (will continue without self-reporting): %s", e)
+
+
+_init_bugsnag()
+
 email_poller: EmailPoller | None = None
 aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
