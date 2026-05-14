@@ -256,33 +256,82 @@ class EmailPoller:
         return None
 
     def _handle_bugsnag_error(self, subject: str, body: str) -> str | None:
-        """Triage a Bugsnag error notification email.
+        """Triage a Bugsnag error notification email and (when mapped) open a fix PR.
 
-        v0 scope: parse + log only. Bugsnag emails carry a project name,
-        error class, and stack trace, but not enough metadata to map to a
-        specific GitHub repo without an operator-maintained mapping
-        (Bugsnag-project-id -> github-repo). Until that mapping exists,
-        this handler classifies + logs only — it does NOT open a PR yet,
-        so the Gmail-label-on-source-email won't fire either.
+        Bugsnag email subjects look like:
+          '[<Project Name>] <Error::Class> in <ContextClass>@<Module>'
 
-        v0.1: once the mapping is wired (env var BUGSNAG_PROJECT_REPOS
-        as JSON, or a config file), call FixAgent.run_simple() with the
-        parsed error_class as the issue_description and the mapped repo.
-        Then return the PR URL so the dispatcher labels the source email.
+        Project-name extraction reads the bracketed prefix (was previously
+        the 'in <X>' tail, which yielded the context-class instead of the
+        project — fixed in this v0.1 release).
+
+        Repo lookup uses the BUGSNAG_PROJECT_REPOS JSON dict from the
+        environment. Unmapped projects log a warning and the handler
+        returns None — preserves the v0 stub behavior for projects Gary
+        hasn't yet vouched for autopilot to fix.
         """
-        # Try to extract the project name (typical subject:
-        # '[Bugsnag] Error in MyProject - SomeException: message')
-        project_match = re.search(r"error in ([^-\n]+?)(?: - |$)", subject, re.IGNORECASE)
-        project = project_match.group(1).strip() if project_match else "unknown"
+        import json as _json
 
-        # Error class (first word after the project, often before ':')
-        error_match = re.search(r"([A-Z][A-Za-z0-9_.]+(?:Error|Exception))", subject)
+        # Project name = bracketed prefix in the subject. Falls back to 'unknown'.
+        project = "unknown"
+        bracket = re.match(r"\s*\[([^\]]+)\]", subject)
+        if bracket:
+            project = bracket.group(1).strip()
+
+        # Error class (first '<Word>Error' or '<Word>Exception' token).
+        error_match = re.search(r"([A-Z][A-Za-z0-9_:]+(?:Error|Exception))", subject)
         error_class = error_match.group(1) if error_match else "unknown"
 
         logger.info(
             "Bugsnag error: project=%s error_class=%s subject=%r",
-            project, error_class, subject[:120],
+            project, error_class, subject[:140],
         )
-        # No PR opened yet — return None so no Gmail label is applied.
-        # Once project->repo mapping ships, return the fix-PR URL here.
+
+        # Resolve project -> repo via operator-maintained mapping
+        repo = None
+        raw = (settings.bugsnag_project_repos_raw or "").strip()
+        if raw:
+            try:
+                mapping = _json.loads(raw)
+                if isinstance(mapping, dict):
+                    repo = mapping.get(project)
+            except _json.JSONDecodeError as e:
+                logger.warning("BUGSNAG_PROJECT_REPOS is not valid JSON: %s", e)
+
+        if not repo:
+            logger.info(
+                "Bugsnag project %r has no repo mapping in BUGSNAG_PROJECT_REPOS; "
+                "no fix PR will be opened. Add a mapping to enable autopilot triage.",
+                project,
+            )
+            return None
+
+        if settings.dry_run:
+            logger.info(
+                "DRY_RUN set — would have run FixAgent on repo=%s for %s",
+                repo, error_class,
+            )
+            return None
+
+        # Build a focused issue_description the LLM can act on. The body
+        # often contains the stack trace; pass the first ~2000 chars so
+        # the agent has the context it needs without inflating tokens.
+        body_excerpt = (body or "").strip()
+        if len(body_excerpt) > 2000:
+            body_excerpt = body_excerpt[:2000] + "\n\n[... truncated for fix-agent context ...]"
+        issue_description = (
+            f"Bugsnag error in project '{project}': {error_class}\n\n"
+            f"Email subject: {subject}\n\n"
+            f"Email body excerpt (typically contains stack trace):\n{body_excerpt}"
+        )
+        logger.info("Bugsnag triage: dispatching FixAgent to repo=%s", repo)
+        try:
+            agent = FixAgent()
+            pr_url = agent.run_simple(repo, issue_description)
+            if pr_url:
+                logger.info("Bugsnag triage opened fix PR: %s", pr_url)
+                return pr_url
+            logger.info("Bugsnag triage: FixAgent did not produce a PR")
+        except Exception as e:
+            logger.exception("Bugsnag triage failed for project=%s: %s", project, e)
         return None
