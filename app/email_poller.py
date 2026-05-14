@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -255,6 +256,28 @@ class EmailPoller:
             logger.info("Fix agent did not produce a PR")
         return None
 
+    # Dedup state — avoid re-triaging the same Bugsnag error_id every time
+    # Bugsnag re-emails about it (re-occurrences, regression alerts, etc.).
+    # JSON file at /opt/truesight_autopilot/state/bugsnag_triaged_errors.json,
+    # structured as { error_id: {pr_url, triaged_at_utc, project} }.
+    BUGSNAG_DEDUP_PATH = Path("/opt/truesight_autopilot/state/bugsnag_triaged_errors.json")
+
+    def _load_bugsnag_dedup(self) -> dict:
+        try:
+            return json.loads(self.BUGSNAG_DEDUP_PATH.read_text())
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logger.warning("bugsnag dedup file unreadable, starting fresh: %s", e)
+            return {}
+
+    def _save_bugsnag_dedup(self, state: dict) -> None:
+        try:
+            self.BUGSNAG_DEDUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.BUGSNAG_DEDUP_PATH.write_text(json.dumps(state, indent=2, sort_keys=True))
+        except Exception as e:
+            logger.warning("could not persist bugsnag dedup state: %s", e)
+
     def _handle_bugsnag_error(self, subject: str, body: str) -> str | None:
         """Triage a Bugsnag error notification email and (when mapped) open a fix PR.
 
@@ -263,15 +286,21 @@ class EmailPoller:
 
         Project-name extraction reads the bracketed prefix (was previously
         the 'in <X>' tail, which yielded the context-class instead of the
-        project — fixed in this v0.1 release).
+        project — fixed in v0.1).
 
         Repo lookup uses the BUGSNAG_PROJECT_REPOS JSON dict from the
         environment. Unmapped projects log a warning and the handler
         returns None — preserves the v0 stub behavior for projects Gary
         hasn't yet vouched for autopilot to fix.
-        """
-        import json as _json
 
+        Dedup (v0.2): each Bugsnag error has a stable error_id embedded
+        in the 'errors/<id>' URL inside the email body. Once a fix PR
+        is opened, the error_id is recorded in
+        /opt/truesight_autopilot/state/bugsnag_triaged_errors.json.
+        Subsequent re-emails about the SAME error_id are skipped — this
+        prevents re-triage spam when Bugsnag re-fires regression alerts
+        or new occurrences of an error already under review.
+        """
         # Project name = bracketed prefix in the subject. Falls back to 'unknown'.
         project = "unknown"
         bracket = re.match(r"\s*\[([^\]]+)\]", subject)
@@ -282,10 +311,26 @@ class EmailPoller:
         error_match = re.search(r"([A-Z][A-Za-z0-9_:]+(?:Error|Exception))", subject)
         error_class = error_match.group(1) if error_match else "unknown"
 
+        # Bugsnag error_id — stable across re-occurrences. Pulled from the
+        # 'errors/<hex>' URL pattern Bugsnag puts in every notification body.
+        error_id_match = re.search(r"app\.bugsnag\.com/[^/\s]+/[^/\s]+/errors/([0-9a-f]+)", body, re.IGNORECASE)
+        error_id = error_id_match.group(1) if error_id_match else None
+
         logger.info(
-            "Bugsnag error: project=%s error_class=%s subject=%r",
-            project, error_class, subject[:140],
+            "Bugsnag error: project=%s error_class=%s error_id=%s subject=%r",
+            project, error_class, error_id, subject[:140],
         )
+
+        # Dedup short-circuit
+        if error_id:
+            triaged = self._load_bugsnag_dedup()
+            if error_id in triaged:
+                prior = triaged[error_id]
+                logger.info(
+                    "Bugsnag error_id=%s already triaged %s -> %s; skipping",
+                    error_id, prior.get("triaged_at_utc"), prior.get("pr_url"),
+                )
+                return None
 
         # Resolve project -> repo via operator-maintained mapping
         repo = None
@@ -330,6 +375,18 @@ class EmailPoller:
             pr_url = agent.run_simple(repo, issue_description)
             if pr_url:
                 logger.info("Bugsnag triage opened fix PR: %s", pr_url)
+                # Record the dedup entry so re-emails about this same
+                # error_id don't kick off another fix loop.
+                if error_id:
+                    triaged = self._load_bugsnag_dedup()
+                    triaged[error_id] = {
+                        "pr_url": pr_url,
+                        "triaged_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "project": project,
+                        "error_class": error_class,
+                        "repo": repo,
+                    }
+                    self._save_bugsnag_dedup(triaged)
                 return pr_url
             logger.info("Bugsnag triage: FixAgent did not produce a PR")
         except Exception as e:
