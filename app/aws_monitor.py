@@ -102,9 +102,21 @@ class AWSMonitor:
         except ClientError as e:
             logger.error("Cost check failed: %s", e)
 
+    # AWS Health API requires a Business or Enterprise support plan. Once we
+    # detect SubscriptionRequiredException at the per-call level, flip this
+    # flag so subsequent polling iterations skip the call silently — no need
+    # to spam ERROR every loop. CloudWatch + Cost Explorer keep working
+    # regardless; only the Health API has this gating.
+    _health_unsupported_account = False
+
     def check_aws_health_events(self):
-        """Check for AWS Health events affecting your resources."""
-        if not self._health:
+        """Check for AWS Health events affecting your resources.
+
+        Gracefully degrades on accounts without Business/Enterprise support
+        (which is the AWS Health API prerequisite). Logs the limitation
+        once, then becomes a no-op for the rest of the process lifetime.
+        """
+        if not self._health or self._health_unsupported_account:
             return
         try:
             events = self._health.describe_events(filter={"eventStatusCodes": ["open", "upcoming"]})
@@ -116,4 +128,14 @@ class AWSMonitor:
                     event.get("eventDescription", [{}])[0].get("latestDescription", ""),
                 )
         except ClientError as e:
-            logger.error("Health check failed: %s", e)
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "SubscriptionRequiredException":
+                # Account doesn't have Business/Enterprise support — log once
+                # at INFO and disable subsequent calls for this process.
+                self._health_unsupported_account = True
+                logger.info(
+                    "AWS Health API unavailable (account lacks Business support). "
+                    "CloudWatch + Cost Explorer monitoring continues; Health polling disabled."
+                )
+            else:
+                logger.error("Health check failed: %s", e)
