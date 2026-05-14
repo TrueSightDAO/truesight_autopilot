@@ -201,16 +201,44 @@ class GitHubClient:
         head: str,
         base: str = "main",
         draft: bool = True,
+        labels: list[str] | None = None,
     ) -> str | None:
-        """Open a pull request. Returns PR URL or None."""
+        """Open a pull request. Returns PR URL or None.
+
+        ``labels`` are applied after the PR is created. Missing labels are
+        auto-created in the target repo (PyGithub's add_to_labels with a
+        string raises if the label doesn't exist; we create-if-missing first).
+        Label failures are logged but do NOT roll back the PR — the operator
+        review is the gate, the label is just a search/filter aid.
+        """
         try:
             repo = self.g.get_repo(self._full_name(repo_name))
             pr = repo.create_pull(title=title, body=body, head=head, base=base, draft=draft)
             logger.info("Opened PR #%d: %s", pr.number, pr.html_url)
+            if labels:
+                self._apply_labels(repo, pr, labels)
             return pr.html_url
         except Exception as e:
             logger.error("Failed to open PR: %s", e)
             return None
+
+    def _apply_labels(self, repo, pr, labels: list[str]) -> None:
+        """Idempotently ensure each label exists in the repo, then attach to the PR.
+
+        Default visual: warm yellow #f4a300 — matches the convention for
+        operator-attention items. Operators can recolor via the GitHub UI
+        without breaking the autopilot workflow.
+        """
+        for name in labels:
+            try:
+                try:
+                    repo.get_label(name)
+                except Exception:
+                    repo.create_label(name=name, color="f4a300",
+                                      description="Created by truesight_autopilot")
+                pr.add_to_labels(name)
+            except Exception as e:
+                logger.warning("Could not apply label %r to PR #%d: %s", name, pr.number, e)
 
     def merge_pr(
         self,
