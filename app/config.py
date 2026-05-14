@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     bugsnag_api_key: str = os.getenv("BUG_SNAG_API", "") or os.getenv("BUGSNAG_API_KEY", "")
     bugsnag_release_stage: str = os.getenv("BUGSNAG_RELEASE_STAGE", "production")
 
+    # Bugsnag-project-name -> github-repo mapping for the inbound bugsnag_error
+    # handler in email_poller.py. JSON dict in env, e.g.:
+    #   BUGSNAG_PROJECT_REPOS='{"autopilot": "truesight_autopilot", "Krake Publisher": "krake_local"}'
+    # Project name is the bracketed prefix in the Bugsnag email subject
+    # (e.g. '[Krake Publisher] HTTPError ...' -> key 'Krake Publisher').
+    # Unmapped projects log a warning and the handler returns None
+    # (no auto-PR — preserves the v0 stub behavior for projects Gary
+    # hasn't yet vouched for autopilot to fix).
+    bugsnag_project_repos_raw: str = os.getenv("BUGSNAG_PROJECT_REPOS", "")
+
     # Context
     context_repos_dir: Path = Path(os.getenv("CONTEXT_REPOS_DIR", "/opt/truesight_autopilot/context"))
     agentic_context_repo: str = os.getenv(
