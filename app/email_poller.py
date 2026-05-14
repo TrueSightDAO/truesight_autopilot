@@ -28,6 +28,13 @@ GAS_ERROR_SUBJECTS = re.compile(
 SECURITY_ALERT_SUBJECTS = re.compile(
     r"(security alert|dependabot|vulnerability)", re.IGNORECASE
 )
+# Bugsnag-emitted error notifications (sender + subject signature). Bugsnag
+# sends from support@bugsnag.com or notifications@bugsnag.com with subjects
+# like "[Bugsnag] Error in <Project> - <Message>" or "New error in <Project>".
+BUGSNAG_SENDER = re.compile(r"@bugsnag\.com", re.IGNORECASE)
+BUGSNAG_SUBJECTS = re.compile(
+    r"(\[bugsnag\]|new error|error in|reopened|spike in errors)", re.IGNORECASE
+)
 
 
 class EmailPoller:
@@ -128,6 +135,11 @@ class EmailPoller:
 
     def _classify(self, subject: str, sender: str, body: str) -> str | None:
         """Tier 1 rule-based classification. Returns action type or None."""
+        # Bugsnag classification checks sender first — narrower than subject
+        # heuristic, avoids false positives on humans forwarding bugsnag-style
+        # subjects.
+        if BUGSNAG_SENDER.search(sender) and BUGSNAG_SUBJECTS.search(subject):
+            return "bugsnag_error"
         if GITHUB_FAILURE_SUBJECTS.search(subject):
             return "github_failure"
         if GAS_ERROR_SUBJECTS.search(subject):
@@ -137,21 +149,77 @@ class EmailPoller:
         # Tier 2: skip ambiguous (no LLM for classification to save cost)
         return None
 
+    # Gmail label applied to source emails whose autopilot-triage opened a PR.
+    # Mirrors the GitHub PR label so Gary can find both surfaces with one
+    # search ("AI/proposed fix" in Gmail = inbox view of awaiting approvals).
+    PROPOSED_FIX_GMAIL_LABEL = "AI/proposed fix"
+
     def _handle(self, action: str, subject: str, sender: str, body: str, msg_id: str):
+        pr_url: str | None = None
         if action == "github_failure":
-            self._handle_github_failure(subject, body)
+            pr_url = self._handle_github_failure(subject, body)
+        elif action == "bugsnag_error":
+            pr_url = self._handle_bugsnag_error(subject, body)
         elif action == "gas_error":
             logger.info("GAS error detected — handler TODO")
         elif action == "security_alert":
             logger.info("Security alert detected — handler TODO")
 
-    def _handle_github_failure(self, subject: str, body: str):
-        """Extract repo/workflow from email, fetch logs, diagnose, open PR."""
+        if pr_url and msg_id:
+            self._apply_gmail_label(msg_id, self.PROPOSED_FIX_GMAIL_LABEL)
+
+    def _apply_gmail_label(self, msg_id: str, label_name: str) -> None:
+        """Idempotently get-or-create a Gmail label, then attach to the message.
+
+        Failures are logged but never roll back the PR — the GitHub PR is the
+        authoritative artifact, the Gmail label is just an inbox-side index.
+        """
+        try:
+            label_id = self._get_or_create_label(label_name)
+            if not label_id:
+                return
+            self.gmail.users().messages().modify(
+                userId="me",
+                id=msg_id,
+                body={"addLabelIds": [label_id]},
+            ).execute()
+            logger.info("Applied Gmail label %r to message %s", label_name, msg_id)
+        except Exception as e:
+            logger.warning("Could not apply Gmail label %r to message %s: %s",
+                           label_name, msg_id, e)
+
+    def _get_or_create_label(self, name: str) -> str | None:
+        """Return Gmail label ID for `name`, creating it if missing."""
+        try:
+            existing = self.gmail.users().labels().list(userId="me").execute()
+            for lbl in existing.get("labels", []):
+                if lbl.get("name") == name:
+                    return lbl.get("id")
+            created = self.gmail.users().labels().create(
+                userId="me",
+                body={
+                    "name": name,
+                    "labelListVisibility": "labelShow",
+                    "messageListVisibility": "show",
+                },
+            ).execute()
+            return created.get("id")
+        except Exception as e:
+            logger.warning("get_or_create label %r failed: %s", name, e)
+            return None
+
+    def _handle_github_failure(self, subject: str, body: str) -> str | None:
+        """Extract repo/workflow from email, fetch logs, diagnose, open PR.
+
+        Returns the PR URL when a fix PR is opened, else None. Caller uses
+        the return value to decide whether to apply the AI/proposed fix
+        Gmail label to the source email.
+        """
         # Naive extraction: look for repo URL patterns
         repo_match = re.search(r"github\.com/([^/]+/[^/]+)/actions", body)
         if not repo_match:
             logger.warning("Could not extract repo from failure email")
-            return
+            return None
         repo = repo_match.group(1)
 
         run_match = re.search(r"github\.com/[^/]+/[^/]+/actions/runs/(\d+)", body)
@@ -160,13 +228,13 @@ class EmailPoller:
         logger.info("GitHub failure: repo=%s run_id=%s", repo, run_id)
 
         if not run_id:
-            return
+            return None
 
         # Fetch workflow run logs
         log_snippet = self.github.fetch_workflow_log(repo, run_id)
         if not log_snippet:
             logger.warning("No log snippet fetched for %s run %s", repo, run_id)
-            return
+            return None
 
         # Diagnose
         diagnosis = self.llm.diagnose_github_failure(
@@ -183,5 +251,38 @@ class EmailPoller:
             pr_url = agent.run(repo, diagnosis)
             if pr_url:
                 logger.info("Opened fix PR: %s", pr_url)
-            else:
-                logger.info("Fix agent did not produce a PR")
+                return pr_url
+            logger.info("Fix agent did not produce a PR")
+        return None
+
+    def _handle_bugsnag_error(self, subject: str, body: str) -> str | None:
+        """Triage a Bugsnag error notification email.
+
+        v0 scope: parse + log only. Bugsnag emails carry a project name,
+        error class, and stack trace, but not enough metadata to map to a
+        specific GitHub repo without an operator-maintained mapping
+        (Bugsnag-project-id -> github-repo). Until that mapping exists,
+        this handler classifies + logs only — it does NOT open a PR yet,
+        so the Gmail-label-on-source-email won't fire either.
+
+        v0.1: once the mapping is wired (env var BUGSNAG_PROJECT_REPOS
+        as JSON, or a config file), call FixAgent.run_simple() with the
+        parsed error_class as the issue_description and the mapped repo.
+        Then return the PR URL so the dispatcher labels the source email.
+        """
+        # Try to extract the project name (typical subject:
+        # '[Bugsnag] Error in MyProject - SomeException: message')
+        project_match = re.search(r"error in ([^-\n]+?)(?: - |$)", subject, re.IGNORECASE)
+        project = project_match.group(1).strip() if project_match else "unknown"
+
+        # Error class (first word after the project, often before ':')
+        error_match = re.search(r"([A-Z][A-Za-z0-9_.]+(?:Error|Exception))", subject)
+        error_class = error_match.group(1) if error_match else "unknown"
+
+        logger.info(
+            "Bugsnag error: project=%s error_class=%s subject=%r",
+            project, error_class, subject[:120],
+        )
+        # No PR opened yet — return None so no Gmail label is applied.
+        # Once project->repo mapping ships, return the fix-PR URL here.
+        return None
