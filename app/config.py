@@ -37,6 +37,7 @@ class Settings(BaseSettings):
         "agroverse_shop", "agroverse_shop_prod", "dao_client",
         "market_research", "go_to_market", "sentiment_importer", "truesight_autopilot",
         "agentic_ai_context",
+        "capoeira", "program-template", "butterfly-effect-club",
     ]
 
     # Gmail
