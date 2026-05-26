@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # Grok (xAI) — vision analysis for uploaded images
     grok_api_key: str = os.getenv("GROK_API_KEY", "")
 
+    # Tavily — web search / page extraction for the chat agent
+    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API")
+
     # Edgar
     email: str = os.getenv("EMAIL", "")
     public_key: str = os.getenv("PUBLIC_KEY", "")

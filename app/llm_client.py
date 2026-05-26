@@ -409,4 +409,35 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the live, public web (via Tavily) for current information not in the DAO context or repos — news, docs, prices, people, external facts. Returns ranked results with snippets and an optional synthesized answer. Use web_extract afterward to read a specific result in full.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query."},
+                        "max_results": {"type": "integer", "description": "Number of results (1-10).", "default": 5},
+                        "search_depth": {"type": "string", "description": "'basic' (fast) or 'advanced' (deeper).", "enum": ["basic", "advanced"], "default": "basic"},
+                        "include_answer": {"type": "boolean", "description": "Include a synthesized answer.", "default": True},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_extract",
+                "description": "Fetch and return the cleaned full-text content of one or more specific web page URLs (via Tavily). Use after web_search to read a promising result in depth, or when the user gives you a URL to read.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "urls": {"type": "array", "items": {"type": "string"}, "description": "List of page URLs to read (max 10)."},
+                    },
+                    "required": ["urls"],
+                },
+            },
+        },
     ]

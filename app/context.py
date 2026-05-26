@@ -70,6 +70,8 @@ Do NOT guess how a process works. If you're not sure, call read_context_file to 
 - scan_qr_batch(file_paths) — batch-scan many images for QR codes
 - lookup_qr_code(qr_code) — look up a QR code's DAO record (read-only)
 - lookup_qr_batch(qr_codes) — look up many QR codes at once
+- web_search(query, ...) — search the live public web (Tavily) for current/external info not in the DAO context or repos
+- web_extract(urls) — fetch the cleaned full text of specific web page URLs (use after web_search, or when given a URL to read)
 
 ## QR CODE / CACAO BAG WORKFLOW
 When a user uploads photos of QR codes (e.g. from cacao bags Kirsten passed them):
