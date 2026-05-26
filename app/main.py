@@ -844,6 +844,17 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         file_path = func_args.get("file_path", "")
         result = read_local_file(file_path)
         return json.dumps(result, indent=2)
+    if func_name == "web_search":
+        from .tools.web_search import web_search as _web_search
+        return _web_search(
+            query=func_args.get("query", ""),
+            max_results=func_args.get("max_results", 5),
+            search_depth=func_args.get("search_depth", "basic"),
+            include_answer=func_args.get("include_answer", True),
+        )
+    if func_name == "web_extract":
+        from .tools.web_search import web_extract as _web_extract
+        return _web_extract(urls=func_args.get("urls", []))
     return f"Unknown tool: {func_name}"
 
 
