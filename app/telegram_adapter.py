@@ -97,7 +97,14 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> None:
         if thread_id:
             payload["message_thread_id"] = thread_id
         try:
-            httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
+            resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
+            if resp.status_code != 200:
+                logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
+                # e.g. "message thread not found" — retry without the thread so the
+                # reply still reaches the chat rather than vanishing.
+                if thread_id:
+                    payload.pop("message_thread_id", None)
+                    httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
         except Exception as e:  # noqa: BLE001
             logger.warning("sendMessage failed: %s", e)
 
@@ -146,7 +153,10 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
 def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
     chat = msg.get("chat", {})
     chat_id = chat.get("id")
-    thread_id = msg.get("message_thread_id")
+    # Only treat a thread id as routable when it's a genuine forum topic.
+    # Reply-threads and the General topic carry ids that 400 on sendMessage
+    # ("message thread not found"), so we ignore them for routing + session keying.
+    thread_id = msg.get("message_thread_id") if msg.get("is_topic_message") else None
     user_id = (msg.get("from") or {}).get("id")
     text = (msg.get("text") or "").strip()
     if chat_id is None or user_id is None or not text:
