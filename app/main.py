@@ -1860,16 +1860,23 @@ async def chat_blocking(request: Request) -> JSONResponse:
     client = LLMClient()
     tools = get_tool_schemas()
 
+    # Multi-round tool loop (the streaming path loops; this one used to run a
+    # single round, which truncated multi-step answers and could leak an
+    # unexecuted tool call as text). Keep running tool rounds until the model
+    # returns a final text answer or we hit the round budget.
+    max_rounds = int(os.getenv("CHAT_BLOCKING_MAX_ROUNDS", "8"))
+    assistant_text = ""
     try:
-        completion = client.chat(system_prompt, history, tools=tools)
-        assistant_message = completion["choices"][0].get("message", {})
-        tool_calls = assistant_message.get("tool_calls", [])
-
-        if tool_calls:
+        for _round in range(max_rounds):
+            completion = client.chat(system_prompt, history, tools=tools)
+            message = completion["choices"][0].get("message", {})
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                assistant_text = client.extract_text(completion)
+                break
             history.append({
                 "role": "assistant",
-                "content": assistant_message.get("content", ""),
-                "reasoning_content": assistant_message.get("reasoning_content", ""),
+                "content": message.get("content", ""),
                 "tool_calls": [
                     {"id": tc["id"], "type": tc["type"],
                      "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
@@ -1878,20 +1885,20 @@ async def chat_blocking(request: Request) -> JSONResponse:
             })
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
-                func_args = json.loads(tc["function"]["arguments"])
-                tool_call_id = tc["id"]
-                result_text = await _run_tool(func_name, func_args)
-                history.append({"role": "tool", "tool_call_id": tool_call_id, "content": result_text})
-            completion = client.chat(system_prompt, history, tools=tools)
-            assistant_text = client.extract_text(completion)
-        else:
-            assistant_text = client.extract_text(completion)
+                raw_args = tc["function"].get("arguments")
+                try:
+                    func_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except (json.JSONDecodeError, TypeError):
+                    func_args = {}
+                result_text = await _run_tool(func_name, func_args, history, session_id, gov_name)
+                history.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
 
-        # If the final response is blank/whitespace (e.g. the model wanted more
-        # tool rounds than the blocking path runs), force a text-only completion
-        # so it answers from the tool results already in history.
-        if not assistant_text or not assistant_text.strip() or assistant_text in ("(empty response)", "(no response)"):
-            logger.info("Empty response after tools — forcing text-only completion")
+        # Force a clean text-only answer if we exhausted the budget, came back
+        # blank, or the model leaked a text-format tool call instead of executing it.
+        if (not assistant_text or not assistant_text.strip()
+                or "<tool_call>" in assistant_text
+                or assistant_text in ("(empty response)", "(no response)")):
+            logger.info("Forcing text-only completion (rounds exhausted / blank / leaked tool-call)")
             completion = client.chat(system_prompt, history, tools=None)
             assistant_text = client.extract_text(completion)
 
