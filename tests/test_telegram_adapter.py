@@ -1,6 +1,7 @@
 """Unit tests for the Telegram adapter's pure logic + the security gate (httpx mocked)."""
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app import telegram_adapter as ta
@@ -65,10 +66,12 @@ def sent(monkeypatch):
     return calls
 
 
-def _msg(user_id=111, chat_id=555, text="hello", thread_id=None):
+def _msg(user_id=111, chat_id=555, text="hello", thread_id=None, is_topic=False):
     m = {"chat": {"id": chat_id}, "from": {"id": user_id}, "text": text}
     if thread_id:
         m["message_thread_id"] = thread_id
+    if is_topic:
+        m["is_topic_message"] = True
     return m
 
 
@@ -93,13 +96,41 @@ def test_handle_message_allowed_calls_chat(monkeypatch, sent):
         return "the answer"
 
     monkeypatch.setattr(ta, "call_chat", fake_call)
-    ta.handle_message(_msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7),
+    # real forum topic (is_topic_message=True) => threaded session + threaded reply
+    ta.handle_message(_msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True),
                       allowed={111}, public_key="PK")
     assert captured["message"] == "what shipped?"
     assert captured["session_id"] == "tg:555:7"
     assert captured["public_key"] == "PK"
     assert sent and sent[0]["text"] == "the answer"
     assert sent[0]["thread_id"] == 7
+
+
+def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
+    # thread_id present but is_topic_message False (a reply-thread) => no thread routing,
+    # session falls back to :0, reply sent without a thread id (avoids the 400).
+    monkeypatch.setattr(ta, "call_chat", lambda message, session_id, public_key: f"ses={session_id}")
+    ta.handle_message(_msg(user_id=111, chat_id=555, text="hi", thread_id=4242),
+                      allowed={111}, public_key="PK")
+    assert sent and sent[0]["text"] == "ses=tg:555:0"
+    assert sent[0]["thread_id"] is None
+
+
+def test_send_message_retries_without_thread_on_400(monkeypatch):
+    posts: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None):  # noqa: A002
+        posts.append(dict(json))  # snapshot — send_message mutates+reuses the dict
+        # first attempt (with thread) 400s; retry (no thread) ok
+        status = 400 if "message_thread_id" in json else 200
+        body = {"ok": status == 200, "description": "message thread not found"}
+        return httpx.Response(status, json=body, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ta.httpx, "post", fake_post)
+    ta.send_message(555, "hello", thread_id=99999)
+    assert len(posts) == 2
+    assert "message_thread_id" in posts[0]
+    assert "message_thread_id" not in posts[1]  # fallback dropped it
 
 
 def test_handle_message_help_no_chat_call(monkeypatch, sent):
