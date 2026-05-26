@@ -42,6 +42,23 @@ def test_chunk_text_short_passthrough():
     assert ta.chunk_text("") == ["(no response)"]
 
 
+def test_chunk_text_whitespace_only_becomes_placeholder():
+    # whitespace must NOT be sent (Telegram: "text must be non-empty")
+    assert ta.chunk_text("   \n  ") == ["(no response)"]
+    assert ta.chunk_text("\n") == ["(no response)"]
+
+
+def test_call_chat_whitespace_response_falls_back(monkeypatch):
+    monkeypatch.setattr(ta, "create_jwt", lambda pk: "tok")
+
+    def fake_post(url, json=None, headers=None, timeout=None):  # noqa: A002
+        return httpx.Response(200, json={"response": "  \n "}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ta.httpx, "post", fake_post)
+    out = ta.call_chat("q", "tg:1:0", "PK")
+    assert out.strip() != "" and "empty response" in out.lower()
+
+
 def test_chunk_text_splits_long_on_newlines():
     block = ("line\n" * 2000)  # ~10k chars, well over 4096
     chunks = ta.chunk_text(block)

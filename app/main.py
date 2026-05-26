@@ -1887,15 +1887,20 @@ async def chat_blocking(request: Request) -> JSONResponse:
         else:
             assistant_text = client.extract_text(completion)
 
-        # If the final response is still empty (LLM wants more tools than we gave),
-        # force a completion without tools
-        if not assistant_text or assistant_text in ("(empty response)", "(no response)"):
+        # If the final response is blank/whitespace (e.g. the model wanted more
+        # tool rounds than the blocking path runs), force a text-only completion
+        # so it answers from the tool results already in history.
+        if not assistant_text or not assistant_text.strip() or assistant_text in ("(empty response)", "(no response)"):
             logger.info("Empty response after tools — forcing text-only completion")
             completion = client.chat(system_prompt, history, tools=None)
             assistant_text = client.extract_text(completion)
 
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+    # Never return a blank response — Telegram (and other clients) reject empty text.
+    if not assistant_text or not assistant_text.strip():
+        assistant_text = "(Autopilot produced an empty response — try rephrasing or breaking the request into smaller steps.)"
 
     proposal = None
     try:

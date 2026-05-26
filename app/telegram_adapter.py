@@ -60,7 +60,7 @@ def build_session_id(chat_id: int, thread_id: int | None) -> str:
 
 def chunk_text(text: str, limit: int = _MESSAGE_LIMIT) -> list[str]:
     """Split a long reply into Telegram-sized chunks, preferring line breaks."""
-    text = text or "(no response)"
+    text = text if (text and text.strip()) else "(no response)"
     if len(text) <= limit:
         return [text]
     chunks: list[str] = []
@@ -142,7 +142,9 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
         logger.warning("chat-blocking HTTP %s: %s", resp.status_code, resp.text[:300])
         return f"⚠️ Autopilot returned HTTP {resp.status_code}."
     data = resp.json()
-    text = data.get("response", "") or "(no response)"
+    text = (data.get("response") or "").strip()
+    if not text:
+        text = "⚠️ Autopilot returned an empty response. Try rephrasing, or break the request into smaller steps."
     if data.get("proposal"):
         text += "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
     return text
