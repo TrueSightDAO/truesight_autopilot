@@ -1,0 +1,19 @@
+[Unit]
+Description=TrueSight Autopilot — Telegram adapter (private single-user chat)
+After=network.target truesight-autopilot.service
+Wants=truesight-autopilot.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/truesight_autopilot
+Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/opt/truesight_autopilot/.env
+ExecStart=/opt/truesight_autopilot/.venv/bin/python -m app.telegram_adapter
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

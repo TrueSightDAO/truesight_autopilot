@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # Tavily — web search / page extraction for the chat agent
     tavily_api_key: str = Field(default="", validation_alias="TAVILY_API")
 
+    # Telegram — private single-user chat bot in front of /chat-blocking
+    telegram_bot_api_key: str = Field(default="", validation_alias="TELEGRAM_BOT_API_KEY")
+    # Comma-separated numeric Telegram user IDs allowed to talk to the bot.
+    # Empty = bootstrap mode: the bot replies with the sender's own ID so you can pin it.
+    telegram_allowed_user_ids: str = Field(default="", validation_alias="TELEGRAM_ALLOWED_USER_IDS")
+    # Which governor identity the bot speaks as (resolved to a public key from the registry).
+    telegram_governor_name: str = Field(default="Gary Teh", validation_alias="TELEGRAM_GOVERNOR_NAME")
+    # Where the FastAPI chat service is reachable from the adapter process.
+    autopilot_chat_url: str = Field(default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL")
+
     # Edgar
     email: str = os.getenv("EMAIL", "")
     public_key: str = os.getenv("PUBLIC_KEY", "")

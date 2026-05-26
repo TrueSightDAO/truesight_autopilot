@@ -129,16 +129,25 @@ scp -i "$EC2_KEY" /tmp/truesight-autopilot-logs.sh "$EC2_HOST:~/truesight-autopi
 ssh -i "$EC2_KEY" "$EC2_HOST" "chmod +x ~/truesight-autopilot-logs.sh"
 rm /tmp/truesight-autopilot-logs.sh
 
-echo "=== Installing systemd service ==="
+echo "=== Installing systemd services ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot.service /etc/systemd/system/
+    sudo cp $REMOTE_DIR/systemd/truesight-autopilot-telegram.service /etc/systemd/system/
     sudo systemctl daemon-reload
-    sudo systemctl enable truesight-autopilot
+    sudo systemctl enable truesight-autopilot truesight-autopilot-telegram
     echo "Waiting 5s for active requests to drain before restart..."
     sleep 5
     sudo systemctl restart truesight-autopilot
+    # Start the Telegram adapter only when a bot token is configured.
+    if grep -q '^TELEGRAM_BOT_API_KEY=.' $REMOTE_DIR/.env 2>/dev/null; then
+        sudo systemctl restart truesight-autopilot-telegram
+    else
+        echo 'TELEGRAM_BOT_API_KEY not set in .env — leaving telegram adapter stopped.'
+        sudo systemctl stop truesight-autopilot-telegram 2>/dev/null || true
+    fi
     sleep 2
     sudo systemctl status truesight-autopilot --no-pager
+    sudo systemctl status truesight-autopilot-telegram --no-pager || true
 "
 
 echo "=== Checking health ==="
