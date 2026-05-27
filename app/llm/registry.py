@@ -21,9 +21,11 @@ def _ensure_providers() -> None:
         return
     from .deepseek import DeepSeekProvider as _D
     from .bigmodel import BigModelProvider as _B
+    from .litellm_provider import LiteLLMProvider as _L
 
     _PROVIDERS["deepseek"] = _D
     _PROVIDERS["bigmodel"] = _B
+    _PROVIDERS["litellm"] = _L
 
 
 def get_provider(name: str | None = None) -> LLMProvider:
