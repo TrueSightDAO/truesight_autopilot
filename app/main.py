@@ -1209,8 +1209,7 @@ def _auto_name_session(public_key: str, request: Request, history: list, user_me
     clean = user_message.replace("[GOVERNOR_IDENTITY:", "").split("[File attachment:")[0].strip()
     name = clean[:50].replace("\n", " ") if clean else ""
     if name:
-        user_key = _user_name_for_key(public_key)
-        _save_session_index(user_key, sid, name)
+        _save_session_index(public_key, sid, name)
 
 
 def _pending_file(public_key: str) -> Path:
