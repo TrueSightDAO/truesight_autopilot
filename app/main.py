@@ -2139,6 +2139,8 @@ _SELF_HEAL_WINDOW = 3600  # seconds
 
 
 def _looks_base64(s: str) -> bool:
+    """Quick heuristic: base64 strings have no spaces and are mostly alphanumeric with +/=/."""
+    return " " not in s[:100] and len(s) > 50 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in s[:200].replace("\n", ""))
 
 
 def _sanitise_tool_messages(history: list[dict]) -> None:
@@ -2157,8 +2159,6 @@ def _sanitise_tool_messages(history: list[dict]) -> None:
                 history.pop(i)
                 continue
         i += 1
-    """Quick heuristic: base64 strings have no spaces and are mostly alphanumeric with +/=/."""
-    return " " not in s[:100] and len(s) > 50 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in s[:200].replace("\n", ""))
 
 
 def _record_chat_error(error_detail: str) -> None:
