@@ -337,10 +337,10 @@ class EmailPoller:
         raw = (settings.bugsnag_project_repos_raw or "").strip()
         if raw:
             try:
-                mapping = _json.loads(raw)
+                mapping = json.loads(raw)
                 if isinstance(mapping, dict):
                     repo = mapping.get(project)
-            except _json.JSONDecodeError as e:
+            except json.JSONDecodeError as e:
                 logger.warning("BUGSNAG_PROJECT_REPOS is not valid JSON: %s", e)
 
         if not repo:
