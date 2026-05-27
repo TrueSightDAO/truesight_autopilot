@@ -22,8 +22,10 @@ import concurrent.futures
 import html
 import json
 import logging
+import os
 import re
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -39,6 +41,7 @@ _MESSAGE_LIMIT = 4096          # Telegram hard cap per message
 _CHAT_TIMEOUT = 180.0          # /chat-blocking can run tools + multiple LLM calls
 _POLL_TIMEOUT = 30             # long-poll seconds
 _TYPING_INTERVAL = 4.0         # Telegram's "typing…" lasts ~5s; refresh under that
+_ATTACH_DIR = "/tmp/tg_attachments"   # adapter + autopilot share the EC2 box / user
 
 
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
@@ -146,6 +149,42 @@ def get_updates(offset: int | None) -> list[dict[str, Any]]:
     resp = httpx.get(_api("getUpdates"), params=params, timeout=_POLL_TIMEOUT + 10)
     resp.raise_for_status()
     return resp.json().get("result", [])
+
+
+def extract_attachment_file_id(msg: dict[str, Any]) -> str | None:
+    """Return the Telegram file_id of a photo (largest size) or document, if any."""
+    photos = msg.get("photo")
+    if isinstance(photos, list) and photos:
+        return (photos[-1] or {}).get("file_id")  # last entry = highest resolution
+    doc = msg.get("document")
+    if isinstance(doc, dict) and doc.get("file_id"):
+        return doc["file_id"]
+    return None
+
+
+def download_telegram_file(file_id: str) -> str | None:
+    """Download a Telegram file to a local path the autopilot tools can read.
+    Returns the absolute path, or None on failure."""
+    try:
+        meta = httpx.get(_api("getFile"), params={"file_id": file_id}, timeout=20.0)
+        meta.raise_for_status()
+        file_path = (meta.json().get("result") or {}).get("file_path")
+        if not file_path:
+            return None
+        ext = os.path.splitext(file_path)[1] or ".bin"
+        os.makedirs(_ATTACH_DIR, exist_ok=True)
+        dest = os.path.join(_ATTACH_DIR, f"{uuid.uuid4().hex}{ext}")
+        url = f"{_TELEGRAM_API}/file/bot{settings.telegram_bot_api_key}/{file_path}"
+        with httpx.stream("GET", url, timeout=60.0) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as fh:
+                for chunk in resp.iter_bytes():
+                    fh.write(chunk)
+        logger.info("downloaded telegram attachment → %s", dest)
+        return dest
+    except Exception as e:  # noqa: BLE001
+        logger.warning("telegram file download failed: %s", e)
+        return None
 
 
 def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int | None:
@@ -407,7 +446,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     thread_id = msg.get("message_thread_id") if msg.get("is_topic_message") else None
     user_id = (msg.get("from") or {}).get("id")
     text = (msg.get("text") or "").strip()
-    if chat_id is None or user_id is None or not text:
+    caption = (msg.get("caption") or "").strip()
+    attachment_file_id = extract_attachment_file_id(msg)
+    if chat_id is None or user_id is None or (not text and not attachment_file_id):
         return
 
     # Security gate
@@ -462,6 +503,24 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         return
 
     session_id = build_session_id(chat_id, thread_id)
+
+    # Attachment (photo / document): download it to a shared path and let the
+    # agent's scan_qr_* / read_local_file tools inspect it via the chat loop.
+    if attachment_file_id:
+        local_path = download_telegram_file(attachment_file_id)
+        if not local_path:
+            send_message(chat_id, "⚠️ Couldn't download that attachment from Telegram.", thread_id)
+            return
+        msg_text = caption or text or "Please inspect the attached file."
+        msg_text += (f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
+                     f"scan_qr_batch for QR images, or read_local_file for text. Then act on the result.]")
+        try:
+            call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("call_chat failed (attachment)")
+            send_message(chat_id, f"⚠️ Error processing the attachment: {e}", thread_id)
+        return
+
     try:
         call_chat_with_progress(chat_id, thread_id, text, session_id, public_key)
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
