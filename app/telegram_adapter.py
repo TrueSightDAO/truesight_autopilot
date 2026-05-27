@@ -284,10 +284,10 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
         emoji = tool_emoji.get(name, "⚙️")
         return f"{emoji} {label} …"
 
-            round_num = 0
-            tool_active: str | None = None
-            thinking_text: str = ""
-            last_edit = time.time()
+    round_num = 0
+    tool_active: str | None = None
+    thinking_text: str = ""
+    last_edit = time.time()
 
     try:
         with httpx.stream(
