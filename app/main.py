@@ -962,7 +962,17 @@ async def _run_tool_round_loop(
 
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
-                func_args = json.loads(tc["function"]["arguments"])
+                raw_args = tc["function"]["arguments"]
+                try:
+                    func_args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    logger.warning("[%d] %sTOOL ARGS INVALID for %s: %s", req_id, log_prefix, func_name, raw_args[:200])
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps({"error": "invalid_arguments", "raw": raw_args[:500]}),
+                    })
+                    continue
                 tool_call_id = tc["id"]
                 logger.info("[%d] %sTOOL CALL: %s args=%.200s", req_id, log_prefix, func_name, json.dumps(func_args))
 
