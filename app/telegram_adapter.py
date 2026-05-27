@@ -277,6 +277,14 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     send_message(chat_id, reply, thread_id)
 
 
+def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
+    """Wrap handle_message for background-thread dispatch so exceptions don't vanish."""
+    try:
+        handle_message(msg, allowed, public_key)
+    except Exception:  # noqa: BLE001
+        logger.exception("handle_message crashed")
+
+
 def run() -> None:
     if not settings.telegram_bot_api_key:
         raise SystemExit("TELEGRAM_BOT_API_KEY is not set — cannot start Telegram adapter.")
@@ -294,21 +302,19 @@ def run() -> None:
                        settings.telegram_governor_name)
 
     offset: int | None = None
-    while True:
-        try:
-            updates = get_updates(offset)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("getUpdates failed: %s — backing off 5s", e)
-            time.sleep(5)
-            continue
-        for upd in updates:
-            offset = upd["update_id"] + 1
-            msg = upd.get("message") or upd.get("edited_message")
-            if msg:
-                try:
-                    handle_message(msg, allowed, public_key)
-                except Exception:  # noqa: BLE001
-                    logger.exception("handle_message crashed on update %s", upd.get("update_id"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="tg-handle") as executor:
+        while True:
+            try:
+                updates = get_updates(offset)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("getUpdates failed: %s — backing off 5s", e)
+                time.sleep(5)
+                continue
+            for upd in updates:
+                offset = upd["update_id"] + 1
+                msg = upd.get("message") or upd.get("edited_message")
+                if msg:
+                    executor.submit(_handle_message_safe, msg, allowed, public_key)
 
 
 def main() -> None:
