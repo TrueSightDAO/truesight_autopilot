@@ -18,6 +18,9 @@ def test_markdown_to_telegram_html():
     assert h("* Item two") == "• Item two"
     assert h("Use `code` here") == "Use <code>code</code> here"
     assert h("[link](https://x.com)") == '<a href="https://x.com">link</a>'
+    # header containing bold must NOT produce nested <b><b> (Telegram 400s on it)
+    assert h("### 1. **SF Tech Fest 2026**") == "<b>1. SF Tech Fest 2026</b>"
+    assert "<b><b>" not in h("## **Heading**")
 
 
 def test_markdown_to_telegram_html_escapes_and_codeblocks():

@@ -112,7 +112,10 @@ def markdown_to_telegram_html(md: str) -> str:
     for line in text.split("\n"):
         h = _HEADER_RE.match(line)
         if h:
-            lines.append(f"<b>{h.group(1)}</b>")
+            # header is already bold; strip inner **/__ so the bold pass below
+            # doesn't produce invalid nested <b><b>…</b></b> (Telegram 400s on it)
+            inner = h.group(1).replace("**", "").replace("__", "")
+            lines.append(f"<b>{inner}</b>")
             continue
         b = _BULLET_RE.match(line)
         if b:
