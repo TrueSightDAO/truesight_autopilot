@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     # Where the FastAPI chat service is reachable from the adapter process.
     autopilot_chat_url: str = Field(default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL")
 
+    # Beta-deploy gate (Telegram /ship). Master switch is OFF by default — even
+    # deployed, the gate does nothing until explicitly enabled.
+    beta_deploy_gate_enabled: bool = Field(default=False, validation_alias="BETA_DEPLOY_GATE_ENABLED")
+    # Repos the gate is allowed to merge into (beta only — prod stays manual-promote).
+    beta_deploy_repos: list[str] = ["dapp_beta"]
+    # B6 Tier 2: skip the one-tap confirmation and merge immediately when CI is green.
+    beta_auto_merge: bool = Field(default=False, validation_alias="BETA_AUTO_MERGE")
+
     # Edgar
     email: str = os.getenv("EMAIL", "")
     public_key: str = os.getenv("PUBLIC_KEY", "")

@@ -498,6 +498,10 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         _handle_research_command(chat_id, thread_id, text, public_key)
         return
 
+    if text.startswith("/ship"):
+        _handle_ship_command(chat_id, thread_id, text)
+        return
+
     if public_key is None:
         send_message(chat_id, "⚠️ No governor identity configured on the server.", thread_id)
         return
@@ -637,6 +641,98 @@ def _handle_reset(chat_id: int, thread_id: int | None, session_id: str, public_k
         send_message(chat_id, f"⚠️ Reset failed: {e}", thread_id)
 
 
+def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict, thread_id: int | None = None) -> None:
+    """Send a message with an inline keyboard (HTML). Falls back to plain on error."""
+    payload: dict[str, Any] = {
+        "chat_id": chat_id, "text": markdown_to_telegram_html(text), "parse_mode": "HTML",
+        "disable_web_page_preview": True, "reply_markup": keyboard,
+    }
+    if thread_id:
+        payload["message_thread_id"] = thread_id
+    try:
+        resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
+        if resp.status_code != 200:
+            logger.warning("sendMessage(keyboard) %s: %s", resp.status_code, resp.text[:200])
+            httpx.post(_api("sendMessage"), json={"chat_id": chat_id, "text": text}, timeout=20.0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("sendMessage(keyboard) failed: %s", e)
+
+
+def answer_callback(callback_query_id: str, text: str = "") -> None:
+    try:
+        httpx.post(_api("answerCallbackQuery"),
+                   json={"callback_query_id": callback_query_id, "text": text}, timeout=10.0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _handle_ship_command(chat_id: int, thread_id: int | None, text: str) -> None:
+    """B5/B6: /ship a beta PR. Lists open beta PRs, or confirms/ships a target."""
+    from . import beta_deploy
+    if not settings.beta_deploy_gate_enabled:
+        send_message(chat_id, "🚦 Beta-deploy gate is **disabled**. Enable with "
+                              "`BETA_DEPLOY_GATE_ENABLED=true` to ship PRs to beta from here.", thread_id)
+        return
+    target = beta_deploy.parse_ship_target(text)
+    if target is None:
+        prs = beta_deploy.list_open_beta_prs()
+        if not prs:
+            send_message(chat_id, "No open PRs on the beta repos. Ask me to make a change "
+                                  "(I'll open a PR on a beta repo), then `/ship`.", thread_id)
+            return
+        for pr in prs[:5]:
+            kb = beta_deploy.build_ship_keyboard(pr["repo"], pr["number"])
+            send_message_with_keyboard(
+                chat_id, f"**{pr['repo']}#{pr['number']}** — {pr['title']}\n{pr['url']}", kb, thread_id)
+        return
+    repo, pr = target
+    if settings.beta_auto_merge:  # B6 — no tap
+        result = beta_deploy.ship_pr(repo, pr)
+        send_message(chat_id, result["message"], thread_id)
+        return
+    kb = beta_deploy.build_ship_keyboard(repo, pr)  # B5 — one-tap confirm
+    send_message_with_keyboard(chat_id, f"Ship **{repo}#{pr}** to beta? I'll verify CI is green first.",
+                               kb, thread_id)
+
+
+def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
+    """Handle an inline-button tap (the beta-deploy 'Ship' / 'Cancel' buttons)."""
+    from . import beta_deploy
+    cb_id = cb.get("id", "")
+    user_id = (cb.get("from") or {}).get("id")
+    data = cb.get("data") or ""
+    msg = cb.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    message_id = msg.get("message_id")
+    thread_id = msg.get("message_thread_id") if msg.get("is_topic_message") else None
+
+    answer_callback(cb_id)  # ack the tap so the spinner stops
+    if not is_allowed(user_id, allowed):
+        answer_callback(cb_id, "Not authorized")
+        return
+
+    action, repo, pr = beta_deploy.parse_callback_data(data)
+    if action != "ship" or not repo or not pr:
+        if chat_id and message_id:
+            edit_message_text(chat_id, message_id, "✕ Cancelled.")
+        return
+
+    if chat_id and message_id:
+        edit_message_text(chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…")
+    result = beta_deploy.ship_pr(repo, pr)
+    if chat_id and message_id:
+        edit_message_text(chat_id, message_id, result["message"])
+    elif chat_id:
+        send_message(chat_id, result["message"], thread_id)
+
+
+def _handle_callback_safe(cb: dict[str, Any], allowed: set[int]) -> None:
+    try:
+        handle_callback_query(cb, allowed)
+    except Exception:  # noqa: BLE001
+        logger.exception("handle_callback_query crashed")
+
+
 def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
     """Wrap handle_message for background-thread dispatch so exceptions don't vanish."""
     try:
@@ -675,6 +771,9 @@ def run() -> None:
                 msg = upd.get("message") or upd.get("edited_message")
                 if msg:
                     executor.submit(_handle_message_safe, msg, allowed, public_key)
+                cb = upd.get("callback_query")
+                if cb:
+                    executor.submit(_handle_callback_safe, cb, allowed)
 
 
 def main() -> None:
