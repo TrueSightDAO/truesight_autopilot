@@ -143,9 +143,18 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             text,
             flags=_re.DOTALL,
         )
-        # Also strip any remaining DSML invoke blocks not wrapped in a parent tag
+        # Strip DSML invoke blocks not wrapped in a parent tag
         text = _re.sub(
             r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>',
+            '',
+            text,
+            flags=_re.DOTALL,
+        )
+        # Strip standalone (non-DSML) invoke blocks — DeepSeek sometimes emits
+        # <invoke name="func"><parameter ...>value</parameter></invoke> without
+        # any wrapper tag, leaking raw XML into the chat response.
+        text = _re.sub(
+            r'<invoke\s+name="[^"]+"\s*>.*?</invoke>',
             '',
             text,
             flags=_re.DOTALL,

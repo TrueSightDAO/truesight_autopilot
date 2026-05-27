@@ -122,11 +122,15 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
         try:
             data = json.loads(log_path.read_text(encoding="utf-8"))
             messages = data.get("full_history") or data.get("recent_messages") or []
-            # Clean legacy XML leaks from old sessions
+            # Clean legacy XML leaks from old sessions (DeepSeek DSML tool calls)
             for m in messages:
                 content = m.get("content", "")
-                if isinstance(content, str) and "<function_calls>" in content:
-                    m["content"] = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
+                if isinstance(content, str) and ("<function_calls>" in content or "<invoke " in content or "<||DSML||" in content):
+                    c = content
+                    c = re.sub(r'<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>', '', c, flags=re.DOTALL)
+                    c = re.sub(r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>', '', c, flags=re.DOTALL)
+                    c = re.sub(r'<invoke\s+name="[^"]+"\s*>.*?</invoke>', '', c, flags=re.DOTALL)
+                    m["content"] = c.strip()
             _sessions[session_key] = messages
             logger.info("Restored session %s with %d messages", sid_hash, len(messages))
             return messages
