@@ -1,10 +1,54 @@
 """Unit tests for the Telegram adapter's pure logic + the security gate (httpx mocked)."""
 from __future__ import annotations
 
+import time
+
 import httpx
 import pytest
 
 from app import telegram_adapter as ta
+
+
+def test_markdown_to_telegram_html():
+    h = ta.markdown_to_telegram_html
+    assert h("## Upcoming Events") == "<b>Upcoming Events</b>"
+    assert h("### 1. SF Tech Fest") == "<b>1. SF Tech Fest</b>"
+    assert h("**Date**: June 12") == "<b>Date</b>: June 12"
+    assert h("- Item one") == "• Item one"
+    assert h("* Item two") == "• Item two"
+    assert h("Use `code` here") == "Use <code>code</code> here"
+    assert h("[link](https://x.com)") == '<a href="https://x.com">link</a>'
+
+
+def test_markdown_to_telegram_html_escapes_and_codeblocks():
+    h = ta.markdown_to_telegram_html
+    # raw < > & in text must be escaped so Telegram HTML parses
+    assert h("a < b & c > d") == "a &lt; b &amp; c &gt; d"
+    # fenced code becomes <pre> with escaped inner
+    out = h("```json\n{\"a\": 1 < 2}\n```")
+    assert out.startswith("<pre>") and out.endswith("</pre>")
+    assert "&lt;" in out and "@@TGCODE" not in out  # escaped + placeholder restored
+
+
+def test_markdown_to_telegram_html_no_stray_placeholders():
+    out = ta.markdown_to_telegram_html("text `one` and `two` and ```\nblock\n```")
+    assert "@@TGCODE" not in out
+    assert out.count("<code>") == 2 and "<pre>block</pre>" in out
+
+
+def test_call_chat_with_typing_refreshes_indicator(monkeypatch):
+    typing_calls = {"n": 0}
+    monkeypatch.setattr(ta, "send_typing", lambda *a, **k: typing_calls.__setitem__("n", typing_calls["n"] + 1))
+    monkeypatch.setattr(ta, "_TYPING_INTERVAL", 0.05)
+
+    def slow_call(message, session_id, public_key):
+        time.sleep(0.22)  # spans several typing intervals
+        return "done"
+
+    monkeypatch.setattr(ta, "call_chat", slow_call)
+    out = ta.call_chat_with_typing(123, None, "q", "tg:1:0", "PK")
+    assert out == "done"
+    assert typing_calls["n"] >= 2  # initial + at least one keep-alive refresh
 
 
 # ── parse_allowed_ids ──

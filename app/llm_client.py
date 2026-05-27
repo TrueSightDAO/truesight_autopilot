@@ -156,7 +156,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
         "agroverse_shop", "agroverse_shop_prod", "dao_client",
         "market_research", "sentiment_importer", "truesight_autopilot",
-        ".github", "agentic_ai_context", "agroverse-inventory",
+        ".github", "agentic_ai_context", "agroverse-inventory", "dao_protocol",
     ])
     return [
         {
