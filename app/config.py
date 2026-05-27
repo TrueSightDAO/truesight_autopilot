@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # Allowed repos for code modifications
     allowed_repos: list[str] = [
-        "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
+        "dapp", "dapp_beta", "tokenomics", "truesight_me", "truesight_me_prod",
         "agroverse_shop", "agroverse_shop_prod", "dao_client",
         "market_research", "go_to_market", "sentiment_importer", "truesight_autopilot",
         "agentic_ai_context", "dao_protocol",
