@@ -888,7 +888,7 @@ async def _run_tool_round_loop(
     `queue_msg_id` flips the labels and includes the ID in SSE events
     when this turn is processing a queued (interjected-after-done) message.
     """
-    MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "15"))
+    MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "30"))
     assistant_text = ""
     round_num = 0
     state["cancelled"] = False
@@ -1877,7 +1877,7 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # single round, which truncated multi-step answers and could leak an
     # unexecuted tool call as text). Keep running tool rounds until the model
     # returns a final text answer or we hit the round budget.
-    max_rounds = int(os.getenv("CHAT_BLOCKING_MAX_ROUNDS", "8"))
+    max_rounds = int(os.getenv("CHAT_BLOCKING_MAX_ROUNDS", "15"))
     assistant_text = ""
     try:
         for _round in range(max_rounds):
