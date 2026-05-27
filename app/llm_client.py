@@ -153,7 +153,7 @@ class LLMClient:
 # Default tool schemas for governor chat
 def get_tool_schemas() -> list[dict[str, Any]]:
     ALLOWED_CHAT_REPOS = ", ".join([
-        "dapp", "tokenomics", "truesight_me", "truesight_me_prod",
+        "dapp", "dapp_beta", "tokenomics", "truesight_me", "truesight_me_prod",
         "agroverse_shop", "agroverse_shop_prod", "dao_client",
         "market_research", "sentiment_importer", "truesight_autopilot",
         ".github", "agentic_ai_context", "agroverse-inventory", "dao_protocol",
