@@ -228,3 +228,49 @@ def build_role_menu() -> list[dict[str, str]]:
     return [
         {"role": "assistant", "content": ROLE_SELECTION_MESSAGE},
     ]
+
+
+# ── Context reset for old sessions ─────────────────────────────────────────
+
+RESET_CONTEXT_THRESHOLD = 20
+"""Sessions with more than this many messages trigger a 'keep or reset?' prompt when
+a role is first set. This prevents 50+ message legacy sessions from drowning the
+LLM in stale context."""
+
+PENDING_ROLE_TAG = "[PENDING_ROLE:"
+"""Tag to mark a role choice that's awaiting context decision."""
+
+
+def pending_role_tag(role: Role) -> str:
+    return f"{PENDING_ROLE_TAG} {role.key}]"
+
+
+def tag_to_pending_role(tag: str) -> Role | None:
+    if not tag.startswith(PENDING_ROLE_TAG):
+        return None
+    key = tag[len(PENDING_ROLE_TAG):].strip().rstrip("]")
+    return ROLES.get(key)
+
+
+def find_pending_role(history: list[dict]) -> Role | None:
+    """Scan history for a pending role tag. Returns role if found."""
+    for msg in history:
+        content = msg.get("content", "")
+        if isinstance(content, str) and content.startswith(PENDING_ROLE_TAG):
+            return tag_to_pending_role(content)
+    return None
+
+
+def reset_context_prompt(role: Role, msg_count: int) -> str:
+    return (
+        f"This topic has **{msg_count} messages** from before role selection. "
+        f"Keeping them would make every response very slow and expensive.\n\n"
+        f"**Keep** existing context, or **reset** to start fresh for {role.name}?\n"
+        f"Reply `keep` or `reset`."
+    )
+
+
+def archive_old_history(history: list[dict], role: Role) -> list[dict]:
+    """Remove all messages except those needed for the role setup.
+    Returns a fresh history list with just the role tag."""
+    return [{"role": "system", "content": role_to_tag(role)}]

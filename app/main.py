@@ -11,8 +11,10 @@ import time
 from typing import Any
 
 from .roles import (
-    ROLE_SELECTION_MESSAGE, build_role_menu, find_role_in_history, get_system_prompt_for_role,
-    get_tool_schemas_for_role, resolve_role, set_role_in_history,
+    RESET_CONTEXT_THRESHOLD, ROLE_SELECTION_MESSAGE, archive_old_history,
+    build_role_menu, find_pending_role, find_role_in_history,
+    get_system_prompt_for_role, get_tool_schemas_for_role,
+    pending_role_tag, reset_context_prompt, resolve_role, set_role_in_history,
 )
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -1659,20 +1661,50 @@ async def chat(request: Request):
                 _sse_single_response(ROLE_SELECTION_MESSAGE),
                 media_type="text/event-stream",
             )
+
+        # Check for pending role (user is in "keep or reset?" flow)
+        pending = find_pending_role(history)
+        if pending:
+            clean = user_message.strip().lower()
+            if clean in ("reset", "r", "yes", "y"):
+                history = archive_old_history(history, pending)
+                set_role_in_history(history, pending)
+                _log_session(session_id, history)
+                return StreamingResponse(
+                    _sse_single_response(f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"),
+                    media_type="text/event-stream",
+                )
+            # "keep" or anything else — keep history, set role
+            # Remove pending tag, set real role
+            history = [m for m in history if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))]
+            set_role_in_history(history, pending)
+            _log_session(session_id, history)
+            return StreamingResponse(
+                _sse_single_response(f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"),
+                media_type="text/event-stream",
+            )
+
         # Session exists but no role set — try to parse user message as role choice
         role = resolve_role(user_message)
         if role:
+            msg_count = sum(1 for m in history if m.get("role") in ("user", "assistant"))
+            if msg_count >= RESET_CONTEXT_THRESHOLD:
+                # Large existing session — ask about reset before committing
+                history.insert(0, {"role": "system", "content": pending_role_tag(role)})
+                _log_session(session_id, history)
+                return StreamingResponse(
+                    _sse_single_response(reset_context_prompt(role, msg_count)),
+                    media_type="text/event-stream",
+                )
             set_role_in_history(history, role)
             _log_session(session_id, history)
-            confirmation = f"✅ Role set: **{role.name}**.\n\nI'll use the tools and knowledge suited for this role. What would you like me to work on?"
             return StreamingResponse(
-                _sse_single_response(confirmation),
+                _sse_single_response(f"✅ Role set: **{role.name}**.\n\nWhat would you like me to work on?"),
                 media_type="text/event-stream",
             )
         # Still no role match — show menu again
-        menu_msg = f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
         return StreamingResponse(
-            _sse_single_response(menu_msg),
+            _sse_single_response(f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"),
             media_type="text/event-stream",
         )
 
@@ -1922,11 +1954,31 @@ async def chat_blocking(request: Request) -> JSONResponse:
             history = build_role_menu()
             _log_session(session_id, history)
             return JSONResponse({"response": ROLE_SELECTION_MESSAGE})
+
+        # Check for pending role (user is in "keep or reset?" flow)
+        pending = find_pending_role(history)
+        if pending:
+            clean = user_message.strip().lower()
+            if clean in ("reset", "r", "yes", "y"):
+                history = archive_old_history(history, pending)
+                set_role_in_history(history, pending)
+                _log_session(session_id, history)
+                return JSONResponse({"response": f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"})
+            history = [m for m in history if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))]
+            set_role_in_history(history, pending)
+            _log_session(session_id, history)
+            return JSONResponse({"response": f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"})
+
         role = resolve_role(user_message)
         if role:
+            msg_count = sum(1 for m in history if m.get("role") in ("user", "assistant"))
+            if msg_count >= RESET_CONTEXT_THRESHOLD:
+                history.insert(0, {"role": "system", "content": pending_role_tag(role)})
+                _log_session(session_id, history)
+                return JSONResponse({"response": reset_context_prompt(role, msg_count)})
             set_role_in_history(history, role)
             _log_session(session_id, history)
-            return JSONResponse({"response": f"✅ Role set: {role.name}.\n\nI'll use the tools and knowledge suited for this role. What would you like me to work on?"})
+            return JSONResponse({"response": f"✅ Role set: {role.name}.\n\nWhat would you like me to work on?"})
         return JSONResponse({"response": f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"})
 
     gov_name = _gov_name_for_key(public_key)
