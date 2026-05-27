@@ -301,14 +301,14 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "upload_file_to_github",
-                "description": "Upload a file to a TrueSightDAO GitHub repo via the Contents API.",
+                "description": "Create or update a file in a TrueSightDAO GitHub repo. Content is auto-encoded (pass plain text).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
-                        "path": {"type": "string", "description": "Path inside the repo."},
-                        "content": {"type": "string", "description": "Base64-encoded file content."},
-                        "message": {"type": "string", "description": "Commit message."},
+                        "path": {"type": "string", "description": "Path inside the repo, e.g. 'reports/market_analysis.md'."},
+                        "content": {"type": "string", "description": "The file content as plain text (base64-encoding is handled automatically)."},
+                        "message": {"type": "string", "description": "Short one-line commit message (max 72 chars), e.g. 'add market analysis report'."},
                         "branch": {"type": "string", "description": "Branch name. Default: main", "default": "main"},
                     },
                     "required": ["repo", "path", "content", "message"],

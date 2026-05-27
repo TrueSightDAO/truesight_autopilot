@@ -853,11 +853,18 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         return json.dumps({"status": "success" if ok else "error", "message": "Contribution submitted" if ok else "Submission failed"})
     if func_name == "upload_file_to_github":
         from .tools.upload_file_to_github import upload_file_to_github as _upload
+        raw_content = func_args.get("content", "")
+        # Auto-detect: if content looks like plain text (not base64), encode it
+        if raw_content and not _looks_base64(raw_content):
+            import base64 as _b64
+            raw_content = _b64.b64encode(raw_content.encode("utf-8")).decode("ascii")
+        # Trim overly long commit messages (LLM sometimes dumps report text here)
+        raw_message = str(func_args.get("message", "Upload via autopilot"))[:72]
         result = _upload(
             repo=func_args.get("repo", ""),
             path=func_args.get("path", ""),
-            content=func_args.get("content", ""),
-            message=func_args.get("message", "Upload via autopilot"),
+            content=raw_content,
+            message=raw_message,
             branch=func_args.get("branch", "main"),
         )
         if result.get("status") == "success":
@@ -2113,6 +2120,11 @@ async def force_refresh_governors(request: Request) -> JSONResponse:
 _self_heal_errors: list[dict] = []
 _SELF_HEAL_THRESHOLD = 3  # consecutive errors before opening a fix PR
 _SELF_HEAL_WINDOW = 3600  # seconds
+
+
+def _looks_base64(s: str) -> bool:
+    """Quick heuristic: base64 strings have no spaces and are mostly alphanumeric with +/=/."""
+    return " " not in s[:100] and len(s) > 50 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in s[:200].replace("\n", ""))
 
 
 def _record_chat_error(error_detail: str) -> None:
