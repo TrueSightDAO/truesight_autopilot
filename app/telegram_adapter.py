@@ -18,7 +18,10 @@ minting its own JWT is equivalent to any other trusted server-side code.
 """
 from __future__ import annotations
 
+import concurrent.futures
+import html
 import logging
+import re
 import time
 from typing import Any
 
@@ -34,6 +37,7 @@ _TELEGRAM_API = "https://api.telegram.org"
 _MESSAGE_LIMIT = 4096          # Telegram hard cap per message
 _CHAT_TIMEOUT = 180.0          # /chat-blocking can run tools + multiple LLM calls
 _POLL_TIMEOUT = 30             # long-poll seconds
+_TYPING_INTERVAL = 4.0         # Telegram's "typing…" lasts ~5s; refresh under that
 
 
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
@@ -76,6 +80,55 @@ def chunk_text(text: str, limit: int = _MESSAGE_LIMIT) -> list[str]:
     return chunks
 
 
+_FENCE_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n?(.*?)```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
+_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
+_BOLD_US_RE = re.compile(r"__([^_\n]+)__")
+_HEADER_RE = re.compile(r"^\s*#{1,6}\s+(.*\S)\s*$")
+_BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
+
+
+def markdown_to_telegram_html(md: str) -> str:
+    """Convert the subset of Markdown LLMs emit into Telegram-supported HTML.
+
+    Telegram has no headings, uses <b>/<i>/<code>/<pre>/<a>, and only needs
+    &, <, > escaped in text. Strategy: stash code (escaped) behind placeholders,
+    escape the rest, then map headings/bold/bullets/links to tags, then restore.
+    """
+    stash: dict[str, str] = {}
+
+    def _store(inner: str, tag: str) -> str:
+        key = f"@@TGCODE{len(stash)}@@"
+        stash[key] = f"<{tag}>{html.escape(inner, quote=False)}</{tag}>"
+        return key
+
+    text = _FENCE_RE.sub(lambda m: _store(m.group(1).rstrip("\n"), "pre"), md)
+    text = _INLINE_CODE_RE.sub(lambda m: _store(m.group(1), "code"), text)
+    text = html.escape(text, quote=False)                       # escape remaining &<>
+    text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
+
+    lines: list[str] = []
+    for line in text.split("\n"):
+        h = _HEADER_RE.match(line)
+        if h:
+            lines.append(f"<b>{h.group(1)}</b>")
+            continue
+        b = _BULLET_RE.match(line)
+        if b:
+            lines.append(f"{b.group(1)}• {b.group(2)}")
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+
+    text = _BOLD_RE.sub(r"<b>\1</b>", text)
+    text = _BOLD_US_RE.sub(r"<b>\1</b>", text)
+
+    for key, val in stash.items():
+        text = text.replace(key, val)
+    return text
+
+
 # ── Telegram + chat I/O ────────────────────────────────────────────────────
 
 def _api(method: str) -> str:
@@ -93,18 +146,24 @@ def get_updates(offset: int | None) -> list[dict[str, Any]]:
 
 def send_message(chat_id: int, text: str, thread_id: int | None = None) -> None:
     for chunk in chunk_text(text):
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+        # Render Markdown → Telegram HTML so headings/bold/bullets/code show up.
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": markdown_to_telegram_html(chunk),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
         if thread_id:
             payload["message_thread_id"] = thread_id
         try:
             resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
             if resp.status_code != 200:
                 logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
-                # e.g. "message thread not found" — retry without the thread so the
-                # reply still reaches the chat rather than vanishing.
-                if thread_id:
-                    payload.pop("message_thread_id", None)
-                    httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
+                # Fallback: send the raw chunk as plain text, no thread. Covers both
+                # "message thread not found" and any HTML parse error — the reply
+                # still lands (just unformatted) instead of vanishing.
+                fallback = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+                httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
         except Exception as e:  # noqa: BLE001
             logger.warning("sendMessage failed: %s", e)
 
@@ -150,6 +209,21 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
     return text
 
 
+def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str,
+                          session_id: str, public_key: str) -> str:
+    """Run call_chat in a worker thread, re-sending the 'typing…' action every
+    few seconds so the indicator stays alive for the whole (often 30-60s+)
+    multi-round generation instead of vanishing after ~5s."""
+    send_typing(chat_id, thread_id)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(call_chat, message, session_id, public_key)
+        while True:
+            try:
+                return future.result(timeout=_TYPING_INTERVAL)
+            except concurrent.futures.TimeoutError:
+                send_typing(chat_id, thread_id)  # keep the indicator alive
+
+
 # ── Update handling + loop ─────────────────────────────────────────────────
 
 def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
@@ -192,9 +266,8 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         return
 
     session_id = build_session_id(chat_id, thread_id)
-    send_typing(chat_id, thread_id)
     try:
-        reply = call_chat(text, session_id, public_key)
+        reply = call_chat_with_typing(chat_id, thread_id, text, session_id, public_key)
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
         reply = f"⚠️ Error talking to autopilot: {e}"
