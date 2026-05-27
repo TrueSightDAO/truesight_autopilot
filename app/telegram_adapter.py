@@ -147,8 +147,10 @@ def get_updates(offset: int | None) -> list[dict[str, Any]]:
     return resp.json().get("result", [])
 
 
-def send_message(chat_id: int, text: str, thread_id: int | None = None) -> None:
-    for chunk in chunk_text(text):
+def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int | None:
+    """Send a message; return the Telegram message_id of the first chunk, or None."""
+    msg_id: int | None = None
+    for i, chunk in enumerate(chunk_text(text)):
         # Render Markdown → Telegram HTML so headings/bold/bullets/code show up.
         payload: dict[str, Any] = {
             "chat_id": chat_id,
@@ -160,15 +162,52 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> None:
             payload["message_thread_id"] = thread_id
         try:
             resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
-            if resp.status_code != 200:
+            if resp.status_code == 200:
+                result = resp.json().get("result", {})
+                if i == 0:
+                    msg_id = result.get("message_id")
+            else:
                 logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
                 # Fallback: send the raw chunk as plain text, no thread. Covers both
                 # "message thread not found" and any HTML parse error — the reply
                 # still lands (just unformatted) instead of vanishing.
                 fallback = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
-                httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
+                resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
+                if i == 0 and resp2.status_code == 200:
+                    msg_id = resp2.json().get("result", {}).get("message_id")
         except Exception as e:  # noqa: BLE001
             logger.warning("sendMessage failed: %s", e)
+    return msg_id
+
+
+def edit_message_text(chat_id: int, message_id: int, text: str) -> bool:
+    """Edit a previously sent message. Returns True on success."""
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": markdown_to_telegram_html(text),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        resp = httpx.post(_api("editMessageText"), json=payload, timeout=10.0)
+        return resp.status_code == 200
+    except Exception as e:  # noqa: BLE001
+        logger.warning("editMessageText failed: %s", e)
+        return False
+
+
+def delete_message(chat_id: int, message_id: int) -> bool:
+    """Delete a message. Returns True on success."""
+    try:
+        resp = httpx.post(
+            _api("deleteMessage"),
+            json={"chat_id": chat_id, "message_id": message_id},
+            timeout=10.0,
+        )
+        return resp.status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def send_typing(chat_id: int, thread_id: int | None = None) -> None:
@@ -210,6 +249,116 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
     if data.get("proposal"):
         text += "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
     return text
+
+
+def call_chat_with_progress(chat_id: int, thread_id: int | None,
+                             message: str, session_id: str, public_key: str) -> str:
+    """POST to /chat (SSE) and send styled interim progress updates to Telegram.
+
+    Flow:
+      1. Send a styled status message with message_id captured.
+      2. Stream SSE events, editing the status message with progress.
+      3. On 'done': send the final response as a new message, delete the status.
+    """
+    token = create_jwt(public_key)
+    headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
+
+    status_id = send_message(chat_id, "🔄 <i>Thinking…</i>", thread_id)
+    if status_id is None:
+        logger.warning("Could not send status message — falling back to blocking chat")
+        return call_chat(message, session_id, public_key)
+
+    tool_emoji: dict[str, str] = {
+        "web_search": "🔍", "web_extract": "📄", "read_context_file": "📚",
+        "read_repo_file": "📖", "read_local_file": "📂", "list_directory": "📁",
+        "list_org_repos": "🗂", "list_prs": "📋", "scan_qr_from_file": "📸",
+        "scan_qr_batch": "📸", "lookup_qr_code": "🔎", "lookup_qr_batch": "🔎",
+        "submit_contribution": "📝", "open_fix_pr": "🔧", "create_dao_submission": "📝",
+        "upload_file_to_github": "📤", "merge_pr": "✅", "register_identity": "🆔",
+        "deploy_autopilot": "🚀", "read_oracle_logs": "🔮",
+    }
+
+    def _label_tool(name: str) -> str:
+        label = name.replace("_", " ")
+        emoji = tool_emoji.get(name, "⚙️")
+        return f"{emoji} <i>{label}</i>"
+
+    round_num = 0
+    tool_active: str | None = None
+    last_edit = time.time()
+
+    try:
+        with httpx.stream(
+            "POST",
+            f"{settings.autopilot_chat_url.rstrip('/')}/chat",
+            json={"message": message},
+            headers=headers,
+            timeout=_CHAT_TIMEOUT,
+        ) as resp:
+            if resp.status_code != 200:
+                edit_message_text(chat_id, status_id, f"⚠️ Autopilot returned HTTP {resp.status_code}.")
+                return f"⚠️ Autopilot returned HTTP {resp.status_code}."
+
+            final_response = ""
+            for line in resp.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    event = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type", "")
+
+                if etype == "heartbeat":
+                    phase = event.get("phase", "llm")
+                    r = event.get("round", 0)
+                    if r != round_num:
+                        round_num = r
+                        tool_active = None
+                    if tool_active is None and round_num > 0:
+                        _msg = f"🔄 <i>Thinking…</i> (round {round_num})"
+                    else:
+                        _msg = f"🔄 <i>Thinking…</i>"
+                    if time.time() - last_edit > 3:
+                        edit_message_text(chat_id, status_id, _msg)
+                        last_edit = time.time()
+
+                elif etype == "tool":
+                    tool_name = event.get("tool", "")
+                    status = event.get("status", "")
+                    if status == "calling":
+                        tool_active = tool_name
+                        _msg = f"{_label_tool(tool_name)} <i>…</i>"
+                        edit_message_text(chat_id, status_id, _msg)
+                        last_edit = time.time()
+                    elif status == "done":
+                        tool_active = None
+
+                elif etype == "done":
+                    final_response = (event.get("response") or "").strip()
+                    if event.get("proposal"):
+                        final_response += "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
+                    break
+
+            # Replace status message with final response
+            if final_response:
+                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(chat_id, status_id, final_response):
+                    return final_response
+                delete_message(chat_id, status_id)
+                send_message(chat_id, final_response, thread_id)
+                return final_response
+            else:
+                edit_message_text(chat_id, status_id, "⚠️ Autopilot produced an empty response.")
+                return "⚠️ Autopilot produced an empty response."
+
+    except httpx.ReadTimeout:
+        edit_message_text(chat_id, status_id, "⚠️ Autopilot timed out. Try a simpler request or try again.")
+        return "⚠️ Autopilot timed out — the LLM or a tool took too long."
+    except Exception as e:
+        logger.exception("call_chat_with_progress failed")
+        edit_message_text(chat_id, status_id, f"⚠️ Error: {e}")
+        return f"⚠️ Error: {e}"
 
 
 def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str,
@@ -270,11 +419,10 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
 
     session_id = build_session_id(chat_id, thread_id)
     try:
-        reply = call_chat_with_typing(chat_id, thread_id, text, session_id, public_key)
+        call_chat_with_progress(chat_id, thread_id, text, session_id, public_key)
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
-        reply = f"⚠️ Error talking to autopilot: {e}"
-    send_message(chat_id, reply, thread_id)
+        send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
 
 
 def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
