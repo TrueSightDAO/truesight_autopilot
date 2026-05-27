@@ -8,6 +8,12 @@ import logging
 import os
 import re
 import time
+from typing import Any
+
+from .roles import (
+    ROLE_SELECTION_MESSAGE, build_role_menu, find_role_in_history, get_system_prompt_for_role,
+    get_tool_schemas_for_role, resolve_role, set_role_in_history,
+)
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, List
@@ -403,6 +409,11 @@ async def auth_challenge(request: Request) -> JSONResponse:
 
 def _sse_event(event_type: str, data: object) -> str:
     return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
+
+
+async def _sse_single_response(text: str):
+    """Yield a single 'done' SSE event — used for non-LLM responses like role menus."""
+    yield _sse_event("done", {"response": text})
 
 
 async def _heartbeat_until_done(task: asyncio.Task, phase: str, session_id: str | None = None, **meta):
@@ -1015,18 +1026,26 @@ async def _run_tool_round_loop(
     state["assistant_text"] = assistant_text
 
 
-async def _stream_chat(user_message: str, history: list[dict], session_id: str, attachment_info: dict | None = None, governor_name: str | None = None, do_not_publish: bool = False):
-    system_prompt = get_system_prompt()
+async def _stream_chat(user_message: str, history: list[dict], session_id: str,
+                       attachment_info: dict | None = None, governor_name: str | None = None,
+                       do_not_publish: bool = False, role=None):
+    system_prompt = get_system_prompt_for_role(role)
     client = LLMClient()
-    tools = get_tool_schemas()
+    tools = get_tool_schemas_for_role(role)
     req_id = int(time.time() * 1000) % 1000000
     logger.info("[%d] CHAT REQ: session=%s msg=%.150s attach=%s", req_id, session_id[:16], user_message, attachment_info is not None)
 
     # Trim history to avoid context overflow (max ~400K chars = ~100K tokens for messages)
+    # Preserve role tags and other system messages at position 0
     MAX_HISTORY_CHARS = 400_000
     total = sum(len(msg.get("content", "")) for msg in history)
     while total > MAX_HISTORY_CHARS and len(history) > 4:
-        removed = history.pop(0)
+        i = 0
+        while i < len(history) and history[i].get("role") == "system":
+            i += 1
+        if i >= len(history) - 1:
+            break
+        removed = history.pop(i)
         total -= len(removed.get("content", ""))
 
     try:
@@ -1628,6 +1647,35 @@ async def chat(request: Request):
 
     session_id = _session_key(public_key, request)
     history = _load_or_create_session(session_id)
+    role = find_role_in_history(history)
+
+    # Role detection for new topics
+    if role is None:
+        if len(history) == 0:
+            # Brand new topic — show role selection menu
+            history = build_role_menu()
+            _log_session(session_id, history)
+            return StreamingResponse(
+                _sse_single_response(ROLE_SELECTION_MESSAGE),
+                media_type="text/event-stream",
+            )
+        # Session exists but no role set — try to parse user message as role choice
+        role = resolve_role(user_message)
+        if role:
+            set_role_in_history(history, role)
+            _log_session(session_id, history)
+            confirmation = f"✅ Role set: **{role.name}**.\n\nI'll use the tools and knowledge suited for this role. What would you like me to work on?"
+            return StreamingResponse(
+                _sse_single_response(confirmation),
+                media_type="text/event-stream",
+            )
+        # Still no role match — show menu again
+        menu_msg = f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
+        return StreamingResponse(
+            _sse_single_response(menu_msg),
+            media_type="text/event-stream",
+        )
+
     # Inject governor identity so the LLM knows who "I" / "me" refers to
     gov_name = _gov_name_for_key(public_key)
     if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
@@ -1644,7 +1692,7 @@ async def chat(request: Request):
 
     async def _stream_with_cleanup():
         try:
-            async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish):
+            async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish, role=role):
                 yield event
         finally:
             _active_streams.pop(session_id, None)
@@ -1822,6 +1870,8 @@ async def chat_upload(
         user_message = f"{user_message_text}\n\nAttached: {filenames}\n{content_part}" if user_message_text.strip() else f"Attached: {filenames}\n{content_part}"
 
         history = _load_or_create_session(session_id)
+        role = find_role_in_history(history)
+        # If no role, default to general (upload endpoints always have history from scanning step)
         gov_name = _gov_name_for_key(public_key)
         if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
             user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
@@ -1829,7 +1879,7 @@ async def chat_upload(
         _auto_name_session(public_key, request, history, user_message)
         _log_session(session_id, history)
 
-        async for event in _stream_chat(user_message, history, session_id, attachment_info=attachment_info, governor_name=gov_name):
+        async for event in _stream_chat(user_message, history, session_id, attachment_info=attachment_info, governor_name=gov_name, role=role):
             yield event
 
     return StreamingResponse(
@@ -1864,14 +1914,29 @@ async def chat_blocking(request: Request) -> JSONResponse:
 
     session_id = _session_key(public_key, request)
     history = _load_or_create_session(session_id)
+    role = find_role_in_history(history)
+
+    # Role detection for new topics
+    if role is None:
+        if len(history) == 0:
+            history = build_role_menu()
+            _log_session(session_id, history)
+            return JSONResponse({"response": ROLE_SELECTION_MESSAGE})
+        role = resolve_role(user_message)
+        if role:
+            set_role_in_history(history, role)
+            _log_session(session_id, history)
+            return JSONResponse({"response": f"✅ Role set: {role.name}.\n\nI'll use the tools and knowledge suited for this role. What would you like me to work on?"})
+        return JSONResponse({"response": f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"})
+
     gov_name = _gov_name_for_key(public_key)
     if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
         user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
     history.append({"role": "user", "content": user_message})
 
-    system_prompt = get_system_prompt()
+    system_prompt = get_system_prompt_for_role(role)
+    tools = get_tool_schemas_for_role(role)
     client = LLMClient()
-    tools = get_tool_schemas()
 
     # Multi-round tool loop (the streaming path loops; this one used to run a
     # single round, which truncated multi-step answers and could leak an
