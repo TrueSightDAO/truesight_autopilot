@@ -139,6 +139,19 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
                     c = re.sub(r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>', '', c, flags=re.DOTALL)
                     c = re.sub(r'<invoke\s+name="[^"]+"\s*>.*?</invoke>', '', c, flags=re.DOTALL)
                     m["content"] = c.strip()
+            # Remove orphaned tool messages (no preceding assistant with matching tool_calls)
+            known_call_ids: set = set()
+            cleaned: list[dict] = []
+            for m in messages:
+                if m.get("role") == "assistant":
+                    for tc in m.get("tool_calls", []):
+                        known_call_ids.add(tc.get("id", ""))
+                if m.get("role") == "tool":
+                    if m.get("tool_call_id", "") not in known_call_ids:
+                        logger.info("Dropped orphaned tool message id=%s", m.get("tool_call_id", ""))
+                        continue
+                cleaned.append(m)
+            messages = cleaned
             _sessions[session_key] = messages
             logger.info("Restored session %s with %d messages", sid_hash, len(messages))
             return messages
@@ -1070,6 +1083,9 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str,
             break
         removed = history.pop(i)
         total -= len(removed.get("content", ""))
+
+    # Sanitise orphaned tool messages (DeepSeek rejects them)
+    _sanitise_tool_messages(history)
 
     try:
         state: dict = {}
@@ -2123,6 +2139,24 @@ _SELF_HEAL_WINDOW = 3600  # seconds
 
 
 def _looks_base64(s: str) -> bool:
+
+
+def _sanitise_tool_messages(history: list[dict]) -> None:
+    """Remove orphaned tool messages (no preceding assistant with matching tool_calls).
+    DeepSeek rejects 'Messages with role tool must be a response to a preceding message with tool_calls'."""
+    known_call_ids: set = set()
+    i = 0
+    while i < len(history):
+        m = history[i]
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls", []):
+                known_call_ids.add(tc.get("id", ""))
+        if m.get("role") == "tool":
+            if m.get("tool_call_id", "") not in known_call_ids:
+                logger.info("Dropped orphaned tool message at index %d id=%s", i, m.get("tool_call_id", ""))
+                history.pop(i)
+                continue
+        i += 1
     """Quick heuristic: base64 strings have no spaces and are mostly alphanumeric with +/=/."""
     return " " not in s[:100] and len(s) > 50 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in s[:200].replace("\n", ""))
 
