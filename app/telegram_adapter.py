@@ -284,9 +284,10 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
         emoji = tool_emoji.get(name, "⚙️")
         return f"{emoji} {label} …"
 
-    round_num = 0
-    tool_active: str | None = None
-    last_edit = time.time()
+            round_num = 0
+            tool_active: str | None = None
+            thinking_text: str = ""
+            last_edit = time.time()
 
     try:
         with httpx.stream(
@@ -317,24 +318,42 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                     if r != round_num:
                         round_num = r
                         tool_active = None
-                    if tool_active is None and round_num > 0:
-                        _msg = f"🔄 Thinking… (round {round_num})"
+                        thinking_text = ""
+                    if tool_active is None:
+                        if thinking_text:
+                            snippet = thinking_text.replace("\n", " ")[:80]
+                            _msg = f"💭 {snippet}…"
+                        elif round_num > 0:
+                            _msg = f"🔄 Thinking… (round {round_num})"
+                        else:
+                            _msg = "🔄 Thinking…"
                     else:
-                        _msg = "🔄 Thinking…"
+                        _msg = f"🔄 Thinking…"  # fallback, tool label takes over
                     if time.time() - last_edit > 3:
                         edit_message_text(chat_id, status_id, _msg)
                         last_edit = time.time()
+
+                elif etype == "token":
+                    content = event.get("content", "")
+                    if content and not tool_active:
+                        # The LLM is thinking out loud before calling tools — capture it
+                        thinking_text = (thinking_text + content).strip()
 
                 elif etype == "tool":
                     tool_name = event.get("tool", "")
                     status = event.get("status", "")
                     if status == "calling":
                         tool_active = tool_name
+                        thinking_text = ""
                         _msg = _label_tool(tool_name)
                         edit_message_text(chat_id, status_id, _msg)
                         last_edit = time.time()
                     elif status == "done":
                         tool_active = None
+
+                elif etype == "wanted_more_rounds":
+                    edit_message_text(chat_id, status_id, "⚠️ Hit round limit — forcing final response…")
+                    last_edit = time.time()
 
                 elif etype == "done":
                     final_response = (event.get("response") or "").strip()
