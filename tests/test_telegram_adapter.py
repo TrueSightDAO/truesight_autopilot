@@ -39,6 +39,18 @@ def test_markdown_to_telegram_html_no_stray_placeholders():
     assert out.count("<code>") == 2 and "<pre>block</pre>" in out
 
 
+def test_extract_attachment_file_id():
+    f = ta.extract_attachment_file_id
+    # photo: pick the largest (last) size
+    assert f({"photo": [{"file_id": "small"}, {"file_id": "big"}]}) == "big"
+    # document
+    assert f({"document": {"file_id": "doc1"}}) == "doc1"
+    # text-only message → no attachment
+    assert f({"text": "hello"}) is None
+    assert f({}) is None
+    assert f({"photo": []}) is None
+
+
 def test_call_chat_with_typing_refreshes_indicator(monkeypatch):
     typing_calls = {"n": 0}
     monkeypatch.setattr(ta, "send_typing", lambda *a, **k: typing_calls.__setitem__("n", typing_calls["n"] + 1))
@@ -153,31 +165,46 @@ def test_handle_message_rejects_non_allowlisted(sent):
 
 
 def test_handle_message_allowed_calls_chat(monkeypatch, sent):
+    # handle_message now routes to call_chat_with_progress (which sends its own reply)
     captured = {}
-
-    def fake_call(message, session_id, public_key):
-        captured.update(message=message, session_id=session_id, public_key=public_key)
-        return "the answer"
-
-    monkeypatch.setattr(ta, "call_chat", fake_call)
-    # real forum topic (is_topic_message=True) => threaded session + threaded reply
+    monkeypatch.setattr(ta, "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key:
+            captured.update(chat_id=chat_id, thread_id=thread_id, message=message,
+                            session_id=session_id, public_key=public_key))
+    # real forum topic (is_topic_message=True) => threaded session + threaded routing
     ta.handle_message(_msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True),
                       allowed={111}, public_key="PK")
     assert captured["message"] == "what shipped?"
     assert captured["session_id"] == "tg:555:7"
+    assert captured["thread_id"] == 7
     assert captured["public_key"] == "PK"
-    assert sent and sent[0]["text"] == "the answer"
-    assert sent[0]["thread_id"] == 7
 
 
 def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
     # thread_id present but is_topic_message False (a reply-thread) => no thread routing,
-    # session falls back to :0, reply sent without a thread id (avoids the 400).
-    monkeypatch.setattr(ta, "call_chat", lambda message, session_id, public_key: f"ses={session_id}")
+    # session falls back to :0 (avoids the 400 on threaded sends).
+    captured = {}
+    monkeypatch.setattr(ta, "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key:
+            captured.update(session_id=session_id, thread_id=thread_id))
     ta.handle_message(_msg(user_id=111, chat_id=555, text="hi", thread_id=4242),
                       allowed={111}, public_key="PK")
-    assert sent and sent[0]["text"] == "ses=tg:555:0"
-    assert sent[0]["thread_id"] is None
+    assert captured["session_id"] == "tg:555:0"
+    assert captured["thread_id"] is None
+
+
+def test_handle_message_photo_routes_with_path(monkeypatch, sent):
+    # B4: a photo message downloads the file and injects its path for the QR/fs tools
+    monkeypatch.setattr(ta, "download_telegram_file", lambda fid: "/tmp/tg_attachments/x.jpg")
+    captured = {}
+    monkeypatch.setattr(ta, "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key: captured.update(message=message))
+    msg = {"chat": {"id": 555}, "from": {"id": 111},
+           "photo": [{"file_id": "small"}, {"file_id": "big"}], "caption": "scan this"}
+    ta.handle_message(msg, allowed={111}, public_key="PK")
+    assert "scan this" in captured["message"]
+    assert "/tmp/tg_attachments/x.jpg" in captured["message"]
+    assert "scan_qr_from_file" in captured["message"]
 
 
 def test_send_message_retries_without_thread_on_400(monkeypatch):
