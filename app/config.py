@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
     deepseek_temperature: float = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3"))
+    # LiteLLM (replaces the homegrown HTTP transport when LLM_PROVIDER=litellm)
+    litellm_model: str = os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat")
 
     # BigModel (ZhipuAI / GLM)
     bigmodel_api_key: str = Field(default="", validation_alias="BIGMODEL_CN_API")
