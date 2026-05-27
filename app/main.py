@@ -1201,6 +1201,12 @@ def _chunk_text(text: str, size: int = 80) -> list[str]:
 
 def _log_session(session_id: str, history: list[dict]) -> None:
     """Write FULL session history to disk for debugging broken conversations."""
+    # Keep the in-memory cache in sync with what we persist. Branches that
+    # *reassign* history (build_role_menu, archive_old_history, pending-filter)
+    # would otherwise leave _sessions[session_id] pointing at the old list, so
+    # _load_or_create_session returns stale empty history and the role menu
+    # re-prompts forever (replying "1" never sticks).
+    _sessions[session_id] = history
     try:
         import hashlib
         sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
