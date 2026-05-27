@@ -264,7 +264,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
     token = create_jwt(public_key)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
 
-    status_id = send_message(chat_id, "🔄 <i>Thinking…</i>", thread_id)
+    status_id = send_message(chat_id, "🔄 Thinking…", thread_id)
     if status_id is None:
         logger.warning("Could not send status message — falling back to blocking chat")
         return call_chat(message, session_id, public_key)
@@ -282,7 +282,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
     def _label_tool(name: str) -> str:
         label = name.replace("_", " ")
         emoji = tool_emoji.get(name, "⚙️")
-        return f"{emoji} <i>{label}</i>"
+        return f"{emoji} {label} …"
 
     round_num = 0
     tool_active: str | None = None
@@ -318,9 +318,9 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                         round_num = r
                         tool_active = None
                     if tool_active is None and round_num > 0:
-                        _msg = f"🔄 <i>Thinking…</i> (round {round_num})"
+                        _msg = f"🔄 Thinking… (round {round_num})"
                     else:
-                        _msg = f"🔄 <i>Thinking…</i>"
+                        _msg = "🔄 Thinking…"
                     if time.time() - last_edit > 3:
                         edit_message_text(chat_id, status_id, _msg)
                         last_edit = time.time()
@@ -330,7 +330,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                     status = event.get("status", "")
                     if status == "calling":
                         tool_active = tool_name
-                        _msg = f"{_label_tool(tool_name)} <i>…</i>"
+                        _msg = _label_tool(tool_name)
                         edit_message_text(chat_id, status_id, _msg)
                         last_edit = time.time()
                     elif status == "done":
