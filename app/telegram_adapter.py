@@ -427,10 +427,30 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     # Lightweight commands
     if text in ("/start", "/help"):
         send_message(chat_id,
-                     "TrueSight Autopilot — your private DAO assistant.\n"
-                     "Just type what you want. Each Telegram topic is a separate context.\n"
-                     "I can read the codebase/context, search the web, and open PRs.",
-                     thread_id)
+            "**TrueSight Autopilot** — your private DAO assistant.\n\n"
+            "**Topics & Roles**\n"
+            "Each Telegram topic can have its own role. On a new topic, I'll ask you to pick one:\n"
+            "`1` Content Marketing Researcher\n"
+            "`2` Event Coordinator\n"
+            "`3` SRE / DevOps Engineer\n"
+            "`4` Retailer Outreach Coordinator\n"
+            "`5` Logistics Analyst\n"
+            "`6` Inventory Manager\n"
+            "`7` General DAO Assistant\n\n"
+            "**Commands**\n"
+            "`/help` — this message\n"
+            "`/research <topic>` — autonomous CrewAI research (needs role 1 or 4)\n"
+            "`/reset` — clear context, keep role, start fresh\n"
+            "Type a role number anytime to switch roles.\n\n"
+            "**Chat**\n"
+            "Just type your request. I can search the web, read repos, "
+            "scan QR codes, open PRs, and more — scoped to my active role.",
+            thread_id)
+        return
+
+    if text in ("/reset",):
+        session_id = build_session_id(chat_id, thread_id)
+        _handle_reset(chat_id, thread_id, session_id, public_key)
         return
 
     if text.startswith("/research"):
@@ -513,6 +533,49 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
         edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}")
 
     run_research_background(role.key, topic, target_repo, on_progress, on_done)
+
+
+def _handle_reset(chat_id: int, thread_id: int | None, session_id: str, public_key: str) -> None:
+    """Reset session context: keep role tag, discard all other messages."""
+    try:
+        resp = httpx.get(
+            f"{settings.autopilot_chat_url.rstrip('/')}/session",
+            headers={"X-Public-Key": public_key, "X-Session-Id": session_id},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            send_message(chat_id, "⚠️ Could not access session.", thread_id)
+            return
+        history = resp.json().get("messages", [])
+    except Exception:
+        send_message(chat_id, "⚠️ Could not reach autopilot server.", thread_id)
+        return
+
+    from .roles import find_role_in_history, archive_old_history, set_role_in_history, tag_to_role
+    role = find_role_in_history(history)
+    # Build fresh history with just the role tag
+    fresh: list[dict] = []
+    if role:
+        fresh = [{"role": "system", "content": f"[ROLE: {role.key}]"}]
+        name = role.name
+    else:
+        name = "(no role)"
+
+    # POST to a special internal endpoint to overwrite the session
+    token = create_jwt(public_key)
+    try:
+        resp = httpx.post(
+            f"{settings.autopilot_chat_url.rstrip('/')}/session/reset",
+            json={"messages": fresh},
+            headers={"Authorization": f"Bearer {token}", "X-Session-Id": session_id},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            send_message(chat_id, f"✅ Context reset. Role: **{name}**.\n\nWhat would you like to work on?", thread_id)
+        else:
+            send_message(chat_id, f"⚠️ Could not reset session (HTTP {resp.status_code}).", thread_id)
+    except Exception as e:
+        send_message(chat_id, f"⚠️ Reset failed: {e}", thread_id)
 
 
 def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:

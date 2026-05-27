@@ -303,6 +303,18 @@ async def get_session(request: Request, limit: int = 30) -> JSONResponse:
     return JSONResponse({"messages": visible, "session_id": session_id})
 
 
+@app.post("/session/reset")
+async def reset_session(request: Request) -> JSONResponse:
+    """Overwrite session history (used by /reset command)."""
+    public_key = verify_jwt(request)
+    body = await request.json()
+    messages = body.get("messages", [])
+    session_id = _session_key(public_key, request)
+    _sessions[session_id] = messages
+    _log_session(session_id, messages)
+    return JSONResponse({"status": "ok", "message_count": len(messages)})
+
+
 @app.get("/sessions")
 async def list_sessions(request: Request) -> JSONResponse:
     """List all saved sessions for this governor."""
