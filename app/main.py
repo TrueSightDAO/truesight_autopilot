@@ -297,6 +297,8 @@ async def get_session(request: Request, limit: int = 30) -> JSONResponse:
             continue
         if role in ("user", "assistant") and "GOVERNOR_IDENTITY:" not in content:
             visible.append({"role": role, "content": content})
+        elif role == "system" and ("[ROLE:" in content or "[PENDING_ROLE:" in content):
+            visible.append({"role": "system", "content": content})
 
     return JSONResponse({"messages": visible, "session_id": session_id})
 

@@ -433,6 +433,10 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
                      thread_id)
         return
 
+    if text.startswith("/research"):
+        _handle_research_command(chat_id, thread_id, text, public_key)
+        return
+
     if public_key is None:
         send_message(chat_id, "⚠️ No governor identity configured on the server.", thread_id)
         return
@@ -443,6 +447,72 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
         send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
+
+
+def _handle_research_command(chat_id: int, thread_id: int | None, text: str, public_key: str) -> None:
+    """Handle /research command — spawn autonomous CrewAI research."""
+    topic = text[len("/research"):].strip()
+    if not topic:
+        send_message(chat_id,
+                     "Usage: `/research <topic>`\n\n"
+                     "Example: `/research ceremonial cacao consumer demographics USA 2025`\n\n"
+                     "You must have a research-enabled role set first (e.g. Content Marketing Researcher).",
+                     thread_id)
+        return
+
+    # Check current role via session
+    session_id = build_session_id(chat_id, thread_id)
+    try:
+        resp = httpx.get(
+            f"{settings.autopilot_chat_url.rstrip('/')}/session",
+            headers={"X-Public-Key": public_key, "X-Session-Id": session_id},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            send_message(chat_id, "⚠️ Could not check current role. Set a role first by chatting in this topic.", thread_id)
+            return
+        session_data = resp.json()
+        history = session_data.get("messages", [])
+    except Exception:
+        send_message(chat_id, "⚠️ Could not reach autopilot server.", thread_id)
+        return
+
+    # Find role from history
+    from .roles import find_role_in_history
+    role = find_role_in_history(history)
+    if role is None:
+        send_message(chat_id, "⚠️ No role set in this topic. Send any message first to pick a role.", thread_id)
+        return
+
+    if not role.crewai_enabled:
+        send_message(chat_id,
+                     f"⚠️ The **{role.name}** role doesn't support autonomous research.\n"
+                     f"Switch to a research-enabled role like Content Marketing Researcher.",
+                     thread_id)
+        return
+
+    # Determine target repo
+    target_repo = "go_to_market"  # default for research
+    if role.key == "retailer_outreach":
+        target_repo = "market_research"
+
+    # Start autonomous research with progress
+    status_id = send_message(chat_id, f"🚀 Starting autonomous research on:\n*{topic[:100]}*…\n\nInitialising CrewAI…", thread_id)
+    if status_id is None:
+        return
+
+    from .research import run_research_background
+
+    def on_progress(msg: str) -> None:
+        snippet = msg.replace("\n", " ")[:200]
+        edit_message_text(chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_")
+
+    def on_done(result: str) -> None:
+        preview = result[:3000]
+        more = "\n\n…(truncated — report committed to repo)" if len(result) > 3000 else ""
+        edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}")
+
+    run_research_background(role.key, topic, target_repo, on_progress, on_done)
 
 
 def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
