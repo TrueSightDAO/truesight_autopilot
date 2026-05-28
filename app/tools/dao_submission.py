@@ -18,6 +18,8 @@ def submit_ai_agent_contribution(
     amount: str = "0",
     tdg_issued: str = "0",
     generation_source: str | None = None,
+    attached_file_path: str | None = None,
+    attached_filename: str | None = None,
     dry_run: bool = False,
 ) -> dict:
     workspace_root = Path(__file__).resolve().parents[3]
@@ -60,6 +62,10 @@ def submit_ai_agent_contribution(
     cmd.extend(["--tdg-issued", tdg_issued])
     if generation_source:
         cmd.extend(["--generation-source", generation_source])
+    if attached_file_path:
+        cmd.extend(["--attachment", attached_file_path])
+    if attached_filename:
+        cmd.extend(["--attached-filename", attached_filename])
     if dry_run:
         cmd.append("--dry-run")
 
@@ -104,7 +110,7 @@ TOOL_SPECS = [
     ),
     ToolSpec(
         name="create_dao_submission",
-        description="Submit a [CONTRIBUTION EVENT] to Edgar for DAO contribution tracking.",
+        description="Submit a [CONTRIBUTION EVENT] to Edgar for DAO contribution tracking. Optionally attach a local file (PDF, image, etc.) that will be uploaded to GitHub and linked in the submission.",
         parameters={
             "type": "object",
             "properties": {
@@ -114,6 +120,8 @@ TOOL_SPECS = [
                 "contributors": {"type": "string", "description": "Display name."},
                 "amount": {"type": "string", "description": "Minutes or dollar amount.", "default": "0"},
                 "tdg_issued": {"type": "string", "description": "TDG to issue.", "default": "0"},
+                "attachment_path": {"type": "string", "description": "Local file path to attach (e.g. /tmp/tg_attachments/receipt.pdf). File is uploaded to GitHub via Edgar."},
+                "attachment_filename": {"type": "string", "description": "Override the auto-generated attachment filename."},
             },
             "required": ["title", "body", "pr_urls"],
         },
