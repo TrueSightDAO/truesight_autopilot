@@ -119,3 +119,20 @@ def register_identity(email: str, env_path: str | None = None) -> dict[str, Any]
     except Exception as e:
         logger.error("register_identity failed: %s", e)
         return {"success": False, "email": email, "error": str(e)}
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+import json as _json  # noqa: E402
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="register_identity",
+    description="Register a new DAO identity by generating an RSA-2048 keypair and submitting to Edgar.",
+    parameters={
+        "type": "object",
+        "properties": {"email": {"type": "string", "description": "The email address to register."}},
+        "required": ["email"],
+    },
+    handler=lambda args, ctx: _json.dumps(register_identity(args.get("email", "")), indent=2),
+)

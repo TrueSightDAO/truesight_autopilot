@@ -128,3 +128,31 @@ def http_fetch(
         "byte_count": len(raw),
         "truncated": truncated,
     })
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="http_fetch",
+    description="Make a generic HTTP request — primarily for hitting Google Apps Script /exec deployments (anonymous-callable web apps). Use when web_search/web_extract aren't enough and you need to POST or follow a specific REST API. Body capped at 256KB. Private/loopback/metadata URLs are blocked.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Full HTTP(S) URL."},
+            "method": {"type": "string", "description": "HTTP method.", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"], "default": "GET"},
+            "body": {"description": "Optional request body. Dicts/lists are JSON-serialised with Content-Type: application/json. Strings sent as-is."},
+            "headers": {"type": "object", "description": "Optional request headers."},
+            "timeout": {"type": "number", "description": "Timeout in seconds (default 30, max 60).", "default": 30},
+        },
+        "required": ["url"],
+    },
+    handler=lambda args, ctx: http_fetch(
+        url=args.get("url", ""),
+        method=args.get("method", "GET"),
+        body=args.get("body"),
+        headers=args.get("headers"),
+        timeout=args.get("timeout"),
+    ),
+)

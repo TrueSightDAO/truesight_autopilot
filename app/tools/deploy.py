@@ -164,3 +164,15 @@ def deploy_autopilot() -> str:
 
     finally:
         client.close()
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="deploy_autopilot",
+    description="Deploy the latest version of truesight_autopilot to EC2 via SSH.",
+    parameters={"type": "object", "properties": {}},
+    handler=lambda args, ctx: deploy_autopilot(),
+)

@@ -348,3 +348,126 @@ def gmail_apply_label(
         "id": resp.get("id"),
         "label_ids": resp.get("labelIds", []),
     })
+
+
+# ── capability manifest entries ───────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+_ACCOUNT_ENUM = ["admin", "gary"]
+
+TOOL_SPECS = [
+    ToolSpec(
+        name="gmail_search",
+        description="Search a Gmail mailbox with Gmail's query syntax (e.g. 'from:partner@example.com newer_than:7d', 'is:unread label:retailer-outreach'). Returns ID + sender + subject + date + snippet for matching messages, capped at 50.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Gmail search query."},
+                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "max_results": {"type": "integer", "description": "Max messages (1-50).", "default": 20},
+            },
+            "required": ["query"],
+        },
+        handler=lambda args, ctx: gmail_search(
+            query=args.get("query", ""),
+            account=args.get("account"),
+            max_results=args.get("max_results", 20),
+        ),
+    ),
+    ToolSpec(
+        name="gmail_read_message",
+        description="Read a Gmail message by ID — headers + plain-text body (capped at ~64KB).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "Gmail message ID (from gmail_search)."},
+                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+            },
+            "required": ["message_id"],
+        },
+        handler=lambda args, ctx: gmail_read_message(
+            message_id=args.get("message_id", ""),
+            account=args.get("account"),
+        ),
+    ),
+    ToolSpec(
+        name="gmail_send",
+        description="Send a plain-text email from a Gmail mailbox. Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                "subject": {"type": "string", "description": "Email subject."},
+                "body": {"type": "string", "description": "Plain-text email body."},
+                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "cc": {"type": "string", "description": "Comma-separated CC list."},
+                "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+            },
+            "required": ["to", "subject", "body"],
+        },
+        handler=lambda args, ctx: gmail_send(
+            to=args.get("to", ""),
+            subject=args.get("subject", ""),
+            body=args.get("body", ""),
+            account=args.get("account"),
+            cc=args.get("cc"),
+            bcc=args.get("bcc"),
+        ),
+    ),
+    ToolSpec(
+        name="gmail_create_draft",
+        description="Create a Gmail draft (no send). Preferred over gmail_send when the user hasn't explicitly approved sending.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                "subject": {"type": "string", "description": "Email subject."},
+                "body": {"type": "string", "description": "Plain-text email body."},
+                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "cc": {"type": "string", "description": "Comma-separated CC list."},
+                "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+            },
+            "required": ["to", "subject", "body"],
+        },
+        handler=lambda args, ctx: gmail_create_draft(
+            to=args.get("to", ""),
+            subject=args.get("subject", ""),
+            body=args.get("body", ""),
+            account=args.get("account"),
+            cc=args.get("cc"),
+            bcc=args.get("bcc"),
+        ),
+    ),
+    ToolSpec(
+        name="gmail_list_labels",
+        description="List the labels in a Gmail mailbox (id, name, type).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+            },
+        },
+        handler=lambda args, ctx: gmail_list_labels(account=args.get("account")),
+    ),
+    ToolSpec(
+        name="gmail_apply_label",
+        description="Add and/or remove Gmail labels on a single message.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "Gmail message ID."},
+                "add_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to add."},
+                "remove_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to remove."},
+                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+            },
+            "required": ["message_id"],
+        },
+        handler=lambda args, ctx: gmail_apply_label(
+            message_id=args.get("message_id", ""),
+            add_labels=args.get("add_labels") or [],
+            remove_labels=args.get("remove_labels") or [],
+            account=args.get("account"),
+        ),
+    ),
+]

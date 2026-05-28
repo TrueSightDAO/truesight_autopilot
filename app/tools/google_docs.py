@@ -78,3 +78,25 @@ def read_google_doc(
         "text": text,
         "truncated": truncated,
     })
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="read_google_doc",
+    description="Read the text content of a Google Doc (read-only). Returns title + flattened paragraph text, capped at ~64KB.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "document_id": {"type": "string", "description": "The Google Doc ID (the long string between /d/ and /edit in the URL)."},
+            "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+        },
+        "required": ["document_id"],
+    },
+    handler=lambda args, ctx: read_google_doc(
+        document_id=args.get("document_id", ""),
+        service_account_name=args.get("service_account_name"),
+    ),
+)

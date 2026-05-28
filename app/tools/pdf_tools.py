@@ -162,3 +162,27 @@ def generate_pdf(
         "truncated": truncated,
         "output_path": output_path,
     })
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="generate_pdf",
+    description="Render markdown-lite content (headings, paragraphs, bullets, **bold**, *italic*) into a PDF. Returns base64-encoded PDF bytes (capped at 256KB; full file written to output_path on disk for follow-up tools). Pair with upload_file_to_github(content_base64=...) to ship a PDF into a repo.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "description": "Markdown-lite source. Supports # / ## / ### headings, blank-line paragraphs, '- '/'* ' bullets, **bold**, *italic*."},
+            "title": {"type": "string", "description": "PDF document title (metadata)."},
+            "output_path": {"type": "string", "description": "Optional local path to write the full PDF to (default: auto-generated /tmp file)."},
+        },
+        "required": ["content"],
+    },
+    handler=lambda args, ctx: generate_pdf(
+        content=args.get("content", ""),
+        title=args.get("title"),
+        output_path=args.get("output_path"),
+    ),
+)

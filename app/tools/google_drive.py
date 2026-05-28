@@ -156,3 +156,47 @@ def list_drive_folder(
         "files": files,
         "next_page_token": resp.get("nextPageToken"),
     })
+
+
+# ── capability manifest entries ───────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPECS = [
+    ToolSpec(
+        name="read_drive_file",
+        description="Download (or export) a Google Drive file's content. Google-native types (Docs, Sheets, Slides) are auto-exported to text/csv/plain unless you force mime_type. Binary blobs returned base64-encoded. Capped at 256KB.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "The Drive file ID."},
+                "mime_type": {"type": "string", "description": "Optional explicit export/download MIME type."},
+                "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+            },
+            "required": ["file_id"],
+        },
+        handler=lambda args, ctx: read_drive_file(
+            file_id=args.get("file_id", ""),
+            mime_type=args.get("mime_type"),
+            service_account_name=args.get("service_account_name"),
+        ),
+    ),
+    ToolSpec(
+        name="list_drive_folder",
+        description="List direct children of a Google Drive folder (id, name, mimeType, size, modifiedTime).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_id": {"type": "string", "description": "The Drive folder ID."},
+                "page_size": {"type": "integer", "description": "Max files to return (1-200). Default 50.", "default": 50},
+                "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+            },
+            "required": ["folder_id"],
+        },
+        handler=lambda args, ctx: list_drive_folder(
+            folder_id=args.get("folder_id", ""),
+            page_size=args.get("page_size", 50),
+            service_account_name=args.get("service_account_name"),
+        ),
+    ),
+]

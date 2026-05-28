@@ -371,3 +371,52 @@ def lookup_qr_batch(qr_codes: list[str]) -> dict[str, Any]:
         "missing_codes": missing if missing else None,
         "error_details": lookup_errors if lookup_errors else None,
     }
+
+
+# ── capability manifest entries ───────────────────────────────────────────
+
+import json as _json  # noqa: E402
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPECS = [
+    ToolSpec(
+        name="scan_qr_from_file",
+        description="Scan a single image file for QR codes and return the decoded values.",
+        parameters={
+            "type": "object",
+            "properties": {"file_path": {"type": "string", "description": "Full path to the image file."}},
+            "required": ["file_path"],
+        },
+        handler=lambda args, ctx: _json.dumps(scan_qr_from_file(args.get("file_path", "")), indent=2),
+    ),
+    ToolSpec(
+        name="scan_qr_batch",
+        description="Batch-scan multiple image files for QR codes.",
+        parameters={
+            "type": "object",
+            "properties": {"file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of full paths to image files."}},
+            "required": ["file_paths"],
+        },
+        handler=lambda args, ctx: _json.dumps(scan_qr_batch(args.get("file_paths", [])), indent=2),
+    ),
+    ToolSpec(
+        name="lookup_qr_code",
+        description="Look up a single Agroverse QR code in the DAO ledger (read-only).",
+        parameters={
+            "type": "object",
+            "properties": {"qr_code": {"type": "string", "description": "The QR code identifier."}},
+            "required": ["qr_code"],
+        },
+        handler=lambda args, ctx: _json.dumps(lookup_qr_code(args.get("qr_code", "")), indent=2),
+    ),
+    ToolSpec(
+        name="lookup_qr_batch",
+        description="Look up multiple QR codes at once.",
+        parameters={
+            "type": "object",
+            "properties": {"qr_codes": {"type": "array", "items": {"type": "string"}, "description": "List of QR code identifiers."}},
+            "required": ["qr_codes"],
+        },
+        handler=lambda args, ctx: _json.dumps(lookup_qr_batch(args.get("qr_codes", [])), indent=2),
+    ),
+]

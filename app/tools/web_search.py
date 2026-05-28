@@ -115,3 +115,43 @@ def web_extract(urls: list[str] | str) -> str:
     except Exception as e:  # noqa: BLE001
         logger.warning("web_extract failed: %s", e)
         return json.dumps({"status": "error", "message": str(e)})
+
+
+# ── capability manifest entries ───────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPECS = [
+    ToolSpec(
+        name="web_search",
+        description="Search the live, public web (via Tavily) for current information not in the DAO context or repos — news, docs, prices, people, external facts. Returns ranked results with snippets and an optional synthesized answer. Use web_extract afterward to read a specific result in full.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query."},
+                "max_results": {"type": "integer", "description": "Number of results (1-10).", "default": 5},
+                "search_depth": {"type": "string", "description": "'basic' (fast) or 'advanced' (deeper).", "enum": ["basic", "advanced"], "default": "basic"},
+                "include_answer": {"type": "boolean", "description": "Include a synthesized answer.", "default": True},
+            },
+            "required": ["query"],
+        },
+        handler=lambda args, ctx: web_search(
+            query=args.get("query", ""),
+            max_results=args.get("max_results", 5),
+            search_depth=args.get("search_depth", "basic"),
+            include_answer=args.get("include_answer", True),
+        ),
+    ),
+    ToolSpec(
+        name="web_extract",
+        description="Fetch and return the cleaned full-text content of one or more specific web page URLs (via Tavily). Use after web_search to read a promising result in depth, or when the user gives you a URL to read.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "urls": {"type": "array", "items": {"type": "string"}, "description": "List of page URLs to read (max 10)."},
+            },
+            "required": ["urls"],
+        },
+        handler=lambda args, ctx: web_extract(urls=args.get("urls", [])),
+    ),
+]

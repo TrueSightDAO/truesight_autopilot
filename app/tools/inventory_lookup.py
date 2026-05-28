@@ -79,3 +79,20 @@ def list_matching_qr_codes(prefix: str) -> dict[str, Any]:
         "matches": matches,
         "count": len(matches),
     }
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+import json as _json  # noqa: E402
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="list_matching_qr_codes",
+    description="Search previously looked-up QR codes by prefix.",
+    parameters={
+        "type": "object",
+        "properties": {"prefix": {"type": "string", "description": "QR code prefix to match."}},
+        "required": ["prefix"],
+    },
+    handler=lambda args, ctx: _json.dumps(list_matching_qr_codes(args.get("prefix", "")), indent=2),
+)
