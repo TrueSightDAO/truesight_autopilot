@@ -55,7 +55,9 @@ Your job is exhaustive market research, competitive analysis, and content strate
 1. Understand the research topic → 2. Plan search queries → 3. Execute searches → 4. Read top results → 5. Synthesize → 6. Write report → 7. File in repo""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
                "read_local_file", "list_directory", "upload_file_to_github",
-               "list_org_repos", "list_prs"],
+               "list_org_repos", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "aws_query", "generate_pdf"],
         crewai_enabled=True,
     ),
     "events": Role(
@@ -70,7 +72,9 @@ Your job is planning events, coordinating logistics, and managing schedules.
 - Use create_dao_submission to record event-related contributions
 - Use read_context_file for DAO governance docs""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
-               "read_local_file", "create_dao_submission", "list_prs"],
+               "read_local_file", "create_dao_submission", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "generate_pdf"],
     ),
     "infrastructure": Role(
         key="infrastructure",
@@ -87,7 +91,9 @@ Your job is debugging production issues, deploying fixes, and monitoring infrast
 5. Never auto-merge — PRs go through human review.""",
         tools=["open_fix_pr", "deploy_autopilot", "read_repo_file", "read_context_file",
                "read_local_file", "list_directory", "list_org_repos", "list_prs",
-               "scan_qr_from_file", "web_search"],
+               "scan_qr_from_file", "web_search",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "aws_query", "generate_pdf"],
     ),
     "retailer_outreach": Role(
         key="retailer_outreach",
@@ -103,7 +109,9 @@ Your job is managing the holistic wellness retail partner pipeline.
 4. Use create_dao_submission for partner-related events
 5. Read PARTNER_OUTREACH_PROTOCOL.md for communication templates""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
-               "read_local_file", "create_dao_submission", "list_prs"],
+               "read_local_file", "create_dao_submission", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "generate_pdf"],
         crewai_enabled=True,
     ),
     "logistics": Role(
@@ -119,7 +127,9 @@ Your job is analyzing supply chain operations, freight costs, and import/export 
 3. Use web_search for freight rates, customs info, shipping timelines
 4. Use lookup_qr_code for tracking shipments via QR codes""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
-               "read_local_file", "lookup_qr_code", "lookup_qr_batch", "list_prs"],
+               "read_local_file", "lookup_qr_code", "lookup_qr_batch", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "aws_query", "generate_pdf"],
     ),
     "inventory": Role(
         key="inventory",
@@ -137,7 +147,9 @@ Your job is tracking cacao bag inventory, QR code operations, and stock manageme
 6. Read LEDGER_CONVERSION_AND_REPACKAGING.md for repackaging rules""",
         tools=["scan_qr_from_file", "scan_qr_batch", "lookup_qr_code", "lookup_qr_batch",
                "submit_contribution", "read_context_file", "read_repo_file",
-               "read_local_file", "list_directory", "list_prs"],
+               "read_local_file", "list_directory", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "generate_pdf"],
     ),
     "general": Role(
         key="general",

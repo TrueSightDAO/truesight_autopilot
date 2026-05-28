@@ -41,7 +41,7 @@ from .config import settings
 logger = logging.getLogger("autopilot.aws")
 
 
-def _read_account_specs() -> list[dict]:
+def read_account_specs() -> list[dict]:
     """Returns a list of {label, key_id, secret, region} dicts.
 
     Empty list when no credentials are configured anywhere — caller logs once
@@ -85,6 +85,11 @@ def _read_account_specs() -> list[dict]:
             "region": settings.aws_region,
         })
     return specs
+
+
+# Deprecated alias retained for any external import; new code should use the
+# public name. Will be removed once the autopilot codebase is fully migrated.
+_read_account_specs = read_account_specs
 
 
 class _AccountClients:
@@ -136,7 +141,7 @@ class AWSMonitor:
         self._init_clients()
 
     def _init_clients(self):
-        specs = _read_account_specs()
+        specs = read_account_specs()
         if not specs:
             logger.warning(
                 "AWS monitor: no accounts configured (set AWS_ACCOUNTS=label1,label2,... "

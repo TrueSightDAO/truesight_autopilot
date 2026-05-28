@@ -899,6 +899,58 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     if func_name == "web_extract":
         from .tools.web_search import web_extract as _web_extract
         return _web_extract(urls=func_args.get("urls", []))
+    if func_name == "read_google_sheet":
+        from .tools.google_sheets import read_google_sheet as _read_google_sheet
+        return _read_google_sheet(
+            spreadsheet_id=func_args.get("spreadsheet_id", ""),
+            range_a1=func_args.get("range_a1", ""),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "read_google_doc":
+        from .tools.google_docs import read_google_doc as _read_google_doc
+        return _read_google_doc(
+            document_id=func_args.get("document_id", ""),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "read_drive_file":
+        from .tools.google_drive import read_drive_file as _read_drive_file
+        return _read_drive_file(
+            file_id=func_args.get("file_id", ""),
+            mime_type=func_args.get("mime_type"),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "list_drive_folder":
+        from .tools.google_drive import list_drive_folder as _list_drive_folder
+        return _list_drive_folder(
+            folder_id=func_args.get("folder_id", ""),
+            page_size=func_args.get("page_size", 50),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "http_fetch":
+        from .tools.http_fetch import http_fetch as _http_fetch
+        return _http_fetch(
+            url=func_args.get("url", ""),
+            method=func_args.get("method", "GET"),
+            body=func_args.get("body"),
+            headers=func_args.get("headers"),
+            timeout=func_args.get("timeout"),
+        )
+    if func_name == "aws_query":
+        from .tools.aws_tools import aws_query as _aws_query
+        return _aws_query(
+            account=func_args.get("account", ""),
+            service=func_args.get("service", ""),
+            operation=func_args.get("operation", ""),
+            parameters=func_args.get("parameters"),
+            region=func_args.get("region"),
+        )
+    if func_name == "generate_pdf":
+        from .tools.pdf_tools import generate_pdf as _generate_pdf
+        return _generate_pdf(
+            content=func_args.get("content", ""),
+            title=func_args.get("title"),
+            output_path=func_args.get("output_path"),
+        )
     return f"Unknown tool: {func_name}"
 
 
