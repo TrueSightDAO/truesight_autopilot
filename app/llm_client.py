@@ -524,6 +524,105 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "gmail_search",
+                "description": "Search a Gmail mailbox with Gmail's query syntax (e.g. 'from:partner@example.com newer_than:7d', 'is:unread label:retailer-outreach'). Returns ID + sender + subject + date + snippet for matching messages, capped at 50.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Gmail search query."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                        "max_results": {"type": "integer", "description": "Max messages (1-50).", "default": 20},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_read_message",
+                "description": "Read a Gmail message by ID — headers + plain-text body (capped at ~64KB).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID (from gmail_search)."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_send",
+                "description": "Send a plain-text email from a Gmail mailbox. Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                        "subject": {"type": "string", "description": "Email subject."},
+                        "body": {"type": "string", "description": "Plain-text email body."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                        "cc": {"type": "string", "description": "Comma-separated CC list."},
+                        "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_create_draft",
+                "description": "Create a Gmail draft (no send). Preferred over gmail_send when the user hasn't explicitly approved sending.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                        "subject": {"type": "string", "description": "Email subject."},
+                        "body": {"type": "string", "description": "Plain-text email body."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                        "cc": {"type": "string", "description": "Comma-separated CC list."},
+                        "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_list_labels",
+                "description": "List the labels in a Gmail mailbox (id, name, type).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_apply_label",
+                "description": "Add and/or remove Gmail labels on a single message.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID."},
+                        "add_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to add."},
+                        "remove_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to remove."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "generate_pdf",
                 "description": "Render markdown-lite content (headings, paragraphs, bullets, **bold**, *italic*) into a PDF. Returns base64-encoded PDF bytes (capped at 256KB; full file written to output_path on disk for follow-up tools). Pair with upload_file_to_github(content_base64=...) to ship a PDF into a repo.",
                 "parameters": {

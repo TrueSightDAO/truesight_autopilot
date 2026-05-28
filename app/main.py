@@ -951,6 +951,50 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             title=func_args.get("title"),
             output_path=func_args.get("output_path"),
         )
+    if func_name == "gmail_search":
+        from .tools.gmail_tools import gmail_search as _gmail_search
+        return _gmail_search(
+            query=func_args.get("query", ""),
+            account=func_args.get("account"),
+            max_results=func_args.get("max_results", 20),
+        )
+    if func_name == "gmail_read_message":
+        from .tools.gmail_tools import gmail_read_message as _gmail_read_message
+        return _gmail_read_message(
+            message_id=func_args.get("message_id", ""),
+            account=func_args.get("account"),
+        )
+    if func_name == "gmail_send":
+        from .tools.gmail_tools import gmail_send as _gmail_send
+        return _gmail_send(
+            to=func_args.get("to", ""),
+            subject=func_args.get("subject", ""),
+            body=func_args.get("body", ""),
+            account=func_args.get("account"),
+            cc=func_args.get("cc"),
+            bcc=func_args.get("bcc"),
+        )
+    if func_name == "gmail_create_draft":
+        from .tools.gmail_tools import gmail_create_draft as _gmail_create_draft
+        return _gmail_create_draft(
+            to=func_args.get("to", ""),
+            subject=func_args.get("subject", ""),
+            body=func_args.get("body", ""),
+            account=func_args.get("account"),
+            cc=func_args.get("cc"),
+            bcc=func_args.get("bcc"),
+        )
+    if func_name == "gmail_list_labels":
+        from .tools.gmail_tools import gmail_list_labels as _gmail_list_labels
+        return _gmail_list_labels(account=func_args.get("account"))
+    if func_name == "gmail_apply_label":
+        from .tools.gmail_tools import gmail_apply_label as _gmail_apply_label
+        return _gmail_apply_label(
+            message_id=func_args.get("message_id", ""),
+            add_labels=func_args.get("add_labels") or [],
+            remove_labels=func_args.get("remove_labels") or [],
+            account=func_args.get("account"),
+        )
     return f"Unknown tool: {func_name}"
 
 

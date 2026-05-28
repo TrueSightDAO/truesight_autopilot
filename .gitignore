@@ -12,3 +12,6 @@ build/
 # Google service-account private keys — provisioned out-of-band, never
 # committed. See config/google/README.md.
 config/google/*.json
+
+# Gmail OAuth tokens (per-account) — also out-of-band. See config/gmail/README.md.
+config/gmail/*.json
