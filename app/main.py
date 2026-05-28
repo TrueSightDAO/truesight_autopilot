@@ -610,6 +610,18 @@ def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
 
 
 async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None = None, session_id: str | None = None, governor_name: str | None = None) -> str:
+    # First try the capability-manifest registry. Tools whose TOOL_SPEC carries
+    # a handler (the ~30 simple wrappers + the new google/gmail/aws/pdf tools)
+    # dispatch here and we never reach the legacy if-branches below.
+    # Orchestration tools (submit_contribution, create_dao_submission, open_fix_pr)
+    # have handler=None in their spec and fall through to the inline branches.
+    from .tool_registry import dispatch as _registry_dispatch
+    _registry_result = _registry_dispatch(
+        func_name, func_args or {},
+        {"history": history or [], "session_id": session_id, "governor_name": governor_name},
+    )
+    if _registry_result is not None:
+        return _registry_result
     if func_name == "list_org_repos":
         gh = GitHubClient()
         repos = gh.list_org_repos()

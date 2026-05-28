@@ -59,7 +59,8 @@ Your job is exhaustive market research, competitive analysis, and content strate
                "read_google_sheet", "read_google_doc", "read_drive_file",
                "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
                "gmail_search", "gmail_read_message", "gmail_send",
-               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label",
+               "upload_local_file_to_github"],
         crewai_enabled=True,
     ),
     "events": Role(
@@ -78,7 +79,8 @@ Your job is planning events, coordinating logistics, and managing schedules.
                "read_google_sheet", "read_google_doc", "read_drive_file",
                "list_drive_folder", "http_fetch", "generate_pdf",
                "gmail_search", "gmail_read_message", "gmail_send",
-               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label",
+               "upload_local_file_to_github"],
     ),
     "infrastructure": Role(
         key="infrastructure",
@@ -96,14 +98,16 @@ Your job is debugging production issues, deploying fixes, and monitoring infrast
    and the merge_pr tool is available to you. Just call it.
 4. Deploy changes via deploy_autopilot when approved.
 5. Monitor AWS resources and alert on anomalies.""",
-        tools=["open_fix_pr", "merge_pr", "deploy_autopilot", "read_repo_file",
+        tools=["open_fix_pr", "merge_pr", "mark_pr_ready_for_review",
+               "deploy_autopilot", "read_repo_file",
                "read_context_file", "read_local_file", "list_directory",
                "list_org_repos", "list_prs", "scan_qr_from_file", "web_search",
                "upload_file_to_github",
                "read_google_sheet", "read_google_doc", "read_drive_file",
                "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
                "gmail_search", "gmail_read_message", "gmail_send",
-               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label",
+               "upload_local_file_to_github"],
     ),
     "retailer_outreach": Role(
         key="retailer_outreach",
@@ -123,7 +127,8 @@ Your job is managing the holistic wellness retail partner pipeline.
                "read_google_sheet", "read_google_doc", "read_drive_file",
                "list_drive_folder", "http_fetch", "generate_pdf",
                "gmail_search", "gmail_read_message", "gmail_send",
-               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label",
+               "upload_local_file_to_github"],
         crewai_enabled=True,
     ),
     "logistics": Role(
@@ -143,7 +148,8 @@ Your job is analyzing supply chain operations, freight costs, and import/export 
                "read_google_sheet", "read_google_doc", "read_drive_file",
                "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
                "gmail_search", "gmail_read_message", "gmail_send",
-               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label",
+               "upload_local_file_to_github"],
     ),
     "inventory": Role(
         key="inventory",
@@ -165,7 +171,8 @@ Your job is tracking cacao bag inventory, QR code operations, and stock manageme
                "read_google_sheet", "read_google_doc", "read_drive_file",
                "list_drive_folder", "http_fetch", "generate_pdf",
                "gmail_search", "gmail_read_message", "gmail_send",
-               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label",
+               "upload_local_file_to_github"],
     ),
     "general": Role(
         key="general",
@@ -175,6 +182,25 @@ Your job is tracking cacao bag inventory, QR code operations, and stock manageme
         tools=[],  # empty = all tools
     ),
 }
+
+
+def _validate_role_tool_names() -> None:
+    """Fatal-on-startup check: every role's ``tools`` list references a tool
+    name that exists in the capability manifest. Catches the kind of typo /
+    role-drift that caused the 2026-05-28 ``merge_pr`` gating bug.
+    """
+    from .tool_registry import validate_role_tool_names
+    role_tools = {key: list(role.tools) for key, role in ROLES.items() if role.tools}
+    errors = validate_role_tool_names(role_tools)
+    if errors:
+        raise RuntimeError(
+            "Role-tool validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+            + "\nFix the tool name or add a TOOL_SPEC under app/tools/."
+        )
+
+
+_validate_role_tool_names()
+
 
 ROLE_ALIASES: dict[str, str] = {
     "1": "content_marketing", "content marketing": "content_marketing",

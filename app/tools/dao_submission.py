@@ -76,3 +76,47 @@ def submit_ai_agent_contribution(
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+
+
+# ── capability manifest entries (orchestration; handlers stay inline) ────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+# These two tools have session-state side effects (history check, _add_pending
+# pending-approval persistence, governor metadata injection) handled inline in
+# app/main.py:_run_tool. The TOOL_SPEC declarations below put the schemas +
+# role-gating under the manifest, but the registry's dispatcher leaves
+# handler=None so the existing inline branch takes over. Future PR can move
+# the handlers here once we have a uniform context-dict pattern.
+TOOL_SPECS = [
+    ToolSpec(
+        name="submit_contribution",
+        description="Submit a signed [CONTRIBUTION EVENT] or other event to Edgar (the DAO API).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "event_name": {"type": "string", "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT'."},
+                "attributes": {"type": "object", "description": "Key-value pairs describing the event."},
+            },
+            "required": ["event_name", "attributes"],
+        },
+        handler=None,  # dispatched inline in main.py (history/approval-gate orchestration)
+    ),
+    ToolSpec(
+        name="create_dao_submission",
+        description="Submit a [CONTRIBUTION EVENT] to Edgar for DAO contribution tracking.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short one-line title."},
+                "body": {"type": "string", "description": "Multi-line description."},
+                "pr_urls": {"type": "array", "items": {"type": "string"}, "description": "PR URLs as evidence."},
+                "contributors": {"type": "string", "description": "Display name."},
+                "amount": {"type": "string", "description": "Minutes or dollar amount.", "default": "0"},
+                "tdg_issued": {"type": "string", "description": "TDG to issue.", "default": "0"},
+            },
+            "required": ["title", "body", "pr_urls"],
+        },
+        handler=None,  # dispatched inline in main.py (uses governor_name from session)
+    ),
+]

@@ -240,6 +240,40 @@ class GitHubClient:
             except Exception as e:
                 logger.warning("Could not apply label %r to PR #%d: %s", name, pr.number, e)
 
+    def mark_pr_ready_for_review(
+        self,
+        repo_name: str,
+        pr_number: int,
+    ) -> dict:
+        """Promote a draft PR to ready-for-review. Returns dict with status + draft flag.
+
+        Wraps PyGithub's ``PullRequest.mark_ready_for_review`` (GraphQL under the hood).
+        Idempotent — calling on an already-ready PR is a no-op and returns ``already_ready``.
+        """
+        try:
+            repo = self.g.get_repo(self._full_name(repo_name))
+            pr = repo.get_pull(pr_number)
+            if not pr.draft:
+                return {
+                    "status": "already_ready",
+                    "draft": False,
+                    "message": f"PR #{pr_number} is already marked ready for review.",
+                }
+            pr.mark_ready_for_review()
+            logger.info("Marked PR #%d on %s ready for review", pr_number, repo_name)
+            return {
+                "status": "promoted",
+                "draft": False,
+                "message": f"PR #{pr_number} on {repo_name} marked ready for review.",
+            }
+        except Exception as e:
+            logger.error("Failed to mark PR #%d on %s ready: %s", pr_number, repo_name, e)
+            return {
+                "status": "error",
+                "draft": True,
+                "message": f"Failed to mark PR #{pr_number} ready: {e}",
+            }
+
     def merge_pr(
         self,
         repo_name: str,
@@ -250,6 +284,10 @@ class GitHubClient:
 
         merge_method: 'merge', 'squash', or 'rebase'.
         Handles already-merged, merge conflicts, and other errors gracefully.
+        Auto-promotes a draft PR to ready-for-review before merging — autopilot
+        opens its own PRs as draft (the safe default) and GitHub refuses to
+        merge drafts with a 405; the auto-promote removes the manual step at
+        the merge moment. The PR's draft history stays visible in the timeline.
         """
         try:
             repo = self.g.get_repo(self._full_name(repo_name))
@@ -260,6 +298,15 @@ class GitHubClient:
                     "merged": True,
                     "message": f"PR #{pr_number} was already merged.",
                 }
+            if pr.draft:
+                try:
+                    pr.mark_ready_for_review()
+                    logger.info("Auto-promoted draft PR #%d on %s before merge", pr_number, repo_name)
+                    # Re-fetch PR state after promotion so PyGithub's mergeability
+                    # cache catches up to the new state.
+                    pr = repo.get_pull(pr_number)
+                except Exception as e:
+                    logger.warning("Failed to auto-promote draft PR #%d on %s: %s", pr_number, repo_name, e)
             result = pr.merge(merge_method=merge_method)
             logger.info(
                 "Merged PR #%d on %s (method=%s, sha=%s)",

@@ -65,3 +65,18 @@ def read_oracle_logs(date: str | None = None) -> str:
 
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="read_oracle_logs",
+    description="Read oracle draw logs from TrueSightDAO/oracle_logs.",
+    parameters={
+        "type": "object",
+        "properties": {"date": {"type": "string", "description": "YYYY-MM-DD date, 'latest', or omit to list draws.", "default": "latest"}},
+    },
+    handler=lambda args, ctx: read_oracle_logs(date=args.get("date")),
+)

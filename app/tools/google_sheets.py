@@ -87,3 +87,35 @@ def read_google_sheet(
         "values": values,
         "truncated": truncated,
     })
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402 — keep handler/schema co-located
+
+TOOL_SPEC = ToolSpec(
+    name="read_google_sheet",
+    description=(
+        "Read a range from a Google Sheet (read-only). Default service account "
+        "(Cypher Defense) has access to the Main Ledger (spreadsheet "
+        "1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU) and the Cypher Defense "
+        "ledger. Pass service_account_name to switch to 'tdg_scoring', "
+        "'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', or "
+        "'agroverse_market_research' for sheets only those SAs can see. Output "
+        "is bounded — large ranges are truncated."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "spreadsheet_id": {"type": "string", "description": "The Google Sheet ID (the long string between /d/ and /edit in the URL)."},
+            "range_a1": {"type": "string", "description": "A1 notation range, e.g. 'Sheet1!A1:E100' or 'Contributors!A:Z'."},
+            "service_account_name": {"type": "string", "description": "Optional SA to use: 'cypher_defense' (default), 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', 'agroverse_market_research'."},
+        },
+        "required": ["spreadsheet_id", "range_a1"],
+    },
+    handler=lambda args, ctx: read_google_sheet(
+        spreadsheet_id=args.get("spreadsheet_id", ""),
+        range_a1=args.get("range_a1", ""),
+        service_account_name=args.get("service_account_name"),
+    ),
+)

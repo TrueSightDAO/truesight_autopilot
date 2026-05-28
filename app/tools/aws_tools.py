@@ -160,3 +160,31 @@ def aws_query(
         "request_id": request_id,
         "response": response,
     }, default=_json_default)
+
+
+# ── capability manifest entry ─────────────────────────────────────────────
+
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPEC = ToolSpec(
+    name="aws_query",
+    description="Run a read-only AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan* operations — mutating calls are forbidden. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, etc.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "account": {"type": "string", "description": "AWS account label.", "enum": ["explorya", "nelanco"]},
+            "service": {"type": "string", "description": "boto3 service name, e.g. 'ec2', 's3', 'logs', 'cloudwatch', 'ce'."},
+            "operation": {"type": "string", "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'GetCostAndUsage'."},
+            "parameters": {"type": "object", "description": "Operation parameters as a JSON object."},
+            "region": {"type": "string", "description": "Override the account's default region for this call."},
+        },
+        "required": ["account", "service", "operation"],
+    },
+    handler=lambda args, ctx: aws_query(
+        account=args.get("account", ""),
+        service=args.get("service", ""),
+        operation=args.get("operation", ""),
+        parameters=args.get("parameters"),
+        region=args.get("region"),
+    ),
+)

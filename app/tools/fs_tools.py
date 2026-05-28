@@ -118,3 +118,32 @@ def read_local_file(file_path: str) -> dict[str, Any]:
         return {"status": "error", "message": f"Permission denied: {file_path}"}
     except OSError as e:
         return {"status": "error", "message": f"Error reading file: {e}"}
+
+
+# ── capability manifest entries ───────────────────────────────────────────
+
+import json as _json  # noqa: E402
+from ..tool_registry import ToolSpec  # noqa: E402
+
+TOOL_SPECS = [
+    ToolSpec(
+        name="list_directory",
+        description="List files in a local directory on the server.",
+        parameters={
+            "type": "object",
+            "properties": {"dir_path": {"type": "string", "description": "Full path to the directory."}},
+            "required": ["dir_path"],
+        },
+        handler=lambda args, ctx: _json.dumps(list_directory(args.get("dir_path", "")), indent=2),
+    ),
+    ToolSpec(
+        name="read_local_file",
+        description="Read a local text file from the server filesystem.",
+        parameters={
+            "type": "object",
+            "properties": {"file_path": {"type": "string", "description": "Full path to the file."}},
+            "required": ["file_path"],
+        },
+        handler=lambda args, ctx: _json.dumps(read_local_file(args.get("file_path", "")), indent=2),
+    ),
+]
