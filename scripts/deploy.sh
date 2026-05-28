@@ -76,6 +76,38 @@ if [ -f ".env" ]; then
     scp -i "$EC2_KEY" .env "$EC2_HOST:$REMOTE_DIR/.env"
 fi
 
+echo "=== Syncing Gmail OAuth tokens (config/gmail/*.json) ==="
+if [ -d "config/gmail" ]; then
+    GMAIL_JSON_COUNT=$(ls config/gmail/*.json 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$GMAIL_JSON_COUNT" -gt 0 ]; then
+        ssh -i "$EC2_KEY" "$EC2_HOST" "mkdir -p $REMOTE_DIR/config/gmail && chmod 700 $REMOTE_DIR/config/gmail"
+        scp -i "$EC2_KEY" -q config/gmail/*.json "$EC2_HOST:$REMOTE_DIR/config/gmail/"
+        ssh -i "$EC2_KEY" "$EC2_HOST" "chmod 600 $REMOTE_DIR/config/gmail/*.json && ls -la $REMOTE_DIR/config/gmail/"
+        echo "  -> synced $GMAIL_JSON_COUNT Gmail token file(s)"
+    else
+        echo "  WARN: config/gmail/ exists but no .json files found. Gmail tools will return 'credentials missing' on EC2."
+    fi
+else
+    echo "  WARN: config/gmail/ directory missing locally. Skipping. See config/gmail/README.md."
+fi
+
+echo "=== Syncing Google service-account credentials (config/google/*.json) ==="
+# Gitignored binary creds — provisioned out-of-band on each developer machine;
+# rsynced to EC2 with mode 600. See config/google/README.md.
+if [ -d "config/google" ]; then
+    GOOGLE_JSON_COUNT=$(ls config/google/*.json 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$GOOGLE_JSON_COUNT" -gt 0 ]; then
+        ssh -i "$EC2_KEY" "$EC2_HOST" "mkdir -p $REMOTE_DIR/config/google && chmod 700 $REMOTE_DIR/config/google"
+        scp -i "$EC2_KEY" -q config/google/*.json "$EC2_HOST:$REMOTE_DIR/config/google/"
+        ssh -i "$EC2_KEY" "$EC2_HOST" "chmod 600 $REMOTE_DIR/config/google/*.json && ls -la $REMOTE_DIR/config/google/"
+        echo "  -> synced $GOOGLE_JSON_COUNT credential file(s)"
+    else
+        echo "  WARN: config/google/ exists but no .json files found. Drive/Sheets tools will return 'credentials missing' on EC2."
+    fi
+else
+    echo "  WARN: config/google/ directory missing locally. Skipping. See config/google/README.md for provisioning."
+fi
+
 echo "=== Syncing agentic_ai_context ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     mkdir -p $REMOTE_DIR/context

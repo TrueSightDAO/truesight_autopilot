@@ -899,6 +899,102 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     if func_name == "web_extract":
         from .tools.web_search import web_extract as _web_extract
         return _web_extract(urls=func_args.get("urls", []))
+    if func_name == "read_google_sheet":
+        from .tools.google_sheets import read_google_sheet as _read_google_sheet
+        return _read_google_sheet(
+            spreadsheet_id=func_args.get("spreadsheet_id", ""),
+            range_a1=func_args.get("range_a1", ""),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "read_google_doc":
+        from .tools.google_docs import read_google_doc as _read_google_doc
+        return _read_google_doc(
+            document_id=func_args.get("document_id", ""),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "read_drive_file":
+        from .tools.google_drive import read_drive_file as _read_drive_file
+        return _read_drive_file(
+            file_id=func_args.get("file_id", ""),
+            mime_type=func_args.get("mime_type"),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "list_drive_folder":
+        from .tools.google_drive import list_drive_folder as _list_drive_folder
+        return _list_drive_folder(
+            folder_id=func_args.get("folder_id", ""),
+            page_size=func_args.get("page_size", 50),
+            service_account_name=func_args.get("service_account_name"),
+        )
+    if func_name == "http_fetch":
+        from .tools.http_fetch import http_fetch as _http_fetch
+        return _http_fetch(
+            url=func_args.get("url", ""),
+            method=func_args.get("method", "GET"),
+            body=func_args.get("body"),
+            headers=func_args.get("headers"),
+            timeout=func_args.get("timeout"),
+        )
+    if func_name == "aws_query":
+        from .tools.aws_tools import aws_query as _aws_query
+        return _aws_query(
+            account=func_args.get("account", ""),
+            service=func_args.get("service", ""),
+            operation=func_args.get("operation", ""),
+            parameters=func_args.get("parameters"),
+            region=func_args.get("region"),
+        )
+    if func_name == "generate_pdf":
+        from .tools.pdf_tools import generate_pdf as _generate_pdf
+        return _generate_pdf(
+            content=func_args.get("content", ""),
+            title=func_args.get("title"),
+            output_path=func_args.get("output_path"),
+        )
+    if func_name == "gmail_search":
+        from .tools.gmail_tools import gmail_search as _gmail_search
+        return _gmail_search(
+            query=func_args.get("query", ""),
+            account=func_args.get("account"),
+            max_results=func_args.get("max_results", 20),
+        )
+    if func_name == "gmail_read_message":
+        from .tools.gmail_tools import gmail_read_message as _gmail_read_message
+        return _gmail_read_message(
+            message_id=func_args.get("message_id", ""),
+            account=func_args.get("account"),
+        )
+    if func_name == "gmail_send":
+        from .tools.gmail_tools import gmail_send as _gmail_send
+        return _gmail_send(
+            to=func_args.get("to", ""),
+            subject=func_args.get("subject", ""),
+            body=func_args.get("body", ""),
+            account=func_args.get("account"),
+            cc=func_args.get("cc"),
+            bcc=func_args.get("bcc"),
+        )
+    if func_name == "gmail_create_draft":
+        from .tools.gmail_tools import gmail_create_draft as _gmail_create_draft
+        return _gmail_create_draft(
+            to=func_args.get("to", ""),
+            subject=func_args.get("subject", ""),
+            body=func_args.get("body", ""),
+            account=func_args.get("account"),
+            cc=func_args.get("cc"),
+            bcc=func_args.get("bcc"),
+        )
+    if func_name == "gmail_list_labels":
+        from .tools.gmail_tools import gmail_list_labels as _gmail_list_labels
+        return _gmail_list_labels(account=func_args.get("account"))
+    if func_name == "gmail_apply_label":
+        from .tools.gmail_tools import gmail_apply_label as _gmail_apply_label
+        return _gmail_apply_label(
+            message_id=func_args.get("message_id", ""),
+            add_labels=func_args.get("add_labels") or [],
+            remove_labels=func_args.get("remove_labels") or [],
+            account=func_args.get("account"),
+        )
     return f"Unknown tool: {func_name}"
 
 

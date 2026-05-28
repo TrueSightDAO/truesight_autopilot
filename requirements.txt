@@ -19,4 +19,5 @@ paramiko>=3.4.0
 bugsnag>=4.7.0
 litellm>=1.75.0
 crewai>=0.100.0
+reportlab>=4.0.0
 truesight-dao-client @ git+https://github.com/TrueSightDAO/dao_client.git

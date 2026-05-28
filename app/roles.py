@@ -55,7 +55,11 @@ Your job is exhaustive market research, competitive analysis, and content strate
 1. Understand the research topic → 2. Plan search queries → 3. Execute searches → 4. Read top results → 5. Synthesize → 6. Write report → 7. File in repo""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
                "read_local_file", "list_directory", "upload_file_to_github",
-               "list_org_repos", "list_prs"],
+               "list_org_repos", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
+               "gmail_search", "gmail_read_message", "gmail_send",
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
         crewai_enabled=True,
     ),
     "events": Role(
@@ -70,7 +74,11 @@ Your job is planning events, coordinating logistics, and managing schedules.
 - Use create_dao_submission to record event-related contributions
 - Use read_context_file for DAO governance docs""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
-               "read_local_file", "create_dao_submission", "list_prs"],
+               "read_local_file", "create_dao_submission", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "generate_pdf",
+               "gmail_search", "gmail_read_message", "gmail_send",
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
     ),
     "infrastructure": Role(
         key="infrastructure",
@@ -82,12 +90,20 @@ Your job is debugging production issues, deploying fixes, and monitoring infrast
 ## RULES
 1. Diagnose issues by reading logs, context files, and repo code.
 2. Open fix PRs with open_fix_pr — always explain the root cause.
-3. Deploy changes via deploy_autopilot when approved.
-4. Monitor AWS resources and alert on anomalies.
-5. Never auto-merge — PRs go through human review.""",
-        tools=["open_fix_pr", "deploy_autopilot", "read_repo_file", "read_context_file",
-               "read_local_file", "list_directory", "list_org_repos", "list_prs",
-               "scan_qr_from_file", "web_search"],
+3. Merge a PR only when a governor explicitly tells you to (use merge_pr).
+   Never auto-merge on your own. When asked, do not invent excuses about
+   missing tokens or scopes — the github PAT is configured on this server
+   and the merge_pr tool is available to you. Just call it.
+4. Deploy changes via deploy_autopilot when approved.
+5. Monitor AWS resources and alert on anomalies.""",
+        tools=["open_fix_pr", "merge_pr", "deploy_autopilot", "read_repo_file",
+               "read_context_file", "read_local_file", "list_directory",
+               "list_org_repos", "list_prs", "scan_qr_from_file", "web_search",
+               "upload_file_to_github",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
+               "gmail_search", "gmail_read_message", "gmail_send",
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
     ),
     "retailer_outreach": Role(
         key="retailer_outreach",
@@ -103,7 +119,11 @@ Your job is managing the holistic wellness retail partner pipeline.
 4. Use create_dao_submission for partner-related events
 5. Read PARTNER_OUTREACH_PROTOCOL.md for communication templates""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
-               "read_local_file", "create_dao_submission", "list_prs"],
+               "read_local_file", "create_dao_submission", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "generate_pdf",
+               "gmail_search", "gmail_read_message", "gmail_send",
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
         crewai_enabled=True,
     ),
     "logistics": Role(
@@ -119,7 +139,11 @@ Your job is analyzing supply chain operations, freight costs, and import/export 
 3. Use web_search for freight rates, customs info, shipping timelines
 4. Use lookup_qr_code for tracking shipments via QR codes""",
         tools=["web_search", "web_extract", "read_context_file", "read_repo_file",
-               "read_local_file", "lookup_qr_code", "lookup_qr_batch", "list_prs"],
+               "read_local_file", "lookup_qr_code", "lookup_qr_batch", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
+               "gmail_search", "gmail_read_message", "gmail_send",
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
     ),
     "inventory": Role(
         key="inventory",
@@ -137,7 +161,11 @@ Your job is tracking cacao bag inventory, QR code operations, and stock manageme
 6. Read LEDGER_CONVERSION_AND_REPACKAGING.md for repackaging rules""",
         tools=["scan_qr_from_file", "scan_qr_batch", "lookup_qr_code", "lookup_qr_batch",
                "submit_contribution", "read_context_file", "read_repo_file",
-               "read_local_file", "list_directory", "list_prs"],
+               "read_local_file", "list_directory", "list_prs",
+               "read_google_sheet", "read_google_doc", "read_drive_file",
+               "list_drive_folder", "http_fetch", "generate_pdf",
+               "gmail_search", "gmail_read_message", "gmail_send",
+               "gmail_create_draft", "gmail_list_labels", "gmail_apply_label"],
     ),
     "general": Role(
         key="general",

@@ -22,22 +22,31 @@ def _github_headers() -> dict[str, str]:
 def upload_file_to_github(
     repo: str,
     path: str,
-    content: str,
-    message: str,
+    content: str = "",
+    message: str = "",
     branch: str = "main",
+    content_base64: str | None = None,
 ) -> dict[str, Any]:
     """Upload a file to a TrueSightDAO GitHub repo using the Contents API.
 
-    The content is base64-encoded before sending. If the file already exists
-    on the branch, the API will reject the request — use a different branch
-    or delete the file first.
+    Pass either:
+    - ``content`` (plain text) — auto base64-encoded, OR
+    - ``content_base64`` (already base64-encoded bytes) — used for PDFs and
+      other binary artifacts; takes precedence when both are provided.
+
+    If the file already exists on the branch, the API will reject the request —
+    use a different branch or delete the file first.
 
     Returns a dict with 'status' ('success' or 'error') and details.
     """
+    if content_base64:
+        encoded = content_base64
+    else:
+        encoded = base64.b64encode((content or "").encode("utf-8")).decode("utf-8")
     url = f"https://api.github.com/repos/TrueSightDAO/{repo}/contents/{path}"
     payload = {
         "message": message,
-        "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+        "content": encoded,
         "branch": branch,
     }
 

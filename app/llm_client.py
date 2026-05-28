@@ -440,4 +440,218 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_google_sheet",
+                "description": "Read a range from a Google Sheet (read-only). Default service account (Cypher Defense) has access to the Main Ledger (spreadsheet 1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU) and the Cypher Defense ledger. Pass service_account_name to switch to 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', or 'agroverse_market_research' for sheets only those SAs can see. Output is bounded — large ranges are truncated.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "spreadsheet_id": {"type": "string", "description": "The Google Sheet ID (the long string between /d/ and /edit in the URL)."},
+                        "range_a1": {"type": "string", "description": "A1 notation range, e.g. 'Sheet1!A1:E100' or 'Contributors!A:Z'."},
+                        "service_account_name": {"type": "string", "description": "Optional SA to use: 'cypher_defense' (default), 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', 'agroverse_market_research'."},
+                    },
+                    "required": ["spreadsheet_id", "range_a1"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_google_doc",
+                "description": "Read the text content of a Google Doc (read-only). Returns title + flattened paragraph text, capped at ~64KB.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "document_id": {"type": "string", "description": "The Google Doc ID (the long string between /d/ and /edit in the URL)."},
+                        "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+                    },
+                    "required": ["document_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_drive_file",
+                "description": "Download (or export) a Google Drive file's content. Google-native types (Docs, Sheets, Slides) are auto-exported to text/csv/plain unless you force mime_type. Binary blobs returned base64-encoded. Capped at 256KB.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string", "description": "The Drive file ID."},
+                        "mime_type": {"type": "string", "description": "Optional explicit export/download MIME type."},
+                        "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+                    },
+                    "required": ["file_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_drive_folder",
+                "description": "List direct children of a Google Drive folder (id, name, mimeType, size, modifiedTime).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "folder_id": {"type": "string", "description": "The Drive folder ID."},
+                        "page_size": {"type": "integer", "description": "Max files to return (1-200). Default 50.", "default": 50},
+                        "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+                    },
+                    "required": ["folder_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "http_fetch",
+                "description": "Make a generic HTTP request — primarily for hitting Google Apps Script /exec deployments (anonymous-callable web apps). Use when web_search/web_extract aren't enough and you need to POST or follow a specific REST API. Body capped at 256KB. Private/loopback/metadata URLs are blocked.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Full HTTP(S) URL."},
+                        "method": {"type": "string", "description": "HTTP method.", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"], "default": "GET"},
+                        "body": {"description": "Optional request body. Dicts/lists are JSON-serialised with Content-Type: application/json. Strings sent as-is."},
+                        "headers": {"type": "object", "description": "Optional request headers."},
+                        "timeout": {"type": "number", "description": "Timeout in seconds (default 30, max 60).", "default": 30},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_search",
+                "description": "Search a Gmail mailbox with Gmail's query syntax (e.g. 'from:partner@example.com newer_than:7d', 'is:unread label:retailer-outreach'). Returns ID + sender + subject + date + snippet for matching messages, capped at 50.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Gmail search query."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                        "max_results": {"type": "integer", "description": "Max messages (1-50).", "default": 20},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_read_message",
+                "description": "Read a Gmail message by ID — headers + plain-text body (capped at ~64KB).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID (from gmail_search)."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_send",
+                "description": "Send a plain-text email from a Gmail mailbox. Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                        "subject": {"type": "string", "description": "Email subject."},
+                        "body": {"type": "string", "description": "Plain-text email body."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                        "cc": {"type": "string", "description": "Comma-separated CC list."},
+                        "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_create_draft",
+                "description": "Create a Gmail draft (no send). Preferred over gmail_send when the user hasn't explicitly approved sending.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                        "subject": {"type": "string", "description": "Email subject."},
+                        "body": {"type": "string", "description": "Plain-text email body."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                        "cc": {"type": "string", "description": "Comma-separated CC list."},
+                        "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_list_labels",
+                "description": "List the labels in a Gmail mailbox (id, name, type).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "gmail_apply_label",
+                "description": "Add and/or remove Gmail labels on a single message.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID."},
+                        "add_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to add."},
+                        "remove_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to remove."},
+                        "account": {"type": "string", "description": "Mailbox label.", "enum": ["admin", "gary"]},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_pdf",
+                "description": "Render markdown-lite content (headings, paragraphs, bullets, **bold**, *italic*) into a PDF. Returns base64-encoded PDF bytes (capped at 256KB; full file written to output_path on disk for follow-up tools). Pair with upload_file_to_github(content_base64=...) to ship a PDF into a repo.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "Markdown-lite source. Supports # / ## / ### headings, blank-line paragraphs, '- '/'* ' bullets, **bold**, *italic*."},
+                        "title": {"type": "string", "description": "PDF document title (metadata)."},
+                        "output_path": {"type": "string", "description": "Optional local path to write the full PDF to (default: auto-generated /tmp file)."},
+                    },
+                    "required": ["content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "aws_query",
+                "description": "Run a read-only AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan* operations — mutating calls are forbidden. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, etc.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "account": {"type": "string", "description": "AWS account label.", "enum": ["explorya", "nelanco"]},
+                        "service": {"type": "string", "description": "boto3 service name, e.g. 'ec2', 's3', 'logs', 'cloudwatch', 'ce'."},
+                        "operation": {"type": "string", "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'GetCostAndUsage'."},
+                        "parameters": {"type": "object", "description": "Operation parameters as a JSON object."},
+                        "region": {"type": "string", "description": "Override the account's default region for this call."},
+                    },
+                    "required": ["account", "service", "operation"],
+                },
+            },
+        },
     ]
