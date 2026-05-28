@@ -858,6 +858,8 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         contributors = func_args.get("contributors", governor_name or "autopilot@agroverse.shop")
         amount = func_args.get("amount", "0")
         tdg_issued = func_args.get("tdg_issued", "0")
+        attachment_path = func_args.get("attachment_path", "")
+        attachment_filename = func_args.get("attachment_filename", "")
         if not title or not body or not pr_urls:
             return json.dumps({"status": "error", "message": "title, body, and pr_urls are required"})
         edgar = EdgarDirectClient()
@@ -865,17 +867,28 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             return json.dumps({"status": "error", "message": "Edgar credentials not configured — cannot submit"})
         pr_block = "Pull requests (GitHub evidence):\n" + "\n".join(f"- {u.strip()}" for u in pr_urls)
         description = f"{title}\n\n{pr_block}\n\nDetails:\n{body}"
-        attrs = {
+        attrs: dict[str, str] = {
             "Type": "Time (Minutes)" if amount == "0" or float(amount) > 60 else "USD",
             "Amount": amount,
             "Description": description,
             "Contributor(s)": contributors,
             "TDG Issued": tdg_issued,
-            "Attached Filename": "N/A",
-            "Destination Contribution File Location": "N/A",
         }
-        ok = edgar.submit_contribution("CONTRIBUTION EVENT", attrs, description=title)
-        return json.dumps({"status": "success" if ok else "error", "message": "Contribution submitted" if ok else "Submission failed"})
+        if attachment_path and os.path.isfile(attachment_path):
+            from .tools.dao_submission import submit_ai_agent_contribution as _submit_ai
+            result = _submit_ai(
+                title=title, body=body, pr_urls=pr_urls,
+                contributors=contributors, amount=amount, tdg_issued=tdg_issued,
+                attached_file_path=attachment_path,
+                attached_filename=attachment_filename or None,
+            )
+            return json.dumps({"status": "success" if result.get("status") == "success" else "error",
+                               "message": "Contribution with attachment submitted" if result.get("status") == "success" else f"Submission failed: {result.get('stderr', '')}"})
+        else:
+            attrs["Attached Filename"] = "N/A"
+            attrs["Destination Contribution File Location"] = "N/A"
+            ok = edgar.submit_contribution("CONTRIBUTION EVENT", attrs, description=title)
+            return json.dumps({"status": "success" if ok else "error", "message": "Contribution submitted" if ok else "Submission failed"})
     if func_name == "upload_file_to_github":
         from .tools.upload_file_to_github import upload_file_to_github as _upload
         result = _upload(
