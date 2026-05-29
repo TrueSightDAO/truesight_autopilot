@@ -292,6 +292,27 @@ def build_role_menu() -> list[dict[str, str]]:
     ]
 
 
+def get_default_role() -> Role | None:
+    """Operator opt-out for the new-topic role-selection prompt.
+
+    When ``AUTOPILOT_DEFAULT_ROLE`` is set in the service env, every new
+    topic boots straight into that role without prompting the user.
+    The user can still switch any time by sending a role name in their
+    next message (the existing parser at app/main.py picks it up).
+
+    Out of the box this defaults to ``"general"`` — i.e. *no prompt,
+    all tools available* — because the only operator using this
+    autopilot today is Gary, who found the prompt-on-every-new-topic
+    flow to be friction. Set ``AUTOPILOT_DEFAULT_ROLE=""`` (empty) to
+    restore the old per-topic prompt.
+    """
+    import os
+    name = (os.environ.get("AUTOPILOT_DEFAULT_ROLE", "general") or "").strip().lower()
+    if not name:
+        return None
+    return ROLES.get(name) or ROLES.get(ROLE_ALIASES.get(name, ""))
+
+
 # ── Context reset for old sessions ─────────────────────────────────────────
 
 RESET_CONTEXT_THRESHOLD = 20

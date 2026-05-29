@@ -12,7 +12,7 @@ from typing import Any
 
 from .roles import (
     RESET_CONTEXT_THRESHOLD, ROLE_SELECTION_MESSAGE, archive_old_history,
-    build_role_menu, find_pending_role, find_role_in_history,
+    build_role_menu, find_pending_role, find_role_in_history, get_default_role,
     get_system_prompt_for_role, get_tool_schemas_for_role,
     pending_role_tag, reset_context_prompt, resolve_role, set_role_in_history,
 )
@@ -1811,15 +1811,28 @@ async def chat(request: Request):
     # Role detection for new topics
     if role is None:
         if len(history) == 0:
-            # Brand new topic — show role selection menu
-            history = build_role_menu()
-            _log_session(session_id, history)
-            return StreamingResponse(
-                _sse_single_response(ROLE_SELECTION_MESSAGE),
-                media_type="text/event-stream",
-            )
+            # Brand new topic — if AUTOPILOT_DEFAULT_ROLE is configured,
+            # silently boot into that role instead of prompting the operator.
+            # Default ("general") is set in roles.get_default_role so the
+            # out-of-box behavior is no prompt + all tools available.
+            default = get_default_role()
+            if default is not None:
+                set_role_in_history(history, default)
+                _log_session(session_id, history)
+                # Fall through to the normal chat path — the user's actual
+                # message gets processed under the default role.
+                role = default
+            else:
+                # No default configured → preserve the original prompt behavior.
+                history = build_role_menu()
+                _log_session(session_id, history)
+                return StreamingResponse(
+                    _sse_single_response(ROLE_SELECTION_MESSAGE),
+                    media_type="text/event-stream",
+                )
 
-        # Check for pending role (user is in "keep or reset?" flow)
+    # Check for pending role (user is in "keep or reset?" flow)
+    if role is None:
         pending = find_pending_role(history)
         if pending:
             clean = user_message.strip().lower()
@@ -2108,10 +2121,19 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # Role detection for new topics
     if role is None:
         if len(history) == 0:
-            history = build_role_menu()
-            _log_session(session_id, history)
-            return JSONResponse({"response": ROLE_SELECTION_MESSAGE})
+            # If AUTOPILOT_DEFAULT_ROLE is configured, silently boot into
+            # that role instead of prompting. Default is "general".
+            default = get_default_role()
+            if default is not None:
+                set_role_in_history(history, default)
+                _log_session(session_id, history)
+                role = default
+            else:
+                history = build_role_menu()
+                _log_session(session_id, history)
+                return JSONResponse({"response": ROLE_SELECTION_MESSAGE})
 
+    if role is None:
         # Check for pending role (user is in "keep or reset?" flow)
         pending = find_pending_role(history)
         if pending:
