@@ -107,7 +107,7 @@ Your job is debugging production issues, deploying fixes, and monitoring infrast
 5. Deploy changes via deploy_autopilot when approved.
 6. Monitor AWS resources and alert on anomalies.""",
         tools=["open_fix_pr", "merge_pr", "mark_pr_ready_for_review",
-               "deploy_autopilot", "read_repo_file",
+               "deploy_autopilot", "gas_deploy_project", "read_repo_file",
                "read_context_file", "read_local_file", "list_directory",
                "list_org_repos", "list_prs", "scan_qr_from_file", "web_search",
                "upload_file_to_github",
