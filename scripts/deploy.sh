@@ -119,6 +119,20 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     fi
 "
 
+echo "=== Syncing tokenomics (needed by gas_deploy_project tool) ==="
+# Shallow clone of tokenomics so the autopilot can run
+# scripts/deploy_gas_project.py for GAS deploys driven from Telegram.
+# clasp itself is NOT installed here automatically — operator step (see
+# app/tools/gas_deploy_project.py docstring).
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    if [ -d $REMOTE_DIR/context/tokenomics/.git ]; then
+        cd $REMOTE_DIR/context/tokenomics && git fetch --all && git reset --hard origin/main && git clean -fd
+    else
+        rm -rf $REMOTE_DIR/context/tokenomics
+        git clone --depth 1 https://github.com/TrueSightDAO/tokenomics.git $REMOTE_DIR/context/tokenomics
+    fi
+"
+
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     cd $REMOTE_DIR
