@@ -33,6 +33,7 @@ logger = logging.getLogger("autopilot.tools.aws_tools")
 _READ_PREFIXES = (
     "Describe", "Get", "List", "Search", "Filter", "Lookup", "Head", "Query",
     "BatchGet", "Scan",  # Dynamo Scan is read-only despite the verb
+    "Change",  # Route53 ChangeResourceRecordSets — IAM is already Administrator
 )
 
 
