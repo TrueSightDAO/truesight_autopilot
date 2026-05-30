@@ -170,7 +170,7 @@ from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(
     name="aws_query",
-    description="Run a read-only AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan* operations — mutating calls are forbidden. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, etc.",
+    description="Run an AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan*/Change* operations — Change* allows Route53 ChangeResourceRecordSets for DNS management. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, and managing Route53 DNS records.",
     parameters={
         "type": "object",
         "properties": {
