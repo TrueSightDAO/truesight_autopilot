@@ -16,20 +16,36 @@ Client ──HTTPS──> sophia.truesight.me:443
 
 ## Nginx Configuration
 
-The config file lives at `/opt/truesight_autopilot/config/nginx/sophia.conf`.
+Two config files live under `/opt/truesight_autopilot/config/nginx/`:
+
+| File | Goes into | Context |
+|---|---|---|
+| `sophia-zones.conf` | `/etc/nginx/conf.d/` | http |
+| `sophia.conf` | `/etc/nginx/sites-{available,enabled}/sophia` | server |
+
+The split is required by nginx: `limit_req_zone` must be declared in `http`
+context, not `server` context. The server block then references the zone
+via `limit_req zone=sophia_global`.
 
 ### Install
 
 ```bash
-# Create symlink to sites-available
-ln -sf /opt/truesight_autopilot/config/nginx/sophia.conf /etc/nginx/sites-available/sophia
+# 1. http-context zone declaration (must go in before the server block uses it)
+sudo ln -sf /opt/truesight_autopilot/config/nginx/sophia-zones.conf \
+            /etc/nginx/conf.d/sophia-zones.conf
 
-# Enable the site
-ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/
+# 2. server block
+sudo ln -sf /opt/truesight_autopilot/config/nginx/sophia.conf \
+            /etc/nginx/sites-available/sophia
+sudo ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/
 
-# Test and reload
-nginx -t && systemctl reload nginx
+# 3. Test and reload
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Both `scripts/deploy.sh` and `app/tools/deploy.py` install both files
+automatically and idempotently — manual install is only needed for a
+brand-new EC2 host before the first scripted deploy.
 
 ### Key Features
 
@@ -102,7 +118,7 @@ for i in $(seq 1 100); do curl -s -o /dev/null -w "%{http_code}\n" https://sophi
 - The nginx pre-flight handler returns `*`; the FastAPI app handles credentialed requests
 
 ### Rate Limiting Too Aggressive
-- Adjust `rate=30r/s` and `burst=50` in the `limit_req_zone` directive
+- Adjust `rate=30r/s` in `sophia-zones.conf` (the `limit_req_zone` directive) and `burst=50` in `sophia.conf` (the `limit_req` directive)
 - Or increase the zone size if you see `limit_req` errors in nginx logs
 
 ## Related

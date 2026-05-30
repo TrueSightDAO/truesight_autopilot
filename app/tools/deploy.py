@@ -151,12 +151,18 @@ def deploy_autopilot() -> str:
             steps.append({"step": "restart_service", "status": "ok"})
 
             logger.info("Step 4: nginx + certbot setup")
+            # Install the http-context zone file FIRST (conf.d gets included in
+            # http context), then the server block. Always reinstall the
+            # symlinks — they're idempotent — and re-test/reload nginx so this
+            # step recovers cleanly if a previous deploy left a half-installed
+            # config in place.
             _run_local(
-                "bash -c 'if [ ! -L /etc/nginx/sites-enabled/sophia ]; then "
+                "bash -c '"
+                f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia-zones.conf /etc/nginx/conf.d/sophia-zones.conf && "
                 f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia.conf /etc/nginx/sites-available/sophia && "
                 f"{_ELEVATE} ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/ && "
-                f"{_ELEVATE} nginx -t && {_ELEVATE} systemctl reload nginx; "
-                "else echo nginx already configured; fi'",
+                f"{_ELEVATE} nginx -t && {_ELEVATE} systemctl reload nginx"
+                "'",
                 cwd=remote_dir, timeout=30,
             )
             _run_local(

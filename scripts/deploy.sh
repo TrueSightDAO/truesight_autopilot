@@ -198,16 +198,16 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
 
 echo "=== Setting up nginx + certbot ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
-    # Symlink nginx config
-    if [ ! -L /etc/nginx/sites-enabled/sophia ]; then
-        sudo ln -sf $REMOTE_DIR/config/nginx/sophia.conf /etc/nginx/sites-available/sophia
-        sudo ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/
-        sudo rm -f /etc/nginx/sites-enabled/default
-        sudo nginx -t && sudo systemctl reload nginx
-        echo 'nginx configured for sophia.truesight.me'
-    else
-        echo 'nginx already configured for sophia.truesight.me'
-    fi
+    # Install the http-context zone file FIRST (conf.d gets included in http
+    # context). The server block depends on the zone existing. Always reinstall
+    # the symlinks — they're idempotent — and re-test/reload nginx so a half-
+    # installed previous deploy recovers cleanly.
+    sudo ln -sf $REMOTE_DIR/config/nginx/sophia-zones.conf /etc/nginx/conf.d/sophia-zones.conf
+    sudo ln -sf $REMOTE_DIR/config/nginx/sophia.conf /etc/nginx/sites-available/sophia
+    sudo ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/
+    sudo rm -f /etc/nginx/sites-enabled/default
+    sudo nginx -t && sudo systemctl reload nginx
+    echo 'nginx configured for sophia.truesight.me'
 
     # Install certbot if not present
     if ! command -v certbot &>/dev/null; then
