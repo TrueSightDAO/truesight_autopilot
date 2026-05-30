@@ -13,8 +13,9 @@ from ..tool_registry import ToolSpec
 _ALLOWED_CHAT_REPOS = ", ".join([
     "dapp_beta", "dapp_prod", "tokenomics", "truesight_me", "truesight_me_prod",
     "agroverse_shop", "agroverse_shop_prod", "dao_client",
-    "market_research", "sentiment_importer", "truesight_autopilot",
+    "market_research", "go_to_market", "sentiment_importer", "truesight_autopilot",
     ".github", "agentic_ai_context", "agroverse-inventory", "dao_protocol",
+    "oracle", "capoeira", "program-template", "butterfly-effect-club",
 ])
 
 TOOL_SPECS = [
