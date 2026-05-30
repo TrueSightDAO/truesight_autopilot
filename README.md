@@ -1,12 +1,16 @@
-# truesight_autopilot
+# Sophia (truesight_autopilot)
 
 **Unified AI service for TrueSight DAO — governor chat + autonomous SRE + developer.**
+
+**Public URL: [https://sophia.truesight.me](https://sophia.truesight.me)**
+
+Sophia is the public-facing name of the TrueSight Autopilot service, accessible at `sophia.truesight.me`. The service runs on a dedicated EC2 instance behind an nginx reverse proxy with SSL termination via Let's Encrypt.
 
 ## Vision
 
 TrueSight DAO runs on code: market research pipelines, email agents, inventory snapshots, contribution ledgers, DApp pages, tokenomics mirrors. Today, every bug, every GitHub Action failure, every AWS cost spike, every GAS execution error waits for a human to wake up, read an email, open a terminal, and fix it.
 
-**truesight_autopilot exists to close that gap.**
+**Sophia exists to close that gap.**
 
 It is a persistent cloud service with two modes:
 
@@ -40,7 +44,7 @@ Both modes share the same brain: **DeepSeek-V3** (30× cheaper than Claude) with
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         truesight_autopilot (EC2)                           │
+│                         Sophia — truesight_autopilot (EC2)                  │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │  collector  │  │  classifier │  │  diagnosis  │  │   fix_generator     │ │
 │  │  (pollers)  │→ │  (LLM/rules)│→ │   engine    │→ │   (code + infra)    │ │
@@ -112,6 +116,9 @@ DRY_RUN=true python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
 
 # Check health
 curl http://localhost:8001/health
+
+# Test oracle advisory (replaces GAS bridge)
+curl "http://localhost:8001/oracle-advisory?mode=day&primary_number=1&primary_name=The+Creative&primary_judgment=Work+with+the+creative+force"
 ```
 
 ## Deployment
