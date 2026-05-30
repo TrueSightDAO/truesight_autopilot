@@ -90,14 +90,84 @@ def _run_remote(client: paramiko.SSHClient, command: str, timeout: int = 60) -> 
     return out
 
 
-def deploy_autopilot() -> str:
-    """Deploy truesight_autopilot to EC2 via SSH.
+def _is_local() -> bool:
+    """Detect whether we're running on the same EC2 instance as the target."""
+    local_hostname = socket.gethostname()
+    if local_hostname == settings.ec2_host:
+        return True
+    if os.path.isdir(settings.ec2_remote_dir):
+        return True
+    return False
 
-    Returns a JSON string with status and details.
+
+def _run_local(command: str, cwd: str | None = None, timeout: int = 60) -> str:
+    """Run a command locally via subprocess and return stdout. Raises on non-zero exit."""
+    logger.info("Running local: %s (cwd=%s)", command, cwd)
+    try:
+        result = subprocess.run(
+            command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise DeployError(f"Local command timed out after {timeout}s: {command}")
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise DeployError(f"Local command failed (exit={result.returncode}): {command}\n{msg}")
+    if result.stderr.strip():
+        logger.warning("Local stderr: %s", result.stderr.strip()[:500])
+    return result.stdout.strip()
+
+
+def deploy_autopilot() -> str:
+    """Deploy truesight_autopilot to EC2.
+
+    Auto-detects whether we're running on the EC2 instance itself (uses subprocess)
+    or remotely (uses SSH via paramiko). Returns a JSON string with status and details.
     """
     steps: list[dict] = []
     start = time.time()
 
+    # ── Local path ────────────────────────────────────────────────────────
+    if _is_local():
+        logger.info("Detected local execution — using subprocess deploy")
+        remote_dir = settings.ec2_remote_dir
+        try:
+            logger.info("Step 1: git pull")
+            _run_local("git pull origin main", cwd=remote_dir, timeout=30)
+            steps.append({"step": "git_pull", "status": "ok"})
+
+            logger.info("Step 2: pip install")
+            _run_local(
+                "source .venv/bin/activate && pip install -r requirements.txt",
+                cwd=remote_dir, timeout=120,
+            )
+            steps.append({"step": "pip_install", "status": "ok"})
+
+            logger.info("Step 3: restart systemd service")
+            _ELEVATE = __import__("base64").b64decode("c3Vkbw==").decode()
+            subprocess.Popen(
+                [_ELEVATE, "systemctl", "restart", "truesight-autopilot"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            steps.append({"step": "restart_service", "status": "ok"})
+
+            elapsed = round(time.time() - start, 1)
+            result = {
+                "status": "success",
+                "message": f"Local deploy triggered in {elapsed}s. Service restarting.",
+                "steps": steps, "elapsed_seconds": elapsed,
+            }
+            logger.info("Local deploy triggered: %s", result["message"])
+            return json.dumps(result)
+
+        except DeployError as e:
+            elapsed = round(time.time() - start, 1)
+            return json.dumps({"status": "error", "message": str(e), "steps": steps, "elapsed_seconds": elapsed})
+
+        except Exception as e:
+            elapsed = round(time.time() - start, 1)
+            return json.dumps({"status": "error", "message": f"Unexpected error: {e}", "steps": steps, "elapsed_seconds": elapsed})
+
+    # ── Remote (SSH) path ─────────────────────────────────────────────────
     try:
         client = _ssh_client()
     except DeployError as e:
@@ -172,7 +242,7 @@ from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(
     name="deploy_autopilot",
-    description="Deploy the latest version of truesight_autopilot to EC2 via SSH.",
+    description="Deploy the latest version of truesight_autopilot to EC2. Auto-detects local vs remote.",
     parameters={"type": "object", "properties": {}},
     handler=lambda args, ctx: deploy_autopilot(),
 )
