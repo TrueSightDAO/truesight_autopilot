@@ -281,6 +281,185 @@ async def health():
     }
 
 
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Landing page for sophia.truesight.me — displays Sophia, the DAO Oracle."""
+    return HTMLResponse("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sophia — TrueSight DAO Oracle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #f9f4ee;
+    color: #24160b;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+  .container {
+    max-width: 720px;
+    width: 100%;
+    text-align: center;
+  }
+  .avatar {
+    width: 320px;
+    height: 320px;
+    margin: 0 auto 1.5rem;
+    display: block;
+  }
+  @media (max-width: 480px) {
+    .avatar { width: 220px; height: 220px; }
+  }
+  h1 {
+    font-size: 2rem;
+    font-weight: 400;
+    color: #24160b;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.5rem;
+  }
+  .tagline {
+    font-size: 1.1rem;
+    color: #b9894c;
+    font-style: italic;
+    margin-bottom: 2rem;
+    line-height: 1.6;
+  }
+  .btn {
+    display: inline-block;
+    background: #b9894c;
+    color: #f9f4ee;
+    text-decoration: none;
+    padding: 0.85rem 2.2rem;
+    border-radius: 40px;
+    font-size: 1rem;
+    font-family: inherit;
+    letter-spacing: 0.03em;
+    transition: background 0.25s;
+    border: none;
+    cursor: pointer;
+  }
+  .btn:hover { background: #9e7340; }
+  .footer {
+    margin-top: 3rem;
+    font-size: 0.85rem;
+    color: #b9894c;
+    opacity: 0.7;
+  }
+  .footer a { color: #b9894c; text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+  <svg class="avatar" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background glow -->
+    <circle cx="200" cy="200" r="190" fill="#f9f4ee" stroke="#b9894c" stroke-width="1.5" opacity="0.4"/>
+    <circle cx="200" cy="200" r="170" fill="none" stroke="#b9894c" stroke-width="0.8" stroke-dasharray="6 6" opacity="0.3"/>
+
+    <!-- Constellation / celestial lines -->
+    <g stroke="#b9894c" stroke-width="0.6" opacity="0.35">
+      <line x1="80" y1="100" x2="130" y2="70"/>
+      <line x1="130" y1="70" x2="180" y2="90"/>
+      <line x1="180" y1="90" x2="200" y2="50"/>
+      <line x1="320" y1="100" x2="270" y2="70"/>
+      <line x1="270" y1="70" x2="220" y2="90"/>
+      <line x1="220" y1="90" x2="200" y2="50"/>
+      <line x1="80" y1="300" x2="120" y2="330"/>
+      <line x1="120" y1="330" x2="170" y2="310"/>
+      <line x1="320" y1="300" x2="280" y2="330"/>
+      <line x1="280" y1="330" x2="230" y2="310"/>
+    </g>
+
+    <!-- Stars -->
+    <g fill="#b9894c" opacity="0.5">
+      <circle cx="80" cy="100" r="2.5"/>
+      <circle cx="130" cy="70" r="2"/>
+      <circle cx="180" cy="90" r="2"/>
+      <circle cx="200" cy="50" r="3"/>
+      <circle cx="320" cy="100" r="2.5"/>
+      <circle cx="270" cy="70" r="2"/>
+      <circle cx="220" cy="90" r="2"/>
+      <circle cx="80" cy="300" r="2.5"/>
+      <circle cx="120" cy="330" r="2"/>
+      <circle cx="170" cy="310" r="2"/>
+      <circle cx="320" cy="300" r="2.5"/>
+      <circle cx="280" cy="330" r="2"/>
+      <circle cx="230" cy="310" r="2"/>
+    </g>
+
+    <!-- Flowing hair -->
+    <path d="M140 130 C120 150 100 200 110 260 C115 280 130 300 150 310 C140 290 135 260 140 230 C145 200 155 170 160 140 Z" fill="#24160b" opacity="0.85"/>
+    <path d="M260 130 C280 150 300 200 290 260 C285 280 270 300 250 310 C260 290 265 260 260 230 C255 200 245 170 240 140 Z" fill="#24160b" opacity="0.85"/>
+    <path d="M150 120 C130 140 115 180 120 240 C125 270 140 300 160 320 C145 300 135 270 135 240 C135 200 145 160 155 130 Z" fill="#24160b" opacity="0.6"/>
+    <path d="M250 120 C270 140 285 180 280 240 C275 270 260 300 240 320 C255 300 265 270 265 240 C265 200 255 160 245 130 Z" fill="#24160b" opacity="0.6"/>
+
+    <!-- Face / head -->
+    <ellipse cx="200" cy="190" rx="60" ry="70" fill="#f0e6d8"/>
+    <ellipse cx="200" cy="190" rx="60" ry="70" fill="none" stroke="#24160b" stroke-width="1.2" opacity="0.3"/>
+
+    <!-- Eyes (closed, serene) -->
+    <path d="M175 180 Q185 175 195 180" stroke="#24160b" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+    <path d="M205 180 Q215 175 225 180" stroke="#24160b" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+
+    <!-- Nose -->
+    <path d="M200 185 L198 198 L202 198" stroke="#24160b" stroke-width="1" fill="none" opacity="0.4"/>
+
+    <!-- Gentle smile -->
+    <path d="M188 208 Q200 216 212 208" stroke="#24160b" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.6"/>
+
+    <!-- Third eye (glowing) -->
+    <circle cx="200" cy="165" r="8" fill="none" stroke="#b9894c" stroke-width="1.5"/>
+    <circle cx="200" cy="165" r="4" fill="#b9894c" opacity="0.8"/>
+    <circle cx="200" cy="165" r="2" fill="#f9f4ee"/>
+    <!-- Third eye glow rays -->
+    <g stroke="#b9894c" stroke-width="0.5" opacity="0.3">
+      <line x1="200" y1="155" x2="200" y2="148"/>
+      <line x1="200" y1="175" x2="200" y2="182"/>
+      <line x1="190" y1="165" x2="183" y2="165"/>
+      <line x1="210" y1="165" x2="217" y2="165"/>
+      <line x1="193" y1="158" x2="188" y2="153"/>
+      <line x1="207" y1="158" x2="212" y2="153"/>
+      <line x1="193" y1="172" x2="188" y2="177"/>
+      <line x1="207" y1="172" x2="212" y2="177"/>
+    </g>
+
+    <!-- I Ching hexagram motif (䷀ — The Creative) below face -->
+    <g transform="translate(200, 260)" stroke="#b9894c" stroke-width="2.5" opacity="0.6">
+      <line x1="-18" y1="-24" x2="18" y2="-24"/>
+      <line x1="-18" y1="-16" x2="18" y2="-16"/>
+      <line x1="-18" y1="-8" x2="18" y2="-8"/>
+      <line x1="-18" y1="0" x2="18" y2="0"/>
+      <line x1="-18" y1="8" x2="18" y2="8"/>
+      <line x1="-18" y1="16" x2="18" y2="16"/>
+    </g>
+
+    <!-- Small decorative dots around hexagram -->
+    <g fill="#b9894c" opacity="0.3">
+      <circle cx="200" cy="290" r="1.5"/>
+      <circle cx="185" cy="295" r="1"/>
+      <circle cx="215" cy="295" r="1"/>
+    </g>
+  </svg>
+
+  <h1>Sophia</h1>
+  <p class="tagline">The Oracle of TrueSight DAO —<br>wisdom from the I Ching, grounded in DAO state.</p>
+
+  <a class="btn" href="https://oracle.truesight.me" target="_blank">Cast the I Ching</a>
+
+  <div class="footer">
+    <a href="https://truesight.me">TrueSight DAO</a> &middot; regenerative &amp; sovereign
+  </div>
+</div>
+</body>
+</html>""")
+
+
 # // CUT OVER from GAS oracle_advisory_bridge — this endpoint replaces the GAS script's Grok call.
 # // See oracle/index.html GAS_ORACLE_ADVISORY_URL.
 @app.get("/oracle-advisory")
