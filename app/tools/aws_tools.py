@@ -1,4 +1,4 @@
-"""Read-only AWS query tool spanning every account in ``AWS_ACCOUNTS``.
+"""AWS query tool spanning every account in ``AWS_ACCOUNTS``.
 
 Exposes ``aws_query(account, service, operation, parameters=None, region=None)``.
 
@@ -7,9 +7,10 @@ Exposes ``aws_query(account, service, operation, parameters=None, region=None)``
   credential-loading logic stays in one place.
 - ``service`` — any boto3 service name (``"ec2"``, ``"s3"``, ``"logs"``,
   ``"cloudwatch"``, ``"ce"`` …).
-- ``operation`` — PascalCase AWS API operation. **Allowlisted** to read-only
+- ``operation`` — PascalCase AWS API operation. **Allowlisted** to safe
   shapes only: ``Describe*``, ``Get*``, ``List*``, ``Search*``, ``Filter*``,
-  ``Lookup*``, ``Head*``. Anything else returns ``{status:"forbidden"}``.
+  ``Lookup*``, ``Head*``, ``Change*`` (Route53 DNS mutations). Anything else
+  returns ``{status:"forbidden"}``.
 
 The boto3 response is JSON-serialised with ``datetime`` → ISO-8601 and bytes
 → base64 so the model can consume it.
@@ -33,6 +34,7 @@ logger = logging.getLogger("autopilot.tools.aws_tools")
 _READ_PREFIXES = (
     "Describe", "Get", "List", "Search", "Filter", "Lookup", "Head", "Query",
     "BatchGet", "Scan",  # Dynamo Scan is read-only despite the verb
+    "Change",  # Route53 ChangeResourceRecordSets — IAM is already Administrator
 )
 
 
@@ -168,7 +170,7 @@ from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(
     name="aws_query",
-    description="Run a read-only AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan* operations — mutating calls are forbidden. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, etc.",
+    description="Run an AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan*/Change* operations — Change* allows Route53 ChangeResourceRecordSets for DNS management. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, and managing Route53 DNS records.",
     parameters={
         "type": "object",
         "properties": {
