@@ -1,4 +1,4 @@
-"""Read-only AWS query tool spanning every account in ``AWS_ACCOUNTS``.
+"""AWS query tool spanning every account in ``AWS_ACCOUNTS``.
 
 Exposes ``aws_query(account, service, operation, parameters=None, region=None)``.
 
@@ -7,9 +7,10 @@ Exposes ``aws_query(account, service, operation, parameters=None, region=None)``
   credential-loading logic stays in one place.
 - ``service`` — any boto3 service name (``"ec2"``, ``"s3"``, ``"logs"``,
   ``"cloudwatch"``, ``"ce"`` …).
-- ``operation`` — PascalCase AWS API operation. **Allowlisted** to read-only
+- ``operation`` — PascalCase AWS API operation. **Allowlisted** to safe
   shapes only: ``Describe*``, ``Get*``, ``List*``, ``Search*``, ``Filter*``,
-  ``Lookup*``, ``Head*``. Anything else returns ``{status:"forbidden"}``.
+  ``Lookup*``, ``Head*``, ``Change*`` (Route53 DNS mutations). Anything else
+  returns ``{status:"forbidden"}``.
 
 The boto3 response is JSON-serialised with ``datetime`` → ISO-8601 and bytes
 → base64 so the model can consume it.
