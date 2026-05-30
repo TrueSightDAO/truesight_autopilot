@@ -1,6 +1,10 @@
-# truesight_autopilot
+# Sophia (truesight_autopilot)
 
 **Unified AI service for TrueSight DAO — governor chat + autonomous SRE + developer.**
+
+**Public URL: [https://sophia.truesight.me](https://sophia.truesight.me)**
+
+Sophia is the public-facing name of the TrueSight Autopilot service, accessible at `sophia.truesight.me`. The service runs on a dedicated EC2 instance behind an nginx reverse proxy with SSL termination via Let's Encrypt.
 
 ## Vision
 
