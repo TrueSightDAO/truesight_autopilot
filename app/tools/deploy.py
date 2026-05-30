@@ -250,11 +250,25 @@ def deploy_autopilot() -> str:
                 elapsed = round(time.time() - start, 1)
                 return json.dumps({"status": "error", "message": f"Unexpected error: {e}", "steps": steps, "elapsed_seconds": elapsed})
 
-        # Phase one: do git pull, then re-exec a fresh Python interpreter
-        # so the just-pulled deploy.py is the one running phase two.
+        # Phase one: hard-reset to origin/main (NOT git pull), then re-exec
+        # a fresh Python interpreter so the just-pulled deploy.py is the one
+        # running phase two.
+        #
+        # Why hard reset instead of pull: certbot --nginx (run in step 4)
+        # edits /etc/nginx/sites-available/sophia, which is a symlink into
+        # /opt/truesight_autopilot/config/nginx/sophia.conf in the repo. So
+        # the next deploy sees the repo as "dirty" and `git pull` refuses to
+        # merge with "Your local changes would be overwritten." Hard reset +
+        # clean treats the repo file as the source of truth and accepts that
+        # certbot's runtime edits get clobbered each deploy (then re-applied
+        # by certbot --nginx in step 4). This matches what scripts/deploy.sh
+        # already does.
         try:
-            logger.info("Step 1: git pull")
-            _run_local("git pull origin main", cwd=remote_dir, timeout=30)
+            logger.info("Step 1: git fetch + reset --hard origin/main + clean")
+            _run_local(
+                "git fetch origin main && git reset --hard origin/main && git clean -fd",
+                cwd=remote_dir, timeout=30,
+            )
             # Don't append git_pull to steps here — the subprocess will, so
             # the returned JSON has the full step list in execution order.
 
