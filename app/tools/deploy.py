@@ -8,6 +8,37 @@ and runs the equivalent of scripts/deploy.sh steps:
   1. git pull latest code
   2. pip install -r requirements.txt
   3. restart systemd service
+  4. nginx + certbot (sophia.truesight.me)
+
+## Why this file uses a two-phase re-exec pattern
+
+When the long-running uvicorn worker invokes this tool, Python has already
+imported `app/tools/deploy.py` into memory. The function then runs:
+
+    1. git pull    — updates disk
+    2. pip install — uses disk state (fine; pip reads files fresh)
+    3. restart     — kills the *next* worker, not the current run
+    4. nginx step  — runs from the in-memory deploy.py loaded at step 1's start
+
+So if step 1's pull brings down a fix to step 4, step 4 still executes the
+**pre-fix** code. The fix only takes effect on the NEXT invocation after the
+service restart reloads the module. This bit us on 2026-05-30 with the sophia
+nginx config — two consecutive self-deploys ran the broken step before the
+fixed code finally landed in memory.
+
+The fix: after `git pull`, fork a fresh Python subprocess that re-imports
+`deploy.py` from disk (now containing whatever was just pulled). The
+subprocess runs phases 2-4 with the latest code; the parent waits and
+returns the subprocess's structured output.
+
+Coordination uses an env-var sentinel `AUTOPILOT_DEPLOY_PHASE`:
+  - unset (or "phase_one") → entry point: do git pull, fork subprocess
+  - "phase_two_post_pull"   → subprocess: do pip+restart+nginx, return JSON
+
+The parent stays in-process so the calling FastAPI worker can return the
+JSON result over /chat or via the LLM tool dispatcher without dying mid-
+request. The child subprocess is short-lived (subprocess.run blocks until
+it exits), so we never have orphan workers.
 """
 from __future__ import annotations
 
@@ -16,6 +47,7 @@ import logging
 import os
 import socket
 import subprocess
+import sys
 import time
 
 import paramiko
@@ -23,6 +55,11 @@ import paramiko
 from ..config import settings
 
 logger = logging.getLogger("autopilot.deploy")
+
+# Env-var sentinel for the two-phase re-exec pattern. Documented in module
+# docstring above; set by phase-one (parent), read by phase-two (subprocess).
+_PHASE_ENV = "AUTOPILOT_DEPLOY_PHASE"
+_PHASE_TWO = "phase_two_post_pull"
 
 
 class DeployError(Exception):
@@ -117,11 +154,77 @@ def _run_local(command: str, cwd: str | None = None, timeout: int = 60) -> str:
     return result.stdout.strip()
 
 
+def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
+    """Phase-two: pip install + restart + nginx, using whatever's on disk RIGHT NOW.
+
+    Invoked by phase-one in a fresh subprocess so the freshly-pulled
+    deploy.py is the one running these steps. See module docstring for
+    the full re-exec rationale.
+    """
+    _ELEVATE = __import__("base64").b64decode("c3Vkbw==").decode()
+
+    logger.info("Step 2: pip install")
+    _run_local(
+        "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
+        cwd=remote_dir, timeout=120,
+    )
+    steps.append({"step": "pip_install", "status": "ok"})
+
+    logger.info("Step 3: restart systemd service")
+    subprocess.Popen(
+        [_ELEVATE, "systemctl", "restart", "truesight-autopilot"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    steps.append({"step": "restart_service", "status": "ok"})
+
+    logger.info("Step 4: nginx + certbot setup")
+    # Install the http-context zone file FIRST (conf.d gets included in
+    # http context), then the server block. Always reinstall the
+    # symlinks — they're idempotent — and re-test/reload nginx so this
+    # step recovers cleanly if a previous deploy left a half-installed
+    # config in place.
+    _run_local(
+        "bash -c '"
+        f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia-zones.conf /etc/nginx/conf.d/sophia-zones.conf && "
+        f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia.conf /etc/nginx/sites-available/sophia && "
+        f"{_ELEVATE} ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/ && "
+        f"{_ELEVATE} nginx -t && {_ELEVATE} systemctl reload nginx"
+        "'",
+        cwd=remote_dir, timeout=30,
+    )
+    _run_local(
+        "bash -c 'if ! command -v certbot; then "
+        f"{_ELEVATE} snap install --classic certbot && "
+        f"{_ELEVATE} ln -sf /snap/bin/certbot /usr/bin/certbot; "
+        "else echo certbot already installed; fi'",
+        cwd=remote_dir, timeout=60,
+    )
+    _run_local(
+        f"bash -c '{_ELEVATE} certbot --nginx -d sophia.truesight.me --non-interactive --agree-tos -m garyjob@gmail.com || true'",
+        cwd=remote_dir, timeout=30,
+    )
+    steps.append({"step": "nginx_certbot", "status": "ok"})
+
+    elapsed = round(time.time() - start, 1)
+    result = {
+        "status": "success",
+        "message": f"Local deploy triggered in {elapsed}s. Service restarting.",
+        "steps": steps,
+        "elapsed_seconds": elapsed,
+    }
+    logger.info("Local deploy triggered: %s", result["message"])
+    return json.dumps(result)
+
+
 def deploy_autopilot() -> str:
     """Deploy truesight_autopilot to EC2.
 
     Auto-detects whether we're running on the EC2 instance itself (uses subprocess)
     or remotely (uses SSH via paramiko). Returns a JSON string with status and details.
+
+    On the local path, uses a two-phase re-exec pattern (see module docstring)
+    so that fixes to the deploy flow itself, pulled in step 1, are picked up
+    by steps 2-4 within the SAME invocation — not deferred to the next one.
     """
     steps: list[dict] = []
     start = time.time()
@@ -130,62 +233,63 @@ def deploy_autopilot() -> str:
     if _is_local():
         logger.info("Detected local execution — using subprocess deploy")
         remote_dir = settings.ec2_remote_dir
+
+        # If we're the phase-two subprocess, skip git pull and run the rest
+        # directly using whatever's on disk right now (i.e. what the parent
+        # just pulled). Parent passes the env-var sentinel.
+        if os.environ.get(_PHASE_ENV) == _PHASE_TWO:
+            logger.info("Re-entered as phase-two subprocess — skipping git pull, running post-pull steps")
+            try:
+                # Parent already did git_pull; record it as ok for the steps array.
+                steps.append({"step": "git_pull", "status": "ok"})
+                return _post_pull_steps(remote_dir, start, steps)
+            except DeployError as e:
+                elapsed = round(time.time() - start, 1)
+                return json.dumps({"status": "error", "message": str(e), "steps": steps, "elapsed_seconds": elapsed})
+            except Exception as e:
+                elapsed = round(time.time() - start, 1)
+                return json.dumps({"status": "error", "message": f"Unexpected error: {e}", "steps": steps, "elapsed_seconds": elapsed})
+
+        # Phase one: do git pull, then re-exec a fresh Python interpreter
+        # so the just-pulled deploy.py is the one running phase two.
         try:
             logger.info("Step 1: git pull")
             _run_local("git pull origin main", cwd=remote_dir, timeout=30)
-            steps.append({"step": "git_pull", "status": "ok"})
+            # Don't append git_pull to steps here — the subprocess will, so
+            # the returned JSON has the full step list in execution order.
 
-            logger.info("Step 2: pip install")
-            _run_local(
-                "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
-                cwd=remote_dir, timeout=120,
+            logger.info("Re-exec'ing phase-two subprocess with freshly-pulled deploy.py")
+            child_env = {**os.environ, _PHASE_ENV: _PHASE_TWO}
+            # Use python -c rather than -m so we work regardless of how the
+            # parent was launched (uvicorn module, direct script, REPL).
+            child = subprocess.run(
+                [
+                    sys.executable, "-c",
+                    "import sys; "
+                    "from app.tools.deploy import deploy_autopilot; "
+                    "sys.stdout.write(deploy_autopilot())"
+                ],
+                cwd=remote_dir, env=child_env,
+                capture_output=True, text=True, timeout=300,
             )
-            steps.append({"step": "pip_install", "status": "ok"})
-
-            logger.info("Step 3: restart systemd service")
-            _ELEVATE = __import__("base64").b64decode("c3Vkbw==").decode()
-            subprocess.Popen(
-                [_ELEVATE, "systemctl", "restart", "truesight-autopilot"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            steps.append({"step": "restart_service", "status": "ok"})
-
-            logger.info("Step 4: nginx + certbot setup")
-            # Install the http-context zone file FIRST (conf.d gets included in
-            # http context), then the server block. Always reinstall the
-            # symlinks — they're idempotent — and re-test/reload nginx so this
-            # step recovers cleanly if a previous deploy left a half-installed
-            # config in place.
-            _run_local(
-                "bash -c '"
-                f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia-zones.conf /etc/nginx/conf.d/sophia-zones.conf && "
-                f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia.conf /etc/nginx/sites-available/sophia && "
-                f"{_ELEVATE} ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/ && "
-                f"{_ELEVATE} nginx -t && {_ELEVATE} systemctl reload nginx"
-                "'",
-                cwd=remote_dir, timeout=30,
-            )
-            _run_local(
-                "bash -c 'if ! command -v certbot; then "
-                f"{_ELEVATE} snap install --classic certbot && "
-                f"{_ELEVATE} ln -sf /snap/bin/certbot /usr/bin/certbot; "
-                "else echo certbot already installed; fi'",
-                cwd=remote_dir, timeout=60,
-            )
-            _run_local(
-                f"bash -c '{_ELEVATE} certbot --nginx -d sophia.truesight.me --non-interactive --agree-tos -m garyjob@gmail.com || true'",
-                cwd=remote_dir, timeout=30,
-            )
-            steps.append({"step": "nginx_certbot", "status": "ok"})
-
-            elapsed = round(time.time() - start, 1)
-            result = {
-                "status": "success",
-                "message": f"Local deploy triggered in {elapsed}s. Service restarting.",
-                "steps": steps, "elapsed_seconds": elapsed,
-            }
-            logger.info("Local deploy triggered: %s", result["message"])
-            return json.dumps(result)
+            if child.returncode != 0:
+                elapsed = round(time.time() - start, 1)
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        f"Phase-two subprocess failed (exit={child.returncode}). "
+                        f"stderr={child.stderr.strip()[:500]}"
+                    ),
+                    "steps": [{"step": "git_pull", "status": "ok"}],
+                    "elapsed_seconds": elapsed,
+                })
+            # Subprocess emitted the full JSON result — pass it through.
+            return child.stdout.strip() or json.dumps({
+                "status": "error",
+                "message": "Phase-two subprocess returned no output",
+                "steps": [{"step": "git_pull", "status": "ok"}],
+                "elapsed_seconds": round(time.time() - start, 1),
+            })
 
         except DeployError as e:
             elapsed = round(time.time() - start, 1)
