@@ -242,7 +242,7 @@ from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(
     name="deploy_autopilot",
-    description="Deploy the latest version of truesight_autopilot to EC2 via SSH.",
+    description="Deploy the latest version of truesight_autopilot to EC2. Auto-detects local vs remote.",
     parameters={"type": "object", "properties": {}},
     handler=lambda args, ctx: deploy_autopilot(),
 )
