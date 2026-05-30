@@ -253,6 +253,18 @@ app.add_middleware(
 )
 
 
+# ── In-memory rate limiter: max 1 req per 10s per IP ──
+_oracle_rate_limit: dict[str, float] = {}
+
+
+def _check_oracle_rate_limit(ip: str) -> None:
+    now = time.time()
+    last = _oracle_rate_limit.get(ip, 0.0)
+    if now - last < 10.0:
+        raise HTTPException(status_code=429, detail="Rate limited — max 1 request per 10 seconds per IP")
+    _oracle_rate_limit[ip] = now
+
+
 @app.get("/health")
 async def health():
     gov_data = load_governors()
@@ -266,6 +278,118 @@ async def health():
         "grok_key_set": bool(settings.grok_api_key),
         "governors_count": len(gov_data.get("governors", [])),
         "governors_updated_at": gov_data.get("updated_at", ""),
+    }
+
+
+# // CUT OVER from GAS oracle_advisory_bridge — this endpoint replaces the GAS script's Grok call.
+# // See oracle/index.html GAS_ORACLE_ADVISORY_URL.
+@app.get("/oracle-advisory")
+async def oracle_advisory(
+    request: Request,
+    mode: str = "",
+    signature: str = "",
+    primary_number: str = "",
+    primary_name: str = "",
+    primary_judgment: str = "",
+    related_number: str = "",
+    related_name: str = "",
+    related_judgment: str = "",
+    changing_lines: str = "",
+    timestamp_utc: str = "",
+    qmdj_chart: str = "",
+):
+    """Public endpoint that replaces the GAS oracle_advisory_bridge script.
+
+    Accepts the same GET params as the GAS script. Fetches the current
+    ADVISORY_SNAPSHOT.md from GitHub, builds a system prompt instructing
+    the LLM to act as a DAO Oracle interpreting the I Ching hexagram in
+    the context of live DAO state, calls DeepSeek, and returns JSON in
+    the same shape as the GAS bridge.
+    """
+    # Rate limit: 1 req per 10s per IP
+    ip = request.client.host if request.client else "unknown"
+    _check_oracle_rate_limit(ip)
+
+    # 1. Fetch ADVISORY_SNAPSHOT.md from GitHub raw URL
+    snapshot_url = "https://raw.githubusercontent.com/TrueSightDAO/dao_protocol/main/ADVISORY_SNAPSHOT.md"
+    snapshot_text = ""
+    try:
+        import httpx
+        resp = httpx.get(snapshot_url, timeout=15.0)
+        if resp.status_code == 200:
+            snapshot_text = resp.text
+        else:
+            logger.warning("oracle-advisory: failed to fetch snapshot (HTTP %d)", resp.status_code)
+    except Exception as e:
+        logger.warning("oracle-advisory: error fetching snapshot: %s", e)
+
+    # 2. Build system prompt
+    system_prompt = (
+        "You are the TrueSight DAO Oracle — a wise, grounded interpreter of the I Ching "
+        "for a real-world regenerative DAO. Your role is to read the current hexagram "
+        "(primary + relating) and the DAO's live state snapshot, then produce a concise "
+        "advisory that connects the ancient wisdom to the DAO's present situation.\n\n"
+        "Speak in plain English. Be direct, practical, and honest. Do not sugarcoat. "
+        "If the hexagram warns of danger, say so. If it signals opportunity, name it. "
+        "Ground every insight in the DAO's actual metrics, treasury, and governance "
+        "state from the snapshot below.\n\n"
+        "Output format: a short paragraph (3–6 sentences) that a DAO governor can act on.\n\n"
+        "---\n"
+    )
+
+    if snapshot_text:
+        system_prompt += f"## DAO State Snapshot (ADVISORY_SNAPSHOT.md)\n\n{snapshot_text}\n\n"
+    else:
+        system_prompt += "## DAO State Snapshot\n\n(Unavailable — advisory based on hexagram alone.)\n\n"
+
+    system_prompt += (
+        "---\n"
+        "## I Ching Reading\n\n"
+        f"- **Mode**: {mode}\n"
+        f"- **Primary Hexagram**: {primary_number} — {primary_name}\n"
+        f"- **Primary Judgment**: {primary_judgment}\n"
+    )
+    if related_number:
+        system_prompt += (
+            f"- **Related Hexagram**: {related_number} — {related_name}\n"
+            f"- **Related Judgment**: {related_judgment}\n"
+        )
+    if changing_lines:
+        system_prompt += f"- **Changing Lines**: {changing_lines}\n"
+    if qmdj_chart:
+        system_prompt += f"- **QMDJ Chart**: {qmdj_chart}\n"
+    if timestamp_utc:
+        system_prompt += f"- **Reading Timestamp (UTC)**: {timestamp_utc}\n"
+
+    system_prompt += (
+        "\nNow produce your oracle advisory for the DAO. "
+        "Be concise, grounded, and actionable."
+    )
+
+    # 3. Call DeepSeek via LLMClient
+    client = LLMClient()
+    user_msg = (
+        f"The DAO has cast hexagram {primary_number} ({primary_name}) "
+        f"with mode '{mode}'. Please provide the oracle advisory."
+    )
+    try:
+        completion = client.chat(system_prompt, [{"role": "user", "content": user_msg}], tools=None)
+        advice = client.extract_text(completion)
+        model_used = client.model
+    except LLMError as e:
+        logger.error("oracle-advisory: LLM error: %s", e)
+        return JSONResponse(
+            {"ok": False, "error": f"LLM call failed: {e}"},
+            status_code=503,
+        )
+
+    # 4. Return JSON in the same shape as the GAS bridge
+    from datetime import datetime, timezone
+    return {
+        "ok": True,
+        "advice": advice,
+        "model": model_used,
+        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
