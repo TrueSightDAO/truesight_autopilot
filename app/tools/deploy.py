@@ -150,6 +150,28 @@ def deploy_autopilot() -> str:
             )
             steps.append({"step": "restart_service", "status": "ok"})
 
+            logger.info("Step 4: nginx + certbot setup")
+            _run_local(
+                "bash -c 'if [ ! -L /etc/nginx/sites-enabled/sophia ]; then "
+                f"{_ELEVATE} ln -sf {remote_dir}/config/nginx/sophia.conf /etc/nginx/sites-available/sophia && "
+                f"{_ELEVATE} ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/ && "
+                f"{_ELEVATE} nginx -t && {_ELEVATE} systemctl reload nginx; "
+                "else echo nginx already configured; fi'",
+                cwd=remote_dir, timeout=30,
+            )
+            _run_local(
+                "bash -c 'if ! command -v certbot; then "
+                f"{_ELEVATE} snap install --classic certbot && "
+                f"{_ELEVATE} ln -sf /snap/bin/certbot /usr/bin/certbot; "
+                "else echo certbot already installed; fi'",
+                cwd=remote_dir, timeout=60,
+            )
+            _run_local(
+                f"bash -c '{_ELEVATE} certbot --nginx -d sophia.truesight.me --non-interactive --agree-tos -m garyjob@gmail.com || true'",
+                cwd=remote_dir, timeout=30,
+            )
+            steps.append({"step": "nginx_certbot", "status": "ok"})
+
             elapsed = round(time.time() - start, 1)
             result = {
                 "status": "success",
