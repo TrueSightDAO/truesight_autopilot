@@ -38,6 +38,7 @@ class Settings(BaseSettings):
         "market_research", "go_to_market", "sentiment_importer", "truesight_autopilot",
         "agentic_ai_context", "dao_protocol",
         "capoeira", "program-template", "butterfly-effect-club",
+        "oracle",
     ]
 
     # Gmail
