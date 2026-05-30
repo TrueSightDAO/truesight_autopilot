@@ -10,7 +10,7 @@ Sophia is the public-facing name of the TrueSight Autopilot service, accessible 
 
 TrueSight DAO runs on code: market research pipelines, email agents, inventory snapshots, contribution ledgers, DApp pages, tokenomics mirrors. Today, every bug, every GitHub Action failure, every AWS cost spike, every GAS execution error waits for a human to wake up, read an email, open a terminal, and fix it.
 
-**truesight_autopilot exists to close that gap.**
+**Sophia exists to close that gap.**
 
 It is a persistent cloud service with two modes:
 
