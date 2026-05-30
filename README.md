@@ -44,7 +44,7 @@ Both modes share the same brain: **DeepSeek-V3** (30× cheaper than Claude) with
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         truesight_autopilot (EC2)                           │
+│                         Sophia — truesight_autopilot (EC2)                  │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │  collector  │  │  classifier │  │  diagnosis  │  │   fix_generator     │ │
 │  │  (pollers)  │→ │  (LLM/rules)│→ │   engine    │→ │   (code + infra)    │ │
