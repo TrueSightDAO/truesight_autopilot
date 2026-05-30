@@ -116,6 +116,9 @@ DRY_RUN=true python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
 
 # Check health
 curl http://localhost:8001/health
+
+# Test oracle advisory (replaces GAS bridge)
+curl "http://localhost:8001/oracle-advisory?mode=day&primary_number=1&primary_name=The+Creative&primary_judgment=Work+with+the+creative+force"
 ```
 
 ## Deployment
