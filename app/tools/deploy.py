@@ -137,7 +137,7 @@ def deploy_autopilot() -> str:
 
             logger.info("Step 2: pip install")
             _run_local(
-                "source .venv/bin/activate && pip install -r requirements.txt",
+                "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
                 cwd=remote_dir, timeout=120,
             )
             steps.append({"step": "pip_install", "status": "ok"})
