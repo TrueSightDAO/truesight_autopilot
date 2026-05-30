@@ -2396,6 +2396,38 @@ async def force_refresh_governors(request: Request) -> JSONResponse:
     })
 
 
+@app.post("/admin/deploy")
+async def admin_deploy(request: Request) -> JSONResponse:
+    """Self-deploy: git pull + restart. Returns git result before restarting."""
+    from .auth import verify_jwt
+    verify_jwt(request)
+    import subprocess, os
+    repo_dir = "/opt/truesight_autopilot"
+    try:
+        result = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            capture_output=True, text=True, timeout=30, cwd=repo_dir,
+        )
+        git_out = result.stdout + result.stderr
+        # Fork restart so we can return before dying
+        pid = os.fork()
+        if pid == 0:
+            import time
+            time.sleep(1)
+            subprocess.run(
+                ["systemctl", "restart", "truesight-autopilot"],
+                capture_output=True, timeout=10,
+            )
+            os._exit(0)
+        return JSONResponse({
+            "status": "restarting",
+            "git_output": git_out,
+            "message": "Service restarting in background. Check health after ~10s.",
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 # ───────────────────────────── Autopilot ─────────────────────────────
 
 # Track errors for self-healing
