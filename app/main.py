@@ -260,8 +260,8 @@ _oracle_rate_limit: dict[str, float] = {}
 def _check_oracle_rate_limit(ip: str) -> None:
     now = time.time()
     last = _oracle_rate_limit.get(ip, 0.0)
-    if now - last < 10.0:
-        raise HTTPException(status_code=429, detail="Rate limited — max 1 request per 10 seconds per IP")
+    if now - last < 2.0:
+        raise HTTPException(status_code=429, detail="Rate limited — max 1 request per 2 seconds per IP")
     _oracle_rate_limit[ip] = now
 
 
