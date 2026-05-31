@@ -462,7 +462,25 @@ async def root():
 
 # // CUT OVER from GAS oracle_advisory_bridge — this endpoint replaces the GAS script's Grok call.
 # // See oracle/index.html GAS_ORACLE_ADVISORY_URL.
-@app.get("/oracle-advisory")
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization",
+    "Access-Control-Max-Age": "1728000",
+}
+
+
+def _cors_json_response(content: dict, status_code: int = 200) -> JSONResponse:
+    """Return a JSONResponse with explicit CORS headers.
+
+    This ensures the /oracle-advisory endpoint always returns CORS headers
+    regardless of nginx add_header behavior or FastAPI CORSMiddleware
+    interactions. The oracle frontend at oracle.truesight.me calls this
+    endpoint via fetch() and requires Access-Control-Allow-Origin: *."""
+    return JSONResponse(content=content, status_code=status_code, headers=_CORS_HEADERS)
+
+
+@app.route("/oracle-advisory", methods=["GET", "OPTIONS"])
 async def oracle_advisory(
     request: Request,
     mode: str = "",
@@ -484,7 +502,13 @@ async def oracle_advisory(
     the LLM to act as a DAO Oracle interpreting the I Ching hexagram in
     the context of live DAO state, calls DeepSeek, and returns JSON in
     the same shape as the GAS bridge.
+
+    Supports both GET and OPTIONS (CORS preflight) methods.
     """
+    # CORS preflight — return 204 with CORS headers
+    if request.method == "OPTIONS":
+        return _cors_json_response({}, status_code=204)
+
     # Rate limit: 1 req per 10s per IP
     ip = request.client.host if request.client else "unknown"
     _check_oracle_rate_limit(ip)
@@ -557,19 +581,19 @@ async def oracle_advisory(
         model_used = client.model
     except LLMError as e:
         logger.error("oracle-advisory: LLM error: %s", e)
-        return JSONResponse(
+        return _cors_json_response(
             {"ok": False, "error": f"LLM call failed: {e}"},
             status_code=503,
         )
 
     # 4. Return JSON in the same shape as the GAS bridge
     from datetime import datetime, timezone
-    return {
+    return _cors_json_response({
         "ok": True,
         "advice": advice,
         "model": model_used,
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
+    })
 
 
 @app.get("/uploads/{filename}")
