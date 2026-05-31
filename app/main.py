@@ -2804,6 +2804,9 @@ async def metrics():
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    # Add CORS headers so oracle.truesight.me can see error responses
+    if request.url.path == "/oracle-advisory":
+        return JSONResponse({"error": exc.detail}, status_code=exc.status_code, headers=_CORS_HEADERS)
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
 
