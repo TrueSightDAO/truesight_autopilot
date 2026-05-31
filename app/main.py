@@ -260,8 +260,8 @@ _oracle_rate_limit: dict[str, float] = {}
 def _check_oracle_rate_limit(ip: str) -> None:
     now = time.time()
     last = _oracle_rate_limit.get(ip, 0.0)
-    if now - last < 10.0:
-        raise HTTPException(status_code=429, detail="Rate limited — max 1 request per 10 seconds per IP")
+    if now - last < 2.0:
+        raise HTTPException(status_code=429, detail="Rate limited — max 1 request per 2 seconds per IP")
     _oracle_rate_limit[ip] = now
 
 
@@ -505,9 +505,10 @@ async def oracle_advisory(
 
     Supports both GET and OPTIONS (CORS preflight) methods.
     """
-    # CORS preflight — return 204 with CORS headers
+    # CORS preflight — return 204 with CORS headers (no body)
     if request.method == "OPTIONS":
-        return _cors_json_response({}, status_code=204)
+        from fastapi.responses import Response
+        return Response(status_code=204, headers=_CORS_HEADERS)
 
     # Rate limit: 1 req per 10s per IP
     ip = request.client.host if request.client else "unknown"
@@ -2803,6 +2804,9 @@ async def metrics():
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    # Add CORS headers so oracle.truesight.me can see error responses
+    if request.url.path == "/oracle-advisory":
+        return JSONResponse({"error": exc.detail}, status_code=exc.status_code, headers=_CORS_HEADERS)
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
 
