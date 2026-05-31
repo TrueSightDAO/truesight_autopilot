@@ -505,9 +505,10 @@ async def oracle_advisory(
 
     Supports both GET and OPTIONS (CORS preflight) methods.
     """
-    # CORS preflight — return 204 with CORS headers
+    # CORS preflight — return 204 with CORS headers (no body)
     if request.method == "OPTIONS":
-        return _cors_json_response({}, status_code=204)
+        from fastapi.responses import Response
+        return Response(status_code=204, headers=_CORS_HEADERS)
 
     # Rate limit: 1 req per 10s per IP
     ip = request.client.host if request.client else "unknown"
