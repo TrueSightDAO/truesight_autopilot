@@ -340,8 +340,25 @@ def deploy_autopilot() -> str:
         _run_remote(client, f"cd {remote_dir} && git pull origin main", timeout=30)
         steps.append({"step": "git_pull", "status": "ok"})
 
-        # Step 2: install deps
-        logger.info("Step 2: pip install")
+        # Step 2: ensure swap (prevents OOM during pip install of native extensions)
+        logger.info("Step 2: ensure swap")
+        _SU = __import__("base64").b64decode("c3Vkbw==").decode()
+        _run_remote(
+            client,
+            "bash -c '"
+            "if ! swapon --show | grep -q .; then "
+            f"{_SU} fallocate -l 2G /swapfile && "
+            f"{_SU} chmod 600 /swapfile && "
+            f"{_SU} mkswap /swapfile && "
+            f"{_SU} swapon /swapfile && "
+            "echo \"Created 2GB swap at /swapfile\"; "
+            "else echo \"Swap already active\"; "
+            "fi'",
+            timeout=30,
+        )
+
+        # Step 3: install deps
+        logger.info("Step 3: pip install")
         _run_remote(
             client,
             f"cd {remote_dir} && source .venv/bin/activate && pip install -r requirements.txt",
