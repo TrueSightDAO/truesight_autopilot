@@ -22,12 +22,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Tool modules whose IMPORT alone is the smoke test. Calling them is either
+# Modules whose IMPORT alone is the smoke test. Calling them is either
 # destructive (SSH, PR creation, identity registration) or needs runtime
 # inputs we don't have in CI (uploaded images, signed payloads). The
 # import-only test is still high-value: it catches missing imports
-# (paramiko bug from 2026-05-08), syntax errors, and broken refs.
+# (paramiko bug from 2026-05-08, Flask-syntax-in-FastAPI bug from 2026-05-30
+# autopilot#78), syntax errors, and broken refs.
+#
+# `app.main` MUST be in this list — it's the FastAPI app entrypoint and the
+# main place LLM-generated handler PRs (route decorators, dependency wiring,
+# CORS responses) introduce import-time errors. The 2026-05-30 prod outage
+# was a `@app.route(...)` (Flask) used on a FastAPI app — caught at import
+# time by `AttributeError: 'FastAPI' object has no attribute 'route'`. Would
+# have been blocked here.
 IMPORT_ONLY = [
+    "app.main",
     "app.tools.deploy",
     "app.tools.dao_identity",
     "app.tools.dao_submission",

@@ -28,6 +28,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Cheap syntax-only sanity net. compileall catches SyntaxError across
+      # every .py file in the tree — including files the import smoke wouldn't
+      # touch — without needing them to be importable. Runs in <2s. Catches
+      # the kind of half-pasted snippet an LLM might leave in a non-imported
+      # file (unfinished docstring, dangling parenthesis, etc.). Won't catch
+      # AttributeError-class bugs like @app.route — that's what the import
+      # smoke below is for.
+      - name: Syntax check (compileall)
+        run: python -m compileall -q app scripts
+
       - name: Run tool smoke tests
         env:
           # Auto-injected; gives the github call test rate-limited read access
