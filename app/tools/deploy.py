@@ -184,7 +184,7 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     )
     steps.append({"step": "pip_install", "status": "ok"})
 
-    logger.info("Step 3: restart systemd service")
+    logger.info("Step 4: restart systemd service")
     subprocess.Popen(
         [_ELEVATE, "systemctl", "restart", "truesight-autopilot"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
