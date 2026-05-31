@@ -191,7 +191,7 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     )
     steps.append({"step": "restart_service", "status": "ok"})
 
-    logger.info("Step 4: nginx + certbot setup")
+    logger.info("Step 5: nginx + certbot setup")
     # Install the http-context zone file FIRST (conf.d gets included in
     # http context), then the server block. Always reinstall the
     # symlinks — they're idempotent — and re-test/reload nginx so this
