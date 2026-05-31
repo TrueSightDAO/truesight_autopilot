@@ -480,7 +480,7 @@ def _cors_json_response(content: dict, status_code: int = 200) -> JSONResponse:
     return JSONResponse(content=content, status_code=status_code, headers=_CORS_HEADERS)
 
 
-@app.route("/oracle-advisory", methods=["GET", "OPTIONS"])
+@app.api_route("/oracle-advisory", methods=["GET", "OPTIONS"])
 async def oracle_advisory(
     request: Request,
     mode: str = "",
