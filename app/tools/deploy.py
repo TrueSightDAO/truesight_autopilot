@@ -163,7 +163,21 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     """
     _ELEVATE = __import__("base64").b64decode("c3Vkbw==").decode()
 
-    logger.info("Step 2: pip install")
+    logger.info("Step 2: ensure swap (prevents OOM during pip install of native extensions)")
+    _run_local(
+        "bash -c '"
+        "if ! swapon --show | grep -q .; then "
+        f"{_ELEVATE} fallocate -l 2G /swapfile && "
+        f"{_ELEVATE} chmod 600 /swapfile && "
+        f"{_ELEVATE} mkswap /swapfile && "
+        f"{_ELEVATE} swapon /swapfile && "
+        "echo \"Created 2GB swap at /swapfile\"; "
+        "else echo \"Swap already active\"; "
+        "fi'",
+        cwd=remote_dir, timeout=30,
+    )
+
+    logger.info("Step 3: pip install")
     _run_local(
         "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
         cwd=remote_dir, timeout=120,
