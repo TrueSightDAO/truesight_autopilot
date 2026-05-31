@@ -154,6 +154,45 @@ def _run_local(command: str, cwd: str | None = None, timeout: int = 60) -> str:
     return result.stdout.strip()
 
 
+def _capture_forensic_evidence() -> dict:
+    """Snapshot system state at the moment a deploy step fails.
+
+    Cheap to run (<1s), runs as the deploy user (no sudo for free/ps; tries
+    sudo for dmesg with -n on so it fails fast if not allowed). Returned as
+    a dict alongside the error JSON so the next autopsy — LLM or human —
+    has actual evidence instead of having to speculate (which is what
+    produced autopilot#83's misdiagnosis of SIGTERM-via-cgroup as OOM).
+
+    Schema:
+      memory_mb      : `free -m` output (look for low `available`)
+      top_memory     : `ps aux --sort=-%mem | head -8` (look for runaway proc)
+      dmesg_tail     : last 30 lines of dmesg (look for "Killed process" → OOM,
+                       "Out of memory", or any unexpected kernel events)
+      swap_state     : `swapon --show` (empty = no swap; matters for native compile)
+      disk           : `df -h /` (full disk masquerades as many other failures)
+      uptime         : `uptime` (recent reboot indicates external pressure)
+    """
+    def _safe(cmd: str, *, timeout: int = 5) -> str:
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            )
+            return (r.stdout + r.stderr).strip() or "(no output)"
+        except subprocess.TimeoutExpired:
+            return f"(forensic command timed out after {timeout}s)"
+        except Exception as e:
+            return f"(forensic command errored: {e})"
+
+    return {
+        "memory_mb": _safe("free -m"),
+        "top_memory": _safe("ps aux --sort=-%mem | head -8"),
+        "dmesg_tail": _safe("sudo -n dmesg 2>/dev/null | tail -30"),
+        "swap_state": _safe("swapon --show") or "(no swap)",
+        "disk": _safe("df -h /"),
+        "uptime": _safe("uptime"),
+    }
+
+
 def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     """Phase-two: pip install + restart + nginx, using whatever's on disk RIGHT NOW.
 
@@ -245,10 +284,18 @@ def deploy_autopilot() -> str:
                 return _post_pull_steps(remote_dir, start, steps)
             except DeployError as e:
                 elapsed = round(time.time() - start, 1)
-                return json.dumps({"status": "error", "message": str(e), "steps": steps, "elapsed_seconds": elapsed})
+                return json.dumps({
+                    "status": "error", "message": str(e),
+                    "steps": steps, "elapsed_seconds": elapsed,
+                    "forensic": _capture_forensic_evidence(),
+                })
             except Exception as e:
                 elapsed = round(time.time() - start, 1)
-                return json.dumps({"status": "error", "message": f"Unexpected error: {e}", "steps": steps, "elapsed_seconds": elapsed})
+                return json.dumps({
+                    "status": "error", "message": f"Unexpected error: {e}",
+                    "steps": steps, "elapsed_seconds": elapsed,
+                    "forensic": _capture_forensic_evidence(),
+                })
 
         # Phase one: hard-reset to origin/main (NOT git pull), then re-exec
         # a fresh Python interpreter so the just-pulled deploy.py is the one
@@ -288,6 +335,15 @@ def deploy_autopilot() -> str:
             )
             if child.returncode != 0:
                 elapsed = round(time.time() - start, 1)
+                # Forensic capture — give the next autopsy (LLM or human) real
+                # evidence to reason from instead of speculation. Negative
+                # returncodes are signal numbers (e.g. -15 = SIGTERM, -9 =
+                # SIGKILL); pair with `forensic` to distinguish:
+                #   OOM kill        → dmesg shows "Killed process"; SIGKILL
+                #   timeout         → caller raises TimeoutExpired (not this path)
+                #   cgroup cascade  → SIGTERM, no dmesg evidence
+                #   real crash      → positive exit code + traceback in stderr
+                forensic = _capture_forensic_evidence()
                 return json.dumps({
                     "status": "error",
                     "message": (
@@ -296,6 +352,7 @@ def deploy_autopilot() -> str:
                     ),
                     "steps": [{"step": "git_pull", "status": "ok"}],
                     "elapsed_seconds": elapsed,
+                    "forensic": forensic,
                 })
             # Subprocess emitted the full JSON result — pass it through.
             return child.stdout.strip() or json.dumps({
@@ -307,11 +364,23 @@ def deploy_autopilot() -> str:
 
         except DeployError as e:
             elapsed = round(time.time() - start, 1)
-            return json.dumps({"status": "error", "message": str(e), "steps": steps, "elapsed_seconds": elapsed})
+            return json.dumps({
+                "status": "error",
+                "message": str(e),
+                "steps": steps,
+                "elapsed_seconds": elapsed,
+                "forensic": _capture_forensic_evidence(),
+            })
 
         except Exception as e:
             elapsed = round(time.time() - start, 1)
-            return json.dumps({"status": "error", "message": f"Unexpected error: {e}", "steps": steps, "elapsed_seconds": elapsed})
+            return json.dumps({
+                "status": "error",
+                "message": f"Unexpected error: {e}",
+                "steps": steps,
+                "elapsed_seconds": elapsed,
+                "forensic": _capture_forensic_evidence(),
+            })
 
     # ── Remote (SSH) path ─────────────────────────────────────────────────
     try:
