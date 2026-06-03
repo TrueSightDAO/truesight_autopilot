@@ -15,3 +15,6 @@ config/google/*.json
 
 # Gmail OAuth tokens (per-account) — also out-of-band. See config/gmail/README.md.
 config/gmail/*.json
+
+# .env backups (created automatically by some flows) — never commit
+.env.backup.*

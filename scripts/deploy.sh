@@ -133,6 +133,18 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     fi
 "
 
+echo "=== Provisioning git identity + credential helper ==="
+# Sophia's native git capability (app/tools/git_tools.py + manual ops).
+# The helper reads the PAT from .env at call time — PAT rotation safe.
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    chmod +x $REMOTE_DIR/scripts/git-credential-sophia.sh
+    git config --global user.name 'Sophia (TrueSight Autopilot)'
+    git config --global user.email 'sophia@truesight.me'
+    git config --global credential.helper '$REMOTE_DIR/scripts/git-credential-sophia.sh'
+    git config --global init.defaultBranch main
+    echo 'git identity + credential helper configured'
+"
+
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     cd $REMOTE_DIR
