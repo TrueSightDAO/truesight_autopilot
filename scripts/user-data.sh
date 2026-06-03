@@ -11,6 +11,12 @@ apt-get upgrade -y
 # Install Python 3.11 + deps
 apt-get install -y python3.11 python3.11-venv python3-pip git nginx
 
+# Node 20 + clasp for GAS deploys (gas_deploy_project tool). The clasp OAuth
+# token (~/.clasprc.json) is synced later by scripts/deploy.sh.
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+npm install -g @google/clasp@3.3.0
+
 # Create app directory
 mkdir -p /opt/truesight_autopilot
 chown ubuntu:ubuntu /opt/truesight_autopilot
