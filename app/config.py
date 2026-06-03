@@ -34,11 +34,13 @@ class Settings(BaseSettings):
     # Allowed repos for code modifications
     allowed_repos: list[str] = [
         "dapp_beta", "dapp_prod", "tokenomics", "truesight_me", "truesight_me_prod",
-        "agroverse_shop", "agroverse_shop_prod", "dao_client",
+        "truesight_me_beta",
+        "agroverse_shop", "agroverse_shop_prod", "agroverse_shop_beta", "dao_client",
         "market_research", "go_to_market", "sentiment_importer", "truesight_autopilot",
         "agentic_ai_context", "dao_protocol",
         "capoeira", "program-template", "butterfly-effect-club",
-        "oracle",
+        "oracle", "agroverse-inventory", "treasury-cache", ".github",
+        "ecosystem_change_logs", "tribomirimbahia",
     ]
 
     # Gmail

@@ -8,15 +8,13 @@ publishes their JSON schemas so the LLM sees them and role-gating works.
 """
 from __future__ import annotations
 
+from ..config import settings
 from ..tool_registry import ToolSpec
 
-_ALLOWED_CHAT_REPOS = ", ".join([
-    "dapp_beta", "dapp_prod", "tokenomics", "truesight_me", "truesight_me_prod",
-    "agroverse_shop", "agroverse_shop_prod", "dao_client",
-    "market_research", "go_to_market", "sentiment_importer", "truesight_autopilot",
-    ".github", "agentic_ai_context", "agroverse-inventory", "dao_protocol",
-    "oracle", "capoeira", "program-template", "butterfly-effect-club",
-])
+# Single source of truth — main.py enforces against settings.allowed_repos,
+# so the schema's advertised list must come from the same place (it used to
+# be a hand-copied list that drifted; see OPEN_FOLLOW_UPS item 3).
+_ALLOWED_CHAT_REPOS = ", ".join(settings.allowed_repos)
 
 TOOL_SPECS = [
     ToolSpec(

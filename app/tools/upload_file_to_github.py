@@ -48,8 +48,9 @@ def upload_file_to_github(
     - ``content_base64`` (already base64-encoded bytes) — used for PDFs and
       other binary artifacts; takes precedence when both are provided.
 
-    If the file already exists on the branch, the API will reject the request —
-    use a different branch or delete the file first.
+    If the file already exists on the branch, its blob ``sha`` is fetched
+    automatically and the call becomes an **update** (OPEN_FOLLOW_UPS item 4 —
+    previously the API rejected updates with "sha wasn't supplied").
 
     Returns a dict with 'status' ('success' or 'error') and details.
     """
@@ -64,12 +65,23 @@ def upload_file_to_github(
         "branch": branch,
     }
 
+    # Existing file? Fetch its sha so the PUT updates instead of failing.
+    try:
+        head = httpx.get(url, headers=_github_headers(), params={"ref": branch}, timeout=15.0)
+        if head.status_code == 200 and isinstance(head.json(), dict):
+            existing_sha = head.json().get("sha", "")
+            if existing_sha:
+                payload["sha"] = existing_sha
+    except httpx.RequestError:
+        pass  # create-path still works; an update will surface the API error below
+
     try:
         resp = httpx.put(url, headers=_github_headers(), json=payload, timeout=15.0)
         resp.raise_for_status()
         data = resp.json()
         return {
             "status": "success",
+            "action": "updated" if "sha" in payload else "created",
             "commit_sha": data.get("commit", {}).get("sha", ""),
             "content_url": data.get("content", {}).get("html_url", ""),
             "message": f"File uploaded to {repo}/{path} on branch '{branch}'.",
