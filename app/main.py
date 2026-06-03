@@ -2797,6 +2797,53 @@ async def _branch_janitor_loop():
         await asyncio.sleep(24 * 60 * 60)
 
 
+@app.get("/tools/generate-ssh-key")
+async def generate_ssh_key():
+    """Generate an ed25519 SSH keypair for the autopilot.
+
+    Creates ~/.ssh/id_ed25519_truesight_autopilot if it doesn't exist,
+    configures ~/.ssh/config for github.com, and returns the public key.
+    The autopilot calls this via http_fetch to provision its own SSH key.
+    """
+    import subprocess
+    import os
+    from pathlib import Path
+
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    key_path = ssh_dir / "id_ed25519_truesight_autopilot"
+
+    if not key_path.exists():
+        try:
+            subprocess.run(
+                ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", "", "-C", f"truesight-autopilot-{os.uname().nodename}"],
+                capture_output=True, timeout=30, check=True,
+            )
+            key_path.chmod(0o600)
+            (ssh_dir / "id_ed25519_truesight_autopilot.pub").chmod(0o644)
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    # Configure ~/.ssh/config for github.com
+    config_path = ssh_dir / "config"
+    github_block = "\nHost github.com\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/id_ed25519_truesight_autopilot\n  IdentitiesOnly yes\n"
+    if config_path.exists():
+        existing = config_path.read_text()
+        if "Host github.com" not in existing:
+            config_path.write_text(existing + github_block)
+    else:
+        config_path.write_text(github_block)
+    config_path.chmod(0o600)
+
+    pub_key = (ssh_dir / "id_ed25519_truesight_autopilot.pub").read_text().strip()
+    return JSONResponse({
+        "status": "success",
+        "public_key": pub_key,
+        "key_path": str(key_path),
+        "message": "SSH key is ready. Add this public key to GitHub (Settings > SSH keys) and to any EC2 instances (~/.ssh/authorized_keys) you want the autopilot to manage.",
+    })
+
+
 @app.get("/metrics")
 async def metrics():
     return JSONResponse(content={"prs_opened_today": 0, "emails_processed": 0})
