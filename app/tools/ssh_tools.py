@@ -99,7 +99,23 @@ def _err(reason: str, **extra: Any) -> dict[str, Any]:
 
 
 def _key_path() -> Path:
-    return Path(os.environ.get("SOPHIA_SSH_KEY_PATH", _DEFAULT_KEY_PATH)).expanduser()
+    """Return the first existing SSH key from a list of candidates.
+    Falls back through: sophia_infra -> id_ed25519_truesight_autopilot -> id_rsa."""
+    env_key = os.environ.get("SOPHIA_SSH_KEY_PATH", "")
+    if env_key:
+        p = Path(env_key).expanduser()
+        if p.is_file():
+            return p
+    candidates = [
+        Path(_DEFAULT_KEY_PATH).expanduser(),
+        Path.home() / ".ssh/id_ed25519_truesight_autopilot",
+        Path.home() / ".ssh/id_rsa",
+        Path.home() / ".ssh/id_ed25519",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    return candidates[0]  # return default even if missing, for the error message
 
 
 def _truncate(s: str) -> tuple[str, bool]:
@@ -121,9 +137,15 @@ def ssh_run(host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS) 
         )
     key = _key_path()
     if not key.is_file():
+        tried = [
+            str(Path(_DEFAULT_KEY_PATH).expanduser()),
+            str(Path.home() / ".ssh/id_ed25519_truesight_autopilot"),
+            str(Path.home() / ".ssh/id_rsa"),
+        ]
         return _err(
-            f"SSH key not found at {key} — run scripts/deploy.sh to sync it "
-            "(and scripts/distribute_sophia_ssh_key.sh if hosts don't accept it yet)",
+            f"No SSH key found — tried: {', '.join(tried)}. "
+            "Generate one via the /tools/generate-ssh-key endpoint, then add the public key "
+            "to the target host's ~/.ssh/authorized_keys.",
         )
     timeout = max(5, min(int(timeout_secs or _DEFAULT_TIMEOUT_SECS), _MAX_TIMEOUT_SECS))
 
