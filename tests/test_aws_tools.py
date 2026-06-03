@@ -18,15 +18,57 @@ def _stub_specs(label="explorya"):
     }]
 
 
-def test_write_class_operation_is_forbidden(monkeypatch):
-    monkeypatch.setattr(aws_tools, "_camel_to_snake", aws_tools._camel_to_snake)  # no-op, just to anchor
+def test_write_class_operation_requires_confirm_write(monkeypatch):
     out = json.loads(aws_tools.aws_query(
         account="explorya",
         service="ec2",
         operation="TerminateInstances",
     ))
     assert out["status"] == "error"
-    assert "write-class operation blocked" in out["reason"]
+    assert "confirm_write" in out["reason"]
+
+
+def test_write_class_operation_dispatches_with_confirm_write(monkeypatch):
+    monkeypatch.setattr("app.aws_monitor.read_account_specs", lambda: _stub_specs())
+    fake_client = MagicMock()
+    fake_client.reboot_instances.return_value = {
+        "ResponseMetadata": {"RequestId": "req-w1"},
+    }
+    fake_session = MagicMock()
+    fake_session.client.return_value = fake_client
+
+    with patch("boto3.Session", return_value=fake_session):
+        out = json.loads(aws_tools.aws_query(
+            account="explorya",
+            service="ec2",
+            operation="RebootInstances",
+            parameters={"InstanceIds": ["i-1"]},
+            confirm_write=True,
+        ))
+
+    assert out["status"] == "ok"
+    fake_client.reboot_instances.assert_called_once_with(InstanceIds=["i-1"])
+
+
+def test_denylisted_operation_blocked_even_with_confirm_write():
+    out = json.loads(aws_tools.aws_query(
+        account="explorya",
+        service="route53",
+        operation="DeleteHostedZone",
+        confirm_write=True,
+    ))
+    assert out["status"] == "error"
+    assert "denylisted" in out["reason"]
+
+
+def test_denylisted_service_blocked():
+    out = json.loads(aws_tools.aws_query(
+        account="explorya",
+        service="organizations",
+        operation="ListAccounts",  # even reads — org service has no SRE use
+    ))
+    assert out["status"] == "error"
+    assert "denylisted" in out["reason"]
 
 
 def test_unknown_account_returns_error(monkeypatch):

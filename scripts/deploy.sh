@@ -133,6 +133,20 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     fi
 "
 
+echo "=== Syncing sophia_infra SSH key (fleet access for ssh_run tool) ==="
+# Dedicated outbound keypair for Sophia. Source of truth = operator Mac at
+# ~/.ssh/sophia_infra (generated here if missing, so the same identity
+# survives box rebuilds). Pubkey distribution to the fleet is a separate,
+# operator-run step: scripts/distribute_sophia_ssh_key.sh.
+if [ ! -f "$HOME/.ssh/sophia_infra" ]; then
+    ssh-keygen -t ed25519 -N "" -C "sophia-infra-truesight-autopilot" \
+        -f "$HOME/.ssh/sophia_infra"
+    echo "  -> generated new sophia_infra keypair on operator machine"
+    echo "  -> REMEMBER: run scripts/distribute_sophia_ssh_key.sh to authorize it on the fleet"
+fi
+scp -i "$EC2_KEY" -q "$HOME/.ssh/sophia_infra" "$HOME/.ssh/sophia_infra.pub" "$EC2_HOST:~/.ssh/"
+ssh -i "$EC2_KEY" "$EC2_HOST" "chmod 600 ~/.ssh/sophia_infra && chmod 644 ~/.ssh/sophia_infra.pub && echo 'sophia_infra key synced'"
+
 echo "=== Installing Node 20 + clasp (GAS deploys) ==="
 # gas_deploy_project tool needs node + clasp on PATH (see its docstring).
 # NodeSource Node 20 matches the operator Mac (nvm v20.19.1); clasp pinned

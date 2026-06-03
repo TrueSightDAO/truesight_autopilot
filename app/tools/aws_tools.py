@@ -1,16 +1,20 @@
-"""AWS query tool spanning every account in ``AWS_ACCOUNTS``.
+"""AWS query/management tool spanning every account in ``AWS_ACCOUNTS``.
 
-Exposes ``aws_query(account, service, operation, parameters=None, region=None)``.
+Exposes ``aws_query(account, service, operation, parameters=None, region=None,
+confirm_write=False)``.
 
 - ``account`` — one of the labels in ``AWS_ACCOUNTS`` (e.g. ``"explorya"``,
   ``"nelanco"``). Reuses :func:`app.aws_monitor.read_account_specs` so the
   credential-loading logic stays in one place.
 - ``service`` — any boto3 service name (``"ec2"``, ``"s3"``, ``"logs"``,
   ``"cloudwatch"``, ``"ce"`` …).
-- ``operation`` — PascalCase AWS API operation. **Allowlisted** to safe
-  shapes only: ``Describe*``, ``Get*``, ``List*``, ``Search*``, ``Filter*``,
-  ``Lookup*``, ``Head*``, ``Change*`` (Route53 DNS mutations). Anything else
-  returns ``{status:"forbidden"}``.
+- ``operation`` — PascalCase AWS API operation. Read-class operations
+  (``Describe*``, ``Get*``, ``List*``, …) run freely. **Write-class
+  operations are allowed since 2026-06-03** (Gary's ask — the IAM creds were
+  already Administrator; only this software gate blocked edits) but require
+  ``confirm_write=true`` in the call, so a mutation is always a deliberate
+  decision rather than a habit. A short denylist blocks catastrophic,
+  hard-to-reverse account-level operations outright.
 
 The boto3 response is JSON-serialised with ``datetime`` → ISO-8601 and bytes
 → base64 so the model can consume it.
@@ -27,15 +31,26 @@ from typing import Any
 
 logger = logging.getLogger("autopilot.tools.aws_tools")
 
-# Read-only verb allowlist. AWS conventionally prefixes mutating ops with
-# Create*/Delete*/Update*/Put*/Run*/Terminate*/Start*/Stop*/etc., and read-only
-# ops with these verbs. Be conservative — anything not on this list is blocked
-# even if it happens to be safe.
+# Read-class verb allowlist — these run without confirm_write. AWS
+# conventionally prefixes mutating ops with Create*/Delete*/Update*/Put*/
+# Run*/Terminate*/Start*/Stop*/etc., and read-only ops with these verbs.
 _READ_PREFIXES = (
     "Describe", "Get", "List", "Search", "Filter", "Lookup", "Head", "Query",
     "BatchGet", "Scan",  # Dynamo Scan is read-only despite the verb
-    "Change",  # Route53 ChangeResourceRecordSets — IAM is already Administrator
+    "Change",  # Route53 ChangeResourceRecordSets — grandfathered pre-write-gate
 )
+
+# Catastrophic / hard-to-reverse operations: blocked outright, even with
+# confirm_write. Account- and org-level mutations have no place in SRE work.
+_DENYLISTED_SERVICES = {"organizations", "account"}
+_DENYLISTED_OPERATIONS = {
+    "CloseAccount",
+    "DeleteAccount",
+    "LeaveOrganization",
+    "DeleteOrganization",
+    "RemoveAccountFromOrganization",
+    "DeleteHostedZone",   # would take down a whole domain's DNS
+}
 
 
 def _err(reason: str, **extra: Any) -> str:
@@ -71,15 +86,25 @@ def aws_query(
     operation: str,
     parameters: dict | None = None,
     region: str | None = None,
+    confirm_write: bool = False,
 ) -> str:
     if not account or not service or not operation:
         return _err("account, service, and operation are required")
 
-    if not _is_read_only(operation):
+    if service.lower() in _DENYLISTED_SERVICES or operation in _DENYLISTED_OPERATIONS:
         return _err(
-            "write-class operation blocked",
+            "operation is denylisted — catastrophic/account-level mutations are "
+            "never allowed from this tool",
+            service=service, operation=operation,
+        )
+
+    if not _is_read_only(operation) and not confirm_write:
+        return _err(
+            "write-class operation requires confirm_write=true — re-issue the "
+            "call with confirm_write set if you are sure this mutation is "
+            "intended (state WHAT will change and WHY in your reply)",
             operation=operation,
-            allowed_prefixes=list(_READ_PREFIXES),
+            read_prefixes=list(_READ_PREFIXES),
         )
 
     # Lazy boto3 import: keeps unrelated tests fast.
@@ -170,15 +195,26 @@ from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(
     name="aws_query",
-    description="Run an AWS API call against any account in AWS_ACCOUNTS (currently 'explorya' and 'nelanco'). Allowlisted to Describe*/Get*/List*/Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan*/Change* operations — Change* allows Route53 ChangeResourceRecordSets for DNS management. Useful for checking EC2 instance state, CloudWatch metrics, Logs, Cost Explorer, S3 buckets, and managing Route53 DNS records.",
+    description=(
+        "Run an AWS API call against any account in AWS_ACCOUNTS (currently "
+        "'explorya' and 'nelanco'). Read operations (Describe*/Get*/List*/"
+        "Search*/Filter*/Lookup*/Head*/Query*/BatchGet*/Scan*/Change*) run "
+        "directly. Write operations (Create*/Update*/Put*/Delete*/Start*/"
+        "Stop*/Reboot*/Modify*/…) are allowed but require confirm_write=true "
+        "— set it only when you have stated what will change and why. "
+        "Catastrophic account/organization-level operations are always "
+        "blocked. Useful for EC2 state + management, CloudWatch, Logs, Cost "
+        "Explorer, S3, and Route53 DNS."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "account": {"type": "string", "description": "AWS account label.", "enum": ["explorya", "nelanco"]},
             "service": {"type": "string", "description": "boto3 service name, e.g. 'ec2', 's3', 'logs', 'cloudwatch', 'ce'."},
-            "operation": {"type": "string", "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'GetCostAndUsage'."},
+            "operation": {"type": "string", "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'RebootInstances'."},
             "parameters": {"type": "object", "description": "Operation parameters as a JSON object."},
             "region": {"type": "string", "description": "Override the account's default region for this call."},
+            "confirm_write": {"type": "boolean", "description": "Required true for write-class (mutating) operations. Leave unset for reads.", "default": False},
         },
         "required": ["account", "service", "operation"],
     },
@@ -188,5 +224,6 @@ TOOL_SPEC = ToolSpec(
         operation=args.get("operation", ""),
         parameters=args.get("parameters"),
         region=args.get("region"),
+        confirm_write=bool(args.get("confirm_write", False)),
     ),
 )
