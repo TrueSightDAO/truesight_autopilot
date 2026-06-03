@@ -133,6 +133,37 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     fi
 "
 
+echo "=== Installing Node 20 + clasp (GAS deploys) ==="
+# gas_deploy_project tool needs node + clasp on PATH (see its docstring).
+# NodeSource Node 20 matches the operator Mac (nvm v20.19.1); clasp pinned
+# to 3.3.0 for the same reason. Both steps are idempotent.
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    if ! command -v node &>/dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+        echo 'node installed:' \$(node --version)
+    else
+        echo 'node already installed:' \$(node --version)
+    fi
+    if ! command -v clasp &>/dev/null; then
+        sudo npm install -g @google/clasp@3.3.0
+        echo 'clasp installed:' \$(clasp --version)
+    else
+        echo 'clasp already installed:' \$(clasp --version)
+    fi
+"
+
+echo "=== Syncing clasp credentials (~/.clasprc.json) ==="
+# clasp login is interactive OAuth — the token file is the portable artifact.
+# Source of truth is the operator Mac's ~/.clasprc.json (admin clasp login).
+if [ -f "$HOME/.clasprc.json" ]; then
+    scp -i "$EC2_KEY" -q "$HOME/.clasprc.json" "$EC2_HOST:~/.clasprc.json"
+    ssh -i "$EC2_KEY" "$EC2_HOST" "chmod 600 ~/.clasprc.json && echo 'clasprc synced'"
+else
+    echo "  WARN: ~/.clasprc.json missing locally — run 'clasp login' first."
+    echo "  Without it, gas_deploy_project pushes will fail as unauthenticated."
+fi
+
 echo "=== Provisioning git identity + credential helper ==="
 # Sophia's native git capability (app/tools/git_tools.py + manual ops).
 # The helper reads the PAT from .env at call time — PAT rotation safe.

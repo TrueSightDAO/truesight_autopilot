@@ -16,12 +16,14 @@ Conservative by default:
   the host (autopilot's EC2 box needs the same clone as a developer
   laptop). The error message points at the env var to set.
 
-Runtime requirements (autopilot host):
+Runtime requirements (autopilot host) — all provisioned automatically by
+`scripts/deploy.sh` since 2026-06-03:
 - `tokenomics` cloned at `GAS_DEPLOY_TOKENOMICS_ROOT` (default
-  `/opt/truesight_autopilot/context/tokenomics`).
-- `node` + `clasp` installed and on PATH.
-- `clasp login` already completed under whichever account owns the
-  scriptIds the operator wants to deploy.
+  `/opt/truesight_autopilot/context/tokenomics`) — deploy.sh clones/refreshes.
+- `node` + `clasp` installed and on PATH — deploy.sh installs Node 20 +
+  clasp 3.3.0 (also baked into user-data.sh for fresh boxes).
+- clasp auth — deploy.sh syncs the operator Mac's `~/.clasprc.json`
+  (clasp login is interactive OAuth; the token file is the portable artifact).
 
 If any of those aren't ready, the tool surfaces the failure verbatim
 rather than masking it — so the operator can react.
