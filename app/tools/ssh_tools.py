@@ -36,7 +36,7 @@ _MAX_OUTPUT_CHARS = 8000
 # label → (public IP, user, what it is)
 FLEET: dict[str, dict[str, str]] = {
     "krake_nginx": {
-        "ip": "54.226.114.186", "user": "ubuntu",
+        "ip": "54.226.114.186", "user": "ubuntu", "port": "2202",
         "desc": "Nginx reverse proxy — terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
     },
     "seni_ror": {
@@ -149,12 +149,14 @@ def ssh_run(host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS) 
         )
     timeout = max(5, min(int(timeout_secs or _DEFAULT_TIMEOUT_SECS), _MAX_TIMEOUT_SECS))
 
+    port = spec.get("port", "22")
     cmd = [
         "ssh",
         "-i", str(key),
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new",
+        "-p", port,
         f"{spec['user']}@{spec['ip']}",
         command,
     ]
