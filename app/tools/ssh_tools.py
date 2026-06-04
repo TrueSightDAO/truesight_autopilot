@@ -36,59 +36,59 @@ _MAX_OUTPUT_CHARS = 8000
 # label → (public IP, user, what it is)
 FLEET: dict[str, dict[str, str]] = {
     "krake_nginx": {
-        "ip": "54.226.114.186", "user": "ubuntu",
+        "ip": "54.226.114.186", "user": "ubuntu", "port": "2202",
         "desc": "Nginx reverse proxy — terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
     },
     "seni_ror": {
-        "ip": "54.211.179.126", "user": "ubuntu",
+        "ip": "54.211.179.126", "user": "ubuntu", "port": "22",
         "desc": "Edgar (Rails sentiment_importer) — DAO API server (Nelanco, seni_ror_200250915)",
     },
     "dao_protocol": {
-        "ip": "98.93.94.86", "user": "ubuntu",
+        "ip": "98.93.94.86", "user": "ubuntu", "port": "22",
         "desc": "dao_protocol FastAPI server, port 8010 (Nelanco)",
     },
     "seni_sk": {
-        "ip": "34.234.193.80", "user": "ubuntu",
+        "ip": "34.234.193.80", "user": "ubuntu", "port": "22",
         "desc": "Sidekiq worker for Edgar (Nelanco, seni_sk_auto)",
     },
     "seni_sql": {
-        "ip": "44.193.55.205", "user": "ubuntu",
+        "ip": "44.193.55.205", "user": "ubuntu", "port": "22",
         "desc": "PostgreSQL for Edgar (Nelanco, seni_sql_2026)",
     },
     "seni_redis": {
-        "ip": "54.234.59.188", "user": "ubuntu",
+        "ip": "54.234.59.188", "user": "ubuntu", "port": "22",
         "desc": "Redis for Edgar Sidekiq/cache (Nelanco, seni_redis_2)",
     },
     "krake_ror": {
-        "ip": "18.205.20.43", "user": "ubuntu",
+        "ip": "18.205.20.43", "user": "ubuntu", "port": "22",
         "desc": "Krake Rails backend, getdata.io (Nelanco)",
     },
     "krake_sk": {
-        "ip": "54.227.147.20", "user": "ubuntu",
+        "ip": "54.227.147.20", "user": "ubuntu", "port": "22",
         "desc": "Krake Sidekiq worker (Nelanco)",
     },
     "krake_sk_webhook": {
-        "ip": "52.207.88.236", "user": "ubuntu",
+        "ip": "52.207.88.236", "user": "ubuntu", "port": "22",
         "desc": "Krake webhook worker (Nelanco)",
     },
     "krake_sk_crawler": {
-        "ip": "52.91.57.12", "user": "ubuntu",
+        "ip": "52.91.57.12", "user": "ubuntu", "port": "22",
         "desc": "Krake crawler worker (Nelanco)",
     },
     "krake_sk_scaler": {
-        "ip": "100.25.41.96", "user": "ubuntu",
+        "ip": "100.25.41.96", "user": "ubuntu", "port": "22",
         "desc": "Krake autoscaling worker (Nelanco)",
     },
     "krake_data": {
-        "ip": "52.5.179.48", "user": "ubuntu",
+        "ip": "52.5.179.48", "user": "ubuntu", "port": "22",
         "desc": "Krake data processing (Nelanco)",
     },
     "getdata_redis": {
-        "ip": "52.1.162.134", "user": "ubuntu",
+        "ip": "52.1.162.134", "user": "ubuntu", "port": "22",
         "desc": "Redis for Krake (Nelanco, GETDATA_REDIS)",
     },
     "getdata_cache": {
-        "ip": "98.84.169.188", "user": "ubuntu",
+        "ip": "98.84.169.188", "user": "ubuntu", "port": "22",
         "desc": "Krake cache worker (Nelanco, GETDATA_CACHE)",
     },
 }
@@ -109,6 +109,7 @@ def _key_path() -> Path:
     candidates = [
         Path(_DEFAULT_KEY_PATH).expanduser(),
         Path.home() / ".ssh/id_ed25519_truesight_autopilot",
+        Path.home() / ".ssh/GETDATA_IO_PAIR_20201122",
         Path.home() / ".ssh/id_rsa",
         Path.home() / ".ssh/id_ed25519",
     ]
@@ -149,9 +150,11 @@ def ssh_run(host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS) 
         )
     timeout = max(5, min(int(timeout_secs or _DEFAULT_TIMEOUT_SECS), _MAX_TIMEOUT_SECS))
 
+    port = spec.get("port", "22")
     cmd = [
         "ssh",
         "-i", str(key),
+        "-p", port,
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new",
