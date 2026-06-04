@@ -18,3 +18,4 @@ config/gmail/*.json
 
 # .env backups (created automatically by some flows) — never commit
 .env.backup.*
+.req-hash

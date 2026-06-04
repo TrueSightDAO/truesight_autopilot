@@ -193,11 +193,24 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     cd $REMOTE_DIR
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install -r requirements.txt
-    # Ensure dao_client is installed from GitHub (needed for Edgar submissions)
-    pip install 'truesight-dao-client @ git+https://github.com/TrueSightDAO/dao_client.git'
+
+    if [ ! -d .venv ]; then
+        echo 'No .venv found — creating fresh'
+        python3 -m venv .venv
+    fi
+
+    REQ_HASH=\$(sha256sum requirements.txt | cut -d' ' -f1)
+    LAST_HASH=\$(cat .req-hash 2>/dev/null || echo '')
+    if [ \"\$REQ_HASH\" != \"\$LAST_HASH\" ]; then
+        echo 'requirements.txt changed — reinstalling deps'
+        source .venv/bin/activate
+        pip install -r requirements.txt
+        pip install 'truesight-dao-client @ git+https://github.com/TrueSightDAO/dao_client.git'
+        echo \"\$REQ_HASH\" > .req-hash
+        echo 'deps installed + hash updated'
+    else
+        echo 'requirements.txt unchanged — skipping pip install'
+    fi
 "
 
 echo "=== Installing helper scripts ==="
