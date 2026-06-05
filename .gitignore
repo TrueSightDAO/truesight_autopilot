@@ -19,3 +19,9 @@ config/gmail/*.json
 # .env backups (created automatically by some flows) — never commit
 .env.backup.*
 .req-hash
+
+# Telethon user-session (attention watchdog) — FULL account access, never commit.
+*.session
+*.session-journal
+# Watchdog runtime state
+data/attention_watchdog_state.json
