@@ -64,9 +64,12 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
         }
 
 
-def search_codebase(repo: str, query: str) -> dict[str, Any]:
+def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
+    """GitHub code search. With a repo, scoped to TrueSightDAO/<repo>;
+    without one, searches the whole TrueSightDAO org."""
     url = "https://api.github.com/search/code"
-    params = {"q": f"repo:TrueSightDAO/{repo} {query}"}
+    scope = f"repo:TrueSightDAO/{repo}" if repo else "org:TrueSightDAO"
+    params = {"q": f"{scope} {query}"}
 
     try:
         resp = httpx.get(url, headers=_github_headers(), params=params, timeout=15.0)
@@ -178,7 +181,32 @@ def _mark_pr_ready_handler(args: dict, ctx: dict) -> str:
     return _json.dumps(result, indent=2)
 
 
+def _search_code_handler(args: dict, ctx: dict) -> str:
+    import json as _json
+    result = search_codebase(args.get("repo") or None, args.get("query", ""))
+    return _json.dumps(result, indent=2)
+
+
 TOOL_SPECS = [
+    ToolSpec(
+        name="search_code",
+        description=(
+            "Search file CONTENTS across TrueSightDAO GitHub repos (code search API). "
+            "Omit 'repo' to search the entire org — use after search_context when a "
+            "governor's term isn't in agentic_ai_context but may live in a project repo "
+            "(scripts, GAS, sheets tooling). Returns matching file paths + URLs; follow "
+            "up with read_repo_file. Note: GitHub only indexes default branches."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Term or phrase to search for."},
+                "repo": {"type": "string", "description": "Optional repo name under TrueSightDAO; omit for org-wide."},
+            },
+            "required": ["query"],
+        },
+        handler=_search_code_handler,
+    ),
     ToolSpec(
         name="list_org_repos",
         description="List all repositories in the TrueSightDAO GitHub organization. Use this to discover what repos exist.",
