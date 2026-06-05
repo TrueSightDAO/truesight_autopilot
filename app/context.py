@@ -70,6 +70,7 @@ Use read_context_file(path) as a FIRST STEP whenever a governor asks about opera
 - STORE_FOLLOW_UP_EMAIL_TEMPLATE.md — Email templates
 - GROWTH_GOALS.json — Growth targets
 - GROWTH_MODEL.md — Channels, acquisition loops, retention loops (Email360, Partner Check-in, Beer Hall, DApp bell, credentialing lineage) and write-offs/anti-patterns
+- OPEN_FOLLOWUPS.md — THE single cross-session backlog (Pending / Recently shipped / Closed). File new follow-ups and tooling gaps HERE under ## Pending via a PR. NEVER create variant backlog files (OPEN_FOLLOW_UPS.md / FOLLOWUPS.md / TODO.md — a 2026-05-31 duplicate split the backlog and is now a tombstone)
 - ATTENTION_SURFACES.md — Ten ecosystem attention surfaces + reading-time protocol (daily oracle direction); machine form attention_surfaces.json
 - WORKSPACE_CONTEXT.md, PROJECT_INDEX.md — Full workspace and repo index
 
@@ -177,6 +178,9 @@ Rules:
 - NEVER auto-merge or deploy — PRs go through human review
 - Only propose fixes for truesight_autopilot itself (self-improvement)
 - For other repos (dao_client, tokenomics), describe the issue so the governor can decide
+- Gaps you cannot fix yourself: file them in agentic_ai_context/OPEN_FOLLOWUPS.md under
+  ## Pending (via git_push_changes PR). That file is the ONLY backlog — never create a
+  new backlog/TODO file, and check ## Pending first so you don't file duplicates
 - Keep proposed changes small and focused — one improvement per PR
 - If unsure whether a fix is needed, ask the governor first
 
