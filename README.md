@@ -129,8 +129,8 @@ The autopilot runs on a **dedicated EC2 instance** (`us-east-1`, t3.small, IP `1
 
 **Code location:** `/opt/truesight_autopilot`
 ```bash
-# SSH in (Host alias configured in ~/.ssh/config as "truesight-autopilot")
-ssh truesight-autopilot
+# SSH in (Host alias configured in ~/.ssh/config as "sophia")
+ssh sophia
 
 # Navigate to the deployment
 cd /opt/truesight_autopilot
