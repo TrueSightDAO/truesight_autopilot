@@ -763,6 +763,9 @@ def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str
 
 
 def run() -> None:
+    # Silence httpx INFO request logging — it prints the Telegram getUpdates/getFile/
+    # sendMessage URLs, which embed the bot token. WARNING keeps errors, drops the token.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     if not settings.telegram_bot_api_key:
         raise SystemExit("TELEGRAM_BOT_API_KEY is not set — cannot start Telegram adapter.")
 
