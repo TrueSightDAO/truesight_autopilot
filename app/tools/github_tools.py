@@ -157,6 +157,18 @@ def _merge_pr_handler(args: dict, ctx: dict) -> str:
     merge_method = args.get("merge_method", "squash")
     if repo_name not in settings.allowed_repos:
         return f"Error: repo '{repo_name}' not in allowed list."
+    if repo_name in settings.prod_repos:
+        return (
+            f"Refused: '{repo_name}' is a PRODUCTION repo (beta-first rule). "
+            f"Changes land in '{settings.prod_repos[repo_name]}'; promotion to "
+            "prod is via sync_beta_to_prod on the governor's explicit approval, "
+            "not PR merges on prod."
+        )
+    if repo_name in settings.api_only_repos:
+        return (
+            f"Refused: '{repo_name}' is an API-only data repo (machine-owned); "
+            "agents do not merge PRs there."
+        )
     if not pr_number:
         return "Error: pr_number is required."
     gh = GitHubClient()

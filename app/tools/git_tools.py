@@ -106,6 +106,23 @@ def git_push_changes(
         return _err("repo, branch, and commit_message are required")
     if repo not in settings.allowed_repos:
         return _err("repo not in allowed list", repo=repo, allowed=settings.allowed_repos)
+    if repo in settings.api_only_repos:
+        return _err(
+            "API-only data repo: never clone or branch-edit. This repo is "
+            "machine-owned (automation writes it via the Contents API). Read "
+            "with read_repo_file or its raw.githubusercontent.com URLs; write "
+            "single files with upload_file_to_github. See "
+            "GITHUB_AGENTIC_AI_SSH.md § 'API-only repos'.",
+            repo=repo, api_only=settings.api_only_repos,
+        )
+    if repo in settings.prod_repos:
+        return _err(
+            f"PRODUCTION repo: beta-first rule. Push this change to "
+            f"'{settings.prod_repos[repo]}' instead, let the governor review "
+            "the beta deploy, then promote with sync_beta_to_prod only on "
+            "the governor's explicit approval. Never push to prod directly.",
+            repo=repo, beta_repo=settings.prod_repos[repo],
+        )
     if not (writes or edits or deletes):
         return _err("nothing to do: provide writes, edits, and/or deletes")
     if not settings.github_pat:

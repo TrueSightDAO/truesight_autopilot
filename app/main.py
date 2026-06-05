@@ -1090,11 +1090,15 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         ok = edgar.submit_contribution(event_name, attributes, description=attributes.get("Description", ""))
         return "Contribution submitted successfully." if ok else "Failed to submit contribution."
     if func_name == "open_fix_pr":
+        from .fix_agent import repo_class_block
         repo_name = func_args.get("repo", "")
         issue = func_args.get("issue_description", "")
         allowed = settings.allowed_repos
         if repo_name not in allowed:
             return f"Error: repo '{repo_name}' not in allowed list."
+        blocked = repo_class_block(repo_name)
+        if blocked:
+            return blocked
         fixer = FixAgent()
         pr_url = fixer.run_simple(repo_name, issue)
         if not pr_url:
