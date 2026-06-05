@@ -52,6 +52,32 @@ class SafetyError(Exception):
     pass
 
 
+def repo_class_block(repo: str) -> str | None:
+    """Refuse branch-edits on repos that must never be edited directly.
+
+    API-only data repos are machine-owned (caches, ledgers, transcripts, blob
+    stores) — automation writes them via the Contents API. Prod repos are
+    beta-first: build in the beta repo, governor reviews the beta deploy, then
+    promote with sync_beta_to_prod (fork sync, no clone) on explicit approval.
+    """
+    if repo in settings.api_only_repos:
+        return (
+            f"Refused: '{repo}' is an API-only data repo (machine-owned). Never "
+            "branch-edit or clone it. Read via read_repo_file / raw URLs; "
+            "single-file writes via upload_file_to_github. See "
+            "GITHUB_AGENTIC_AI_SSH.md § 'API-only repos'."
+        )
+    if repo in settings.prod_repos:
+        beta = settings.prod_repos[repo]
+        return (
+            f"Refused: '{repo}' is a PRODUCTION repo. Beta-first rule: make the "
+            f"change in '{beta}', let the governor review the beta deploy, then "
+            "(only on the governor's explicit approval) promote with "
+            "sync_beta_to_prod. Never edit prod directly."
+        )
+    return None
+
+
 class FixAgent:
     def __init__(self):
         self.github = GitHubClient()
@@ -66,6 +92,11 @@ class FixAgent:
         never auto-merges, and has safety hooks for dangerous operations.
         DRY_RUN only gates background tasks (email poller, AWS monitor).
         """
+        blocked = repo_class_block(repo)
+        if blocked:
+            logger.warning("Fix loop refused: %s", blocked)
+            return None
+
         branch = f"autopilot/fix-{int(time.time())}"
         if not self.github.create_branch(repo, "main", branch):
             logger.error("Failed to create branch on %s", repo)
@@ -183,6 +214,11 @@ class FixAgent:
                 repo,
                 diagnosis.get("root_cause", "N/A"),
             )
+            return None
+
+        blocked = repo_class_block(repo)
+        if blocked:
+            logger.warning("Fix loop refused: %s", blocked)
             return None
 
         branch = f"autopilot/fix-{int(time.time())}"

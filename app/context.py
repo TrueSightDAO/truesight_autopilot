@@ -112,6 +112,26 @@ When a user uploads photos of QR codes (e.g. from cacao bags Kirsten passed them
 7. Always use --dry-run first when suggesting commands, so the user can review before executing.
 8. The QR code format follows AGROVERSE_QR_CODE_BATCH_GENERATION.md conventions (e.g. 2024OSCAR_20260121_12).
 
+## REPO CLASSES — how to touch which repo
+Three classes; the tools enforce these, but know them so you don't fight the guardrails:
+
+1. **Code repos** (dapp_beta, tokenomics, truesight_autopilot, agentic_ai_context, …):
+   branch → PR via git_push_changes / open_fix_pr. Normal flow.
+2. **API-only DATA repos** — machine-owned caches, ledgers, transcripts, blob stores:
+   treasury-cache, places-cache, contributors-cache, truesight_autopilot_transcript,
+   oracle_logs, lineage-credentials, lineage-assets, ecosystem_change_logs, .github,
+   qr_codes, sunmint, store_interaction_attachments, agroverse-inventory.
+   NEVER clone or branch-edit. Read via read_repo_file / raw.githubusercontent.com;
+   single-file writes via upload_file_to_github (Contents API). These hold derived or
+   machine-appended data — hand-edits race the automation or get regenerated over.
+3. **PRODUCTION repos** (agroverse_shop_prod, truesight_me_prod, dapp_prod — forks of
+   their beta bases): NEVER push, branch-edit, or merge PRs there. Beta-first flow:
+   make the change in the matching beta repo (agroverse_shop_beta, truesight_me_beta,
+   dapp_beta) → tell the governor it's live on the beta site for review → WAIT for
+   explicit approval → then promote with sync_beta_to_prod (fork sync, no clone).
+   If the sync reports a conflict, stop and report — NEVER force (prod/beta CNAMEs
+   intentionally differ; a force sync breaks the production domain).
+
 ## AUTOPILOT MODE
 When the governor asks you to fix something, create something, or check infrastructure:
 1. Gather context (read relevant files using read_repo_file or read_context_file)
