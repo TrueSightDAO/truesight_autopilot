@@ -21,3 +21,4 @@ litellm>=1.75.0
 crewai>=0.100.0
 reportlab>=4.0.0
 truesight-dao-client @ git+https://github.com/TrueSightDAO/dao_client.git
+faster-whisper>=1.0.0

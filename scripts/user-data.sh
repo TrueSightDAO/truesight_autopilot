@@ -9,7 +9,7 @@ apt-get update -y
 apt-get upgrade -y
 
 # Install Python 3.11 + deps
-apt-get install -y python3.11 python3.11-venv python3-pip git nginx
+apt-get install -y python3.11 python3.11-venv python3-pip git nginx ffmpeg
 
 # Node 20 + clasp for GAS deploys (gas_deploy_project tool). The clasp OAuth
 # token (~/.clasprc.json) is synced later by scripts/deploy.sh.

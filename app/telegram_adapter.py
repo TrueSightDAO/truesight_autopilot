@@ -33,6 +33,7 @@ import httpx
 from .auth import create_jwt
 from .config import settings
 from .governor_registry import load_governors
+from .voice import transcribe_voice
 
 logger = logging.getLogger("autopilot.telegram")
 
@@ -159,6 +160,15 @@ def extract_attachment_file_id(msg: dict[str, Any]) -> str | None:
     doc = msg.get("document")
     if isinstance(doc, dict) and doc.get("file_id"):
         return doc["file_id"]
+    return None
+
+
+def extract_voice_file_id(msg: dict[str, Any]) -> str | None:
+    """Return the file_id of a voice note / audio / video-note, if any."""
+    for key in ("voice", "audio", "video_note"):
+        obj = msg.get(key)
+        if isinstance(obj, dict) and obj.get("file_id"):
+            return obj["file_id"]
     return None
 
 
@@ -448,7 +458,8 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
     attachment_file_id = extract_attachment_file_id(msg)
-    if chat_id is None or user_id is None or (not text and not attachment_file_id):
+    voice_file_id = extract_voice_file_id(msg)
+    if chat_id is None or user_id is None or (not text and not attachment_file_id and not voice_file_id):
         return
 
     # Security gate
@@ -464,6 +475,16 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
             logger.warning("Rejected message from non-allowlisted user_id=%s", user_id)
             send_message(chat_id, "⛔ Not authorized.", thread_id)
         return
+
+    # Voice note → transcribe locally (faster-whisper), then treat the transcript
+    # as the message text so it flows through commands + chat normally.
+    if voice_file_id and not text:
+        local_audio = download_telegram_file(voice_file_id)
+        text = transcribe_voice(local_audio) if local_audio else ""
+        if not text:
+            send_message(chat_id, "🎤 I could not make out any speech in that voice note.", thread_id)
+            return
+        send_message(chat_id, f"🎤 Heard: {text}", thread_id)
 
     # Lightweight commands
     if text in ("/start", "/help"):
