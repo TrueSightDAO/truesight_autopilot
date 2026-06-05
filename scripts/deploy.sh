@@ -249,6 +249,7 @@ echo "=== Installing systemd services ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot.service /etc/systemd/system/
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot-telegram.service /etc/systemd/system/
+    sudo cp $REMOTE_DIR/systemd/truesight-autopilot-watchdog.service /etc/systemd/system/
     sudo systemctl daemon-reload
     sudo systemctl enable truesight-autopilot truesight-autopilot-telegram
     echo \"Waiting 5s for active requests to drain before restart...\"
@@ -261,9 +262,19 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
         echo 'TELEGRAM_BOT_API_KEY not set in .env — leaving telegram adapter stopped.'
         sudo systemctl stop truesight-autopilot-telegram 2>/dev/null || true
     fi
+    # Start the attention watchdog only once its user-session exists
+    # (one-time interactive: .venv/bin/python scripts/telethon_login.py).
+    if [ -f $REMOTE_DIR/.telethon_watchdog.session ]; then
+        sudo systemctl enable truesight-autopilot-watchdog
+        sudo systemctl restart truesight-autopilot-watchdog
+    else
+        echo 'No .telethon_watchdog.session — run scripts/telethon_login.py once; leaving watchdog stopped.'
+        sudo systemctl stop truesight-autopilot-watchdog 2>/dev/null || true
+    fi
     sleep 2
     sudo systemctl status truesight-autopilot --no-pager
     sudo systemctl status truesight-autopilot-telegram --no-pager || true
+    sudo systemctl status truesight-autopilot-watchdog --no-pager || true
 "
 
 echo "=== Setting up nginx + certbot ==="

@@ -108,6 +108,20 @@ class Settings(BaseSettings):
     # Where the FastAPI chat service is reachable from the adapter process.
     autopilot_chat_url: str = Field(default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL")
 
+    # Telegram attention watchdog — MTProto USER-session (not the bot), so it
+    # can see DMs + all groups. Read-only; nudges go to Saved Messages only.
+    # api_id/api_hash come from https://my.telegram.org (operator's account);
+    # the session file is created once by scripts/telethon_login.py.
+    telegram_api_id: int = Field(default=0, validation_alias="TELEGRAM_API_ID")
+    telegram_api_hash: str = Field(default="", validation_alias="TELEGRAM_API_HASH")
+    watchdog_session_path: str = Field(default=".telethon_watchdog", validation_alias="WATCHDOG_SESSION_PATH")
+    watchdog_state_path: str = Field(default="data/attention_watchdog_state.json", validation_alias="WATCHDOG_STATE_PATH")
+    watchdog_nudge_hours: float = Field(default=4.0, validation_alias="WATCHDOG_NUDGE_HOURS")
+    # Asks that mention a date/time get the tighter SLA — those cancel events.
+    watchdog_urgent_nudge_hours: float = Field(default=2.0, validation_alias="WATCHDOG_URGENT_NUDGE_HOURS")
+    watchdog_digest_hour: int = Field(default=9, validation_alias="WATCHDOG_DIGEST_HOUR")
+    watchdog_tz: str = Field(default="America/Los_Angeles", validation_alias="WATCHDOG_TZ")
+
     # Beta-deploy gate (Telegram /ship). Master switch is OFF by default — even
     # deployed, the gate does nothing until explicitly enabled.
     beta_deploy_gate_enabled: bool = Field(default=False, validation_alias="BETA_DEPLOY_GATE_ENABLED")
