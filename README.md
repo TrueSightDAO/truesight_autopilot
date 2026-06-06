@@ -171,6 +171,53 @@ sudo systemctl disable truesight-autopilot
 
 This rsyncs the repo to `/opt/truesight_autopilot` on the EC2 instance, reinstalls dependencies, and restarts the systemd service.
 
+### Telegram attention watchdog — one-time login (operator-only)
+
+`app/attention_watchdog.py` (unit `truesight-autopilot-watchdog`) watches the
+operator's **own Telegram account** via a read-only MTProto user-session and
+nudges unanswered question-shaped DMs/mentions to his Saved Messages (4 h SLA,
+2 h when the ask mentions a date, daily 9 am digest). It needs a session file
+that only the operator can create — `deploy.sh` keeps the unit **stopped**
+until `.telethon_watchdog.session` exists.
+
+**One-time setup (~10 min):**
+
+1. **API credentials:** log into https://my.telegram.org → *API development
+   tools* → create an app (any name) → copy `api_id` + `api_hash`.
+   ⚠️ The my.telegram.org login code arrives **inside the Telegram app** (the
+   verified "Telegram" service chat) — never SMS — and repeated requests
+   trigger **silent rate-limiting** (wait ≥ 1 h, then one clean retry).
+2. **Add to the box env:**
+   ```bash
+   ssh sophia "printf 'TELEGRAM_API_ID=<id>\nTELEGRAM_API_HASH=<hash>\n' >> /opt/truesight_autopilot/.env"
+   ```
+3. **Interactive login** (a *second* code arrives in the Telegram app):
+   ```bash
+   ssh -t sophia "cd /opt/truesight_autopilot && .venv/bin/python scripts/telethon_login.py"
+   ```
+   Prompts: phone (international format) → login code → 2FA password if set.
+   Sends a 👋 confirmation to Saved Messages.
+4. **Start:**
+   ```bash
+   ssh sophia "sudo systemctl enable --now truesight-autopilot-watchdog"
+   ```
+   Healthy log line: `watchdog up as <username>` (`journalctl -u truesight-autopilot-watchdog`).
+
+**Operational rules:**
+
+- `.telethon_watchdog.session` is **full account access**: gitignored, never
+  commit, keep AMIs containing it private. Revoke any time from Telegram →
+  Settings → Devices.
+- **Never run the session from two machines at once** — concurrent clients on
+  one auth key raise `AuthKeyDuplicatedError` and Telegram **permanently
+  invalidates the session**. During blue/green instance swaps: stop
+  `truesight-autopilot-watchdog` + `truesight-autopilot-telegram` on the old
+  box **before** booting an AMI clone, then repoint the Elastic IP.
+- If Telegram ever invalidates the session (rare, or after a duplication
+  event), re-run step 3 — `TELEGRAM_API_ID/HASH` in `.env` stay valid.
+- Tuning via env: `WATCHDOG_NUDGE_HOURS` (4), `WATCHDOG_URGENT_NUDGE_HOURS`
+  (2), `WATCHDOG_DIGEST_HOUR` (9), `WATCHDOG_TZ` (America/Los_Angeles).
+
 ## Environment
 
 See `.env.example` for required variables. Key credentials:
@@ -182,6 +229,7 @@ See `.env.example` for required variables. Key credentials:
 | `DEEPSEEK_API_KEY` (or `DEEPSEEK_SDK`) | From platform.deepseek.com | ✅ Ready |
 | `EMAIL` / `PUBLIC_KEY` / `PRIVATE_KEY` | Dedicated Edgar identity | 🆕 Generate via `truesight-dao-auth login` |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | From `cypher_def/.env` (TRUESIGHT_DAO_AUTOPILOT_AWS_*) | ✅ Ready |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | my.telegram.org (attention watchdog; see § Telegram attention watchdog) | ✅ On box (2026-06-06) |
 
 Full credential audit: `agentic_ai_context/API_CREDENTIALS_DOCUMENTATION.md` §10
 
