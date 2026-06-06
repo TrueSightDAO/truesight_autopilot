@@ -274,13 +274,22 @@ def gmail_send(
     to: str, subject: str, body: str,
     account: str | None = None,
     cc: str | None = None, bcc: str | None = None,
+    attachment_path: str | None = None,
 ) -> str:
     if not to or not subject:
         return _err("to and subject are required")
     service, err = _build_service(account)
     if service is None:
         return err  # type: ignore[return-value]
-    raw = _build_raw_message(to=to, subject=subject, body=body or "", cc=cc, bcc=bcc)
+    try:
+        raw = _build_raw_message(
+            to=to, subject=subject, body=body or "",
+            cc=cc, bcc=bcc, attachment_path=attachment_path,
+        )
+    except FileNotFoundError as e:
+        return _err(str(e), to=to, subject=subject)
+    except Exception as e:
+        return _err(str(e), to=to, subject=subject)
     try:
         sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
     except Exception as e:
