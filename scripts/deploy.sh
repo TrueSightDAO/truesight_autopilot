@@ -18,6 +18,21 @@ fi
 source .venv/bin/activate
 pip install -r requirements.txt
 
+echo "=== Pre-deploy syntax check ==="
+SYNTAX_ERRORS=0
+while IFS= read -r -d '' PYFILE; do
+    if ! python -m py_compile "$PYFILE" 2>&1; then
+        echo "SYNTAX ERROR in $PYFILE"
+        SYNTAX_ERRORS=$((SYNTAX_ERRORS + 1))
+    fi
+done < <(find . -name '*.py' -not -path './.venv/*' -not -path './.git/*' -print0)
+if [ "$SYNTAX_ERRORS" -gt 0 ]; then
+    echo "ABORTING DEPLOY: $SYNTAX_ERRORS Python file(s) have syntax errors."
+    echo "The running service on EC2 is untouched."
+    exit 1
+fi
+echo "All Python files pass syntax check."
+
 echo "=== Syncing to EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "sudo mkdir -p $REMOTE_DIR && sudo chown ubuntu:ubuntu $REMOTE_DIR"
 
