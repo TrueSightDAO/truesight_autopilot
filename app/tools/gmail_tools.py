@@ -436,7 +436,7 @@ TOOL_SPECS = [
     ),
     ToolSpec(
         name="gmail_send",
-        description="Send a plain-text email from a Gmail mailbox. Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
+        description="Send an email from a Gmail mailbox. Supports optional file attachments (PDFs, images, etc.). Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
         parameters={
             "type": "object",
             "properties": {
@@ -446,6 +446,7 @@ TOOL_SPECS = [
                 "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                "attachment_path": {"type": "string", "description": "Optional path to a file to attach (PDF, image, etc.). The filename is derived from the path."},
             },
             "required": ["to", "subject", "body"],
         },
@@ -456,11 +457,12 @@ TOOL_SPECS = [
             account=args.get("account"),
             cc=args.get("cc"),
             bcc=args.get("bcc"),
+            attachment_path=args.get("attachment_path"),
         ),
     ),
     ToolSpec(
         name="gmail_create_draft",
-        description="Create a Gmail draft (no send). Preferred over gmail_send when the user hasn't explicitly approved sending.",
+        description="Create a Gmail draft (no send). Supports optional file attachments (PDFs, images, etc.). Preferred over gmail_send when the user hasn't explicitly approved sending.",
         parameters={
             "type": "object",
             "properties": {
@@ -470,6 +472,7 @@ TOOL_SPECS = [
                 "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                "attachment_path": {"type": "string", "description": "Optional path to a file to attach (PDF, image, etc.). The filename is derived from the path."},
             },
             "required": ["to", "subject", "body"],
         },
@@ -480,6 +483,7 @@ TOOL_SPECS = [
             account=args.get("account"),
             cc=args.get("cc"),
             bcc=args.get("bcc"),
+            attachment_path=args.get("attachment_path"),
         ),
     ),
     ToolSpec(
