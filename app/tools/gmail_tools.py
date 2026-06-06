@@ -237,8 +237,30 @@ def gmail_read_message(message_id: str, account: str | None = None, format: str 
 def _build_raw_message(
     *, to: str, subject: str, body: str,
     cc: str | None = None, bcc: str | None = None,
+    attachment_path: str | None = None,
 ) -> str:
-    msg = MIMEText(body, "plain", "utf-8")
+    if attachment_path:
+        msg = MIMEMultipart()
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        attach_path = Path(attachment_path)
+        if not attach_path.is_file():
+            raise FileNotFoundError(f"Attachment not found: {attachment_path}")
+        mime_type, _ = mimetypes.guess_type(str(attach_path))
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+        main_type, sub_type = mime_type.split("/", 1)
+        with open(attach_path, "rb") as f:
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(f.read())
+        import email.encoders
+        email.encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            f'attachment; filename="{attach_path.name}"',
+        )
+        msg.attach(part)
+    else:
+        msg = MIMEText(body, "plain", "utf-8")
     msg["To"] = to
     msg["Subject"] = subject
     if cc:
