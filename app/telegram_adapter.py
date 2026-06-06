@@ -12,6 +12,13 @@ Flow per message:
      Telegram chat + topic (so each topic is its own conversation).
   4. Send the assistant's reply back to the same chat/topic.
 
+Voice message flow:
+  1. Transcribe voice note via faster-whisper (local, free)
+  2. Detect language from transcription
+  3. Send transcribed text to /chat (SSE) for processing
+  4. Synthesize assistant's response as MP3 via edge-tts (local, free)
+  5. Send voice reply + URL follow-up text if URLs are present
+
 Security model: the trust boundary is the Telegram user-ID allowlist. The
 adapter runs on the same host as the FastAPI service and holds JWT_SECRET, so
 minting its own JWT is equivalent to any other trusted server-side code.
@@ -34,6 +41,7 @@ from .auth import create_jwt
 from .config import settings
 from .governor_registry import load_governors
 from .voice import transcribe_voice
+from .voice_output import synthesize_voice, detect_language
 
 logger = logging.getLogger("autopilot.telegram")
 
@@ -92,6 +100,7 @@ _BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _BOLD_US_RE = re.compile(r"__([^_\n]+)__")
 _HEADER_RE = re.compile(r"^\s*#{1,6}\s+(.*\S)\s*$")
 _BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
+_URL_RE = re.compile(r"https?://[^\s)}\]>]+")
 
 
 def markdown_to_telegram_html(md: str) -> str:
@@ -135,6 +144,22 @@ def markdown_to_telegram_html(md: str) -> str:
     for key, val in stash.items():
         text = text.replace(key, val)
     return text
+
+
+# ── URL extraction ─────────────────────────────────────────────────────────
+
+def extract_urls(text: str) -> list[str]:
+    """Extract all HTTP/HTTPS URLs from text. Returns unique, ordered list."""
+    if not text:
+        return []
+    seen: set[str] = set()
+    urls: list[str] = []
+    for m in _URL_RE.finditer(text):
+        url = m.group(0).rstrip(".),;!?")
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 # ── Telegram + chat I/O ────────────────────────────────────────────────────
@@ -230,6 +255,32 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
     return msg_id
 
 
+def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bool:
+    """Send a voice message from a local audio file. Returns True on success."""
+    if not os.path.isfile(file_path):
+        logger.warning("send_voice: file not found %s", file_path)
+        return False
+    try:
+        with open(file_path, "rb") as fh:
+            files = {"voice": (os.path.basename(file_path), fh, "audio/mpeg")}
+            payload: dict[str, Any] = {"chat_id": chat_id}
+            if thread_id:
+                payload["message_thread_id"] = thread_id
+            resp = httpx.post(_api("sendVoice"), data=payload, files=files, timeout=30.0)
+            if resp.status_code == 200:
+                logger.info(
+                    "Sent voice message (%d bytes) to chat %s",
+                    os.path.getsize(file_path), chat_id,
+                )
+                return True
+            else:
+                logger.warning("sendVoice %s: %s", resp.status_code, resp.text[:200])
+                return False
+    except Exception as e:
+        logger.warning("sendVoice failed: %s", e)
+        return False
+
+
 def edit_message_text(chat_id: int, message_id: int, text: str) -> bool:
     """Edit a previously sent message. Returns True on success."""
     payload: dict[str, Any] = {
@@ -262,6 +313,17 @@ def delete_message(chat_id: int, message_id: int) -> bool:
 
 def send_typing(chat_id: int, thread_id: int | None = None) -> None:
     payload: dict[str, Any] = {"chat_id": chat_id, "action": "typing"}
+    if thread_id:
+        payload["message_thread_id"] = thread_id
+    try:
+        httpx.post(_api("sendChatAction"), json=payload, timeout=10.0)
+    except Exception:  # noqa: BLE001 — cosmetic only
+        pass
+
+
+def send_voice_action(chat_id: int, thread_id: int | None = None) -> None:
+    """Send 'uploading voice' chat action so Telegram shows a mic indicator."""
+    payload: dict[str, Any] = {"chat_id": chat_id, "action": "record_voice"}
     if thread_id:
         payload["message_thread_id"] = thread_id
     try:
@@ -445,6 +507,52 @@ def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str,
                 send_typing(chat_id, thread_id)  # keep the indicator alive
 
 
+# ── Voice reply helpers ────────────────────────────────────────────────────
+
+def _handle_voice_reply(
+    chat_id: int,
+    thread_id: int | None,
+    transcribed_text: str,
+    assistant_response: str,
+) -> None:
+    """Synthesize and send a voice reply, plus URL follow-up if needed.
+
+    Args:
+        chat_id: Telegram chat ID.
+        thread_id: Optional forum thread ID.
+        transcribed_text: The user's transcribed voice message (for language detection).
+        assistant_response: The autopilot's text response to synthesize.
+    """
+    # Detect language from the user's original voice message
+    lang = detect_language(transcribed_text)
+    voice_name = {"en": "Aria", "zh": "Xiaoxiao", "pt": "Francisca"}.get(lang, "Aria")
+
+    # Show recording action so Telegram shows a mic icon
+    send_voice_action(chat_id, thread_id)
+
+    # Synthesize the response
+    mp3_path = synthesize_voice(assistant_response, language=lang)
+    if mp3_path:
+        send_voice(chat_id, mp3_path, thread_id)
+        logger.info(
+            "Sent voice reply: lang=%s voice=%s text_len=%d",
+            lang, voice_name, len(assistant_response),
+        )
+    else:
+        # Fallback: send as text if synthesis fails
+        logger.warning("Voice synthesis failed, sending text fallback")
+        send_message(chat_id, assistant_response, thread_id)
+        return
+
+    # URL follow-up: if response contains URLs, send them as a separate text message
+    urls = extract_urls(assistant_response)
+    if urls:
+        url_text = "**🔗 Links from my response:**\n"
+        for url in urls:
+            url_text += f"\n• {url}"
+        send_message(chat_id, url_text, thread_id)
+
+
 # ── Update handling + loop ─────────────────────────────────────────────────
 
 def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
@@ -476,17 +584,18 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
             send_message(chat_id, "⛔ Not authorized.", thread_id)
         return
 
-    # Voice note → transcribe locally (faster-whisper), then treat the transcript
-    # as the message text so it flows through commands + chat normally.
-    if voice_file_id and not text:
+    # Voice note → transcribe locally (faster-whisper)
+    is_voice = bool(voice_file_id and not text)
+    transcribed_text = ""
+    if is_voice:
         local_audio = download_telegram_file(voice_file_id)
-        text = transcribe_voice(local_audio) if local_audio else ""
-        if not text:
+        transcribed_text = transcribe_voice(local_audio) if local_audio else ""
+        if not transcribed_text:
             send_message(chat_id, "🎤 I could not make out any speech in that voice note.", thread_id)
             return
-        send_message(chat_id, f"🎤 Heard: {text}", thread_id)
+        text = transcribed_text
 
-    # Lightweight commands
+    # Lightweight commands (skip voice reply for commands)
     if text in ("/start", "/help"):
         send_message(chat_id,
             "**TrueSight Autopilot** — your private DAO assistant.\n\n"
@@ -529,8 +638,7 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
 
     session_id = build_session_id(chat_id, thread_id)
 
-    # Attachment (photo / document): download it to a shared path and let the
-    # agent's scan_qr_* / read_local_file tools inspect it via the chat loop.
+    # Attachment (photo / document): download it and let the agent inspect it
     if attachment_file_id:
         local_path = download_telegram_file(attachment_file_id)
         if not local_path:
@@ -540,14 +648,20 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         msg_text += (f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
                      f"scan_qr_batch for QR images, or read_local_file for text. Then act on the result.]")
         try:
-            call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
+            response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
+            # If original message was a voice note with attachment, also send voice reply
+            if is_voice and response:
+                _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
         except Exception as e:  # noqa: BLE001
             logger.exception("call_chat failed (attachment)")
             send_message(chat_id, f"⚠️ Error processing the attachment: {e}", thread_id)
         return
 
     try:
-        call_chat_with_progress(chat_id, thread_id, text, session_id, public_key)
+        response = call_chat_with_progress(chat_id, thread_id, text, session_id, public_key)
+        # If original message was a voice note, send voice reply + URL follow-up
+        if is_voice and response:
+            _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
         send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
