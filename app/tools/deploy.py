@@ -211,7 +211,8 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
 
     logger.info("Step 3: restart systemd service")
     subprocess.Popen(
-        [_ELEVATE, "systemctl", "restart", "truesight-autopilot"],
+        [_ELEVATE, "systemctl", "restart", "truesight-autopilot",
+         "truesight-autopilot-telegram", "truesight-autopilot-watchdog"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     steps.append({"step": "restart_service", "status": "ok"})
@@ -409,7 +410,7 @@ def deploy_autopilot() -> str:
         # Use nohup so the restart survives the SSH session closing
         _run_remote(
             client,
-            "sudo nohup systemctl restart truesight-autopilot > /dev/null 2>&1 &",
+            "sudo nohup systemctl restart truesight-autopilot truesight-autopilot-telegram truesight-autopilot-watchdog > /dev/null 2>&1 &",
             timeout=10,
         )
         steps.append({"step": "restart_service", "status": "ok"})
