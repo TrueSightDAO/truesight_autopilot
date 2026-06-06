@@ -32,6 +32,9 @@ import base64
 import json
 import logging
 import os
+import mimetypes
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Iterable
@@ -234,8 +237,30 @@ def gmail_read_message(message_id: str, account: str | None = None, format: str 
 def _build_raw_message(
     *, to: str, subject: str, body: str,
     cc: str | None = None, bcc: str | None = None,
+    attachment_path: str | None = None,
 ) -> str:
-    msg = MIMEText(body, "plain", "utf-8")
+    if attachment_path:
+        msg = MIMEMultipart()
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        attach_path = Path(attachment_path)
+        if not attach_path.is_file():
+            raise FileNotFoundError(f"Attachment not found: {attachment_path}")
+        mime_type, _ = mimetypes.guess_type(str(attach_path))
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+        main_type, sub_type = mime_type.split("/", 1)
+        with open(attach_path, "rb") as f:
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(f.read())
+        import email.encoders
+        email.encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            f'attachment; filename="{attach_path.name}"',
+        )
+        msg.attach(part)
+    else:
+        msg = MIMEText(body, "plain", "utf-8")
     msg["To"] = to
     msg["Subject"] = subject
     if cc:
@@ -249,13 +274,22 @@ def gmail_send(
     to: str, subject: str, body: str,
     account: str | None = None,
     cc: str | None = None, bcc: str | None = None,
+    attachment_path: str | None = None,
 ) -> str:
     if not to or not subject:
         return _err("to and subject are required")
     service, err = _build_service(account)
     if service is None:
         return err  # type: ignore[return-value]
-    raw = _build_raw_message(to=to, subject=subject, body=body or "", cc=cc, bcc=bcc)
+    try:
+        raw = _build_raw_message(
+            to=to, subject=subject, body=body or "",
+            cc=cc, bcc=bcc, attachment_path=attachment_path,
+        )
+    except FileNotFoundError as e:
+        return _err(str(e), to=to, subject=subject)
+    except Exception as e:
+        return _err(str(e), to=to, subject=subject)
     try:
         sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
     except Exception as e:
@@ -275,13 +309,22 @@ def gmail_create_draft(
     to: str, subject: str, body: str,
     account: str | None = None,
     cc: str | None = None, bcc: str | None = None,
+    attachment_path: str | None = None,
 ) -> str:
     if not to or not subject:
         return _err("to and subject are required")
     service, err = _build_service(account)
     if service is None:
         return err  # type: ignore[return-value]
-    raw = _build_raw_message(to=to, subject=subject, body=body or "", cc=cc, bcc=bcc)
+    try:
+        raw = _build_raw_message(
+            to=to, subject=subject, body=body or "",
+            cc=cc, bcc=bcc, attachment_path=attachment_path,
+        )
+    except FileNotFoundError as e:
+        return _err(str(e), to=to, subject=subject)
+    except Exception as e:
+        return _err(str(e), to=to, subject=subject)
     try:
         draft = service.users().drafts().create(
             userId="me", body={"message": {"raw": raw}},
@@ -393,7 +436,7 @@ TOOL_SPECS = [
     ),
     ToolSpec(
         name="gmail_send",
-        description="Send a plain-text email from a Gmail mailbox. Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
+        description="Send an email from a Gmail mailbox. Supports optional file attachments (PDFs, images, etc.). Use sparingly — sending is irreversible. Prefer gmail_create_draft when the user hasn't explicitly approved sending.",
         parameters={
             "type": "object",
             "properties": {
@@ -403,6 +446,7 @@ TOOL_SPECS = [
                 "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                "attachment_path": {"type": "string", "description": "Optional path to a file to attach (PDF, image, etc.). The filename is derived from the path."},
             },
             "required": ["to", "subject", "body"],
         },
@@ -413,11 +457,12 @@ TOOL_SPECS = [
             account=args.get("account"),
             cc=args.get("cc"),
             bcc=args.get("bcc"),
+            attachment_path=args.get("attachment_path"),
         ),
     ),
     ToolSpec(
         name="gmail_create_draft",
-        description="Create a Gmail draft (no send). Preferred over gmail_send when the user hasn't explicitly approved sending.",
+        description="Create a Gmail draft (no send). Supports optional file attachments (PDFs, images, etc.). Preferred over gmail_send when the user hasn't explicitly approved sending.",
         parameters={
             "type": "object",
             "properties": {
@@ -427,6 +472,7 @@ TOOL_SPECS = [
                 "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                "attachment_path": {"type": "string", "description": "Optional path to a file to attach (PDF, image, etc.). The filename is derived from the path."},
             },
             "required": ["to", "subject", "body"],
         },
@@ -437,6 +483,7 @@ TOOL_SPECS = [
             account=args.get("account"),
             cc=args.get("cc"),
             bcc=args.get("bcc"),
+            attachment_path=args.get("attachment_path"),
         ),
     ),
     ToolSpec(
