@@ -32,6 +32,9 @@ import base64
 import json
 import logging
 import os
+import mimetypes
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Iterable
