@@ -657,8 +657,13 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
             send_message(chat_id, f"⚠️ Error processing the attachment: {e}", thread_id)
         return
 
+    # Voice messages: give the assistant channel context so it does not assume the DApp
+    # and knows its reply is spoken back. Not part of the transcript shown to the user.
+    dispatch_text = text
+    if is_voice:
+        dispatch_text = text + ' [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]'
     try:
-        response = call_chat_with_progress(chat_id, thread_id, text, session_id, public_key)
+        response = call_chat_with_progress(chat_id, thread_id, dispatch_text, session_id, public_key)
         # If original message was a voice note, send voice reply + URL follow-up
         if is_voice and response:
             _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
