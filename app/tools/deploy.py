@@ -280,7 +280,6 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     )
     steps.append({"step": "nginx_certbot", "status": "ok"})
 
-    elapsed = round(time.time() - start, 1)
     result = {
         "status": "success",
         "message": f"Local deploy triggered in {elapsed}s. Service restarting.",
