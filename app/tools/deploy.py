@@ -193,6 +193,36 @@ def _capture_forensic_evidence() -> dict:
     }
 
 
+def _write_deploy_marker(commit: str, elapsed: float) -> None:
+    """Write a marker file so the NEW process can notify the governor on startup.
+
+    Written just before systemctl restart so the new process (which starts
+    moments later) can read it, send a Telegram notification, and delete it.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    marker = "/tmp/.autopilot_deployed"
+    try:
+        data = {
+            "commit": commit,
+            "elapsed_seconds": round(elapsed, 1),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(marker, "w") as f:
+            _json.dump(data, f)
+        logger.info("Wrote deploy marker to %s: %s", marker, data)
+    except Exception as e:
+        logger.warning("Failed to write deploy marker: %s", e)
+
+
+def _get_current_commit(remote_dir: str) -> str:
+    """Get the current git commit SHA from the repo."""
+    try:
+        return _run_local("git rev-parse HEAD", cwd=remote_dir, timeout=10)
+    except DeployError:
+        return "unknown"
+
+
 def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     """Phase-two: pip install + restart + nginx, using whatever's on disk RIGHT NOW.
 
@@ -210,6 +240,11 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     steps.append({"step": "pip_install", "status": "ok"})
 
     logger.info("Step 3: restart systemd service")
+    # Capture the commit SHA and write a marker file so the new process
+    # can notify the governor that the deploy completed successfully.
+    commit = _get_current_commit(remote_dir)
+    elapsed = round(time.time() - start, 1)
+    _write_deploy_marker(commit, elapsed)
     subprocess.Popen(
         [_ELEVATE, "systemctl", "restart", "truesight-autopilot",
          "truesight-autopilot-telegram", "truesight-autopilot-watchdog"],
