@@ -341,6 +341,70 @@ def resolve_governor_public_key() -> str | None:
     return None
 
 
+def resolve_governor_chat_id() -> int | None:
+    """Resolve the Telegram chat ID for the configured governor.
+
+    Uses the DEPLOY_NOTIFY_CHAT_ID setting if set, otherwise falls back
+    to the first allowed user ID from TELEGRAM_ALLOWED_USER_IDS.
+    Returns None if neither is available.
+    """
+    deploy_chat = os.getenv("DEPLOY_NOTIFY_CHAT_ID", "").strip()
+    if deploy_chat.lstrip("-").isdigit():
+        return int(deploy_chat)
+    allowed = parse_allowed_ids(settings.telegram_allowed_user_ids)
+    if allowed:
+        return next(iter(allowed))
+    return None
+
+
+def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
+    """Send a 'deploy complete' notification to the governor's Telegram chat.
+
+    Called by the NEW process after startup (from main.py lifespan) when
+    a deploy marker file is found. Returns True on success.
+
+    The message is sent directly via the Telegram Bot API — no JWT or
+    /chat-blocking needed since this is a standalone notification.
+    """
+    if not settings.telegram_bot_api_key:
+        logger.warning("send_deploy_notification: TELEGRAM_BOT_API_KEY not set — skipping")
+        return False
+
+    chat_id = resolve_governor_chat_id()
+    if chat_id is None:
+        logger.warning("send_deploy_notification: no chat ID available — skipping")
+        return False
+
+    commit_short = commit[:7] if commit and commit != "unknown" else "unknown"
+    text = (
+        f"✅ <b>Autopilot deploy complete</b>\n"
+        f"• Commit: <code>{commit_short}</code>\n"
+        f"• Back online in {elapsed_seconds}s"
+    )
+
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        resp = httpx.post(
+            f"{_TELEGRAM_API}/bot{settings.telegram_bot_api_key}/sendMessage",
+            json=payload,
+            timeout=20.0,
+        )
+        if resp.status_code == 200:
+            logger.info("Deploy notification sent to chat %s", chat_id)
+            return True
+        else:
+            logger.warning("send_deploy_notification HTTP %s: %s", resp.status_code, resp.text[:200])
+            return False
+    except Exception as e:
+        logger.warning("send_deploy_notification failed: %s", e)
+        return False
+
+
 def call_chat(message: str, session_id: str, public_key: str) -> str:
     """POST to /chat-blocking as the governor; return the assistant text."""
     token = create_jwt(public_key)
