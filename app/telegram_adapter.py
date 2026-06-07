@@ -509,7 +509,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                     else:
                         _msg = f"🔄 Thinking…"  # fallback, tool label takes over
                     if time.time() - last_edit > 3:
-                        edit_message_text(chat_id, status_id, _msg)
+                        edit_message_text(chat_id, status_id, _msg, thread_id)
                         last_edit = time.time()
 
                 elif etype == "token":
