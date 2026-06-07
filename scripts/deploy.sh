@@ -205,6 +205,9 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     echo 'git identity + credential helper configured'
 "
 
+echo "=== Installing tesseract-ocr (attachment processing) ==="
+ssh -i "$EC2_KEY" "$EC2_HOST" "DEBIAN_FRONTEND=noninteractive apt-get install -y tesseract-ocr"
+
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     cd $REMOTE_DIR
