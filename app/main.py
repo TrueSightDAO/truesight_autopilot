@@ -210,6 +210,9 @@ async def lifespan(app: FastAPI):
     logger.info("LIFECYCLE: Autopilot starting up — pid=%d ppid=%d", os.getpid(), os.getppid())
     _install_signal_loggers()
 
+    # ── Deploy notification: check for marker file from deploy.py ──
+    _check_deploy_marker()
+
     if not settings.dry_run:
         try:
             email_poller = EmailPoller()
