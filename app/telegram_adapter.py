@@ -542,7 +542,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
 
             # Replace status message with final response
             if final_response:
-                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(chat_id, status_id, final_response):
+                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(chat_id, status_id, final_response, thread_id):
                     return final_response
                 delete_message(chat_id, status_id)
                 send_message(chat_id, final_response, thread_id)
