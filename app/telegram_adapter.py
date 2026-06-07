@@ -243,10 +243,12 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                     msg_id = result.get("message_id")
             else:
                 logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
-                # Fallback: send the raw chunk as plain text, no thread. Covers both
+                # Fallback: send the raw chunk as plain text. Covers both
                 # "message thread not found" and any HTML parse error — the reply
                 # still lands (just unformatted) instead of vanishing.
-                fallback = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+                fallback: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+                if thread_id:
+                    fallback["message_thread_id"] = thread_id
                 resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                 if i == 0 and resp2.status_code == 200:
                     msg_id = resp2.json().get("result", {}).get("message_id")
