@@ -646,7 +646,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
             return
         msg_text = caption or text or "Please inspect the attached file."
         msg_text += (f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
-                     f"scan_qr_batch for QR images, or read_local_file for text. Then act on the result.]")
+                     f"scan_qr_batch for QR images, extract_pdf_text for PDFs, "
+                     f"ocr_image for text extraction from images, or read_local_file for text. "
+                     f"After processing, use append_to_transcript to persist the extracted content.]")
         try:
             response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
             # If original message was a voice note with attachment, also send voice reply
