@@ -548,7 +548,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                 send_message(chat_id, final_response, thread_id)
                 return final_response
             else:
-                edit_message_text(chat_id, status_id, "⚠️ Autopilot produced an empty response.")
+                edit_message_text(chat_id, status_id, "⚠️ Autopilot produced an empty response.", thread_id)
                 return "⚠️ Autopilot produced an empty response."
 
     except httpx.ReadTimeout:
