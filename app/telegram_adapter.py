@@ -281,7 +281,7 @@ def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bo
         return False
 
 
-def edit_message_text(chat_id: int, message_id: int, text: str) -> bool:
+def edit_message_text(chat_id: int, message_id: int, text: str, thread_id: int | None = None) -> bool:
     """Edit a previously sent message. Returns True on success."""
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -290,6 +290,8 @@ def edit_message_text(chat_id: int, message_id: int, text: str) -> bool:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+    if thread_id:
+        payload["message_thread_id"] = thread_id
     try:
         resp = httpx.post(_api("editMessageText"), json=payload, timeout=10.0)
         return resp.status_code == 200
