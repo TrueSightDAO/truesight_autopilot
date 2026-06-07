@@ -555,6 +555,147 @@ def _handle_voice_reply(
 
 # ── Update handling + loop ─────────────────────────────────────────────────
 
+def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | None, session_id: str) -> str | None:
+    """Auto-detect file type, extract content, persist to transcript, return summary.
+
+    Returns a summary string for the LLM, or None on failure.
+    Sends progress updates to Telegram as it works.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+    ext = Path(local_path).suffix.lower()
+    pdf_exts = {".pdf"}
+    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+
+    status_id = send_message(chat_id, "📄 Processing attachment…", thread_id)
+
+    def _update_status(msg: str) -> None:
+        if status_id:
+            edit_message_text(chat_id, status_id, msg)
+
+    def _run_script(script_name: str, *args: str, timeout: int = 120) -> dict:
+        script_path = SCRIPTS_DIR / script_name
+        if not script_path.exists():
+            return {"status": "error", "message": f"Script not found: {script_path}"}
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script_path), *args],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if result.returncode != 0:
+                return {"status": "error", "message": f"Script exited {result.returncode}: {result.stderr[:500]}"}
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "Script output was not valid JSON"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "Script timed out"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    # --- PDF path ---
+    if ext in pdf_exts:
+        _update_status("📄 Extracting PDF text…")
+        pdf_result = _run_script("extract_pdf_text.py", local_path)
+
+        if pdf_result.get("status") != "success":
+            _update_status(f"⚠️ PDF extraction failed: {pdf_result.get('message', 'unknown error')}")
+            return None
+
+        page_count = pdf_result.get("page_count", 0)
+        total_chars = pdf_result.get("total_chars", 0)
+        is_scanned = pdf_result.get("likely_scanned_pdf", False)
+
+        # Build extracted text content
+        pages_text = []
+        for p in pdf_result.get("pages", []):
+            t = p.get("text", "").strip()
+            if t:
+                pages_text.append(f"--- Page {p['page']} ---\n{t}")
+        extracted_text = "\n\n".join(pages_text)
+
+        # If scanned PDF, run OCR too
+        ocr_text = ""
+        if is_scanned:
+            _update_status(f"📄 PDF appears scanned — running OCR…")
+            ocr_result = _run_script("ocr_image.py", local_path, "eng")
+            if ocr_result.get("status") == "success":
+                ocr_text = ocr_result.get("text", "")
+                extracted_text += f"\n\n--- OCR of scanned PDF ---\n{ocr_text}"
+
+        # Persist to transcript
+        _update_status("💾 Saving to transcript…")
+        filename = Path(local_path).name
+        transcript_result = _run_script(
+            "append_to_transcript.py",
+            "--session-id", session_id,
+            "--content", extracted_text[:50000],
+            "--filename", filename,
+            "--type", "PDF",
+            "--ocr-text", ocr_text[:10000] if ocr_text else "",
+        )
+
+        summary = (
+            f"[Attachment auto-processed: **{filename}**]\n"
+            f"- Type: PDF ({page_count} page{'s' if page_count != 1 else ''}, {total_chars} chars)\n"
+        )
+        if is_scanned:
+            summary += f"- Scanned PDF: OCR also applied ({len(ocr_text)} chars extracted)\n"
+        if transcript_result.get("status") == "success":
+            summary += f"- Saved to transcript\n"
+        summary += f"\nExtracted content:\n```\n{extracted_text[:8000]}\n```\n"
+        if len(extracted_text) > 8000:
+            summary += "\n*(content truncated in preview — full text saved to transcript)*\n"
+
+        _update_status(f"✅ Extracted {page_count} page{'s' if page_count != 1 else ''} from PDF")
+        return summary
+
+    # --- Image path ---
+    if ext in image_exts:
+        _update_status("📸 Running OCR on image…")
+        ocr_result = _run_script("ocr_image.py", local_path, "eng")
+
+        if ocr_result.get("status") != "success":
+            _update_status(f"⚠️ OCR failed: {ocr_result.get('message', 'unknown error')}")
+            return None
+
+        extracted_text = ocr_result.get("text", "")
+        confidence = ocr_result.get("avg_confidence", 0)
+        quality = ocr_result.get("quality", "unknown")
+
+        # Persist to transcript
+        _update_status("💾 Saving to transcript…")
+        filename = Path(local_path).name
+        transcript_result = _run_script(
+            "append_to_transcript.py",
+            "--session-id", session_id,
+            "--content", extracted_text[:50000],
+            "--filename", filename,
+            "--type", "Image",
+            "--ocr-text", extracted_text[:10000],
+        )
+
+        summary = (
+            f"[Attachment auto-processed: **{filename}**]\n"
+            f"- Type: Image (OCR confidence: {confidence}%, quality: {quality})\n"
+        )
+        if transcript_result.get("status") == "success":
+            summary += f"- Saved to transcript\n"
+        if extracted_text:
+            summary += f"\nExtracted text:\n```\n{extracted_text[:8000]}\n```\n"
+        else:
+            summary += "\n*(No text detected in image)*\n"
+
+        _update_status(f"✅ OCR complete (confidence: {confidence}%)")
+        return summary
+
+    # --- Unknown file type ---
+    _update_status(f"⚠️ Unknown file type: {ext}")
+    return None
+
+
 def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
     chat = msg.get("chat", {})
     chat_id = chat.get("id")
@@ -638,17 +779,26 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
 
     session_id = build_session_id(chat_id, thread_id)
 
-    # Attachment (photo / document): download it and let the agent inspect it
+    # Attachment (photo / document): auto-process before LLM dispatch
     if attachment_file_id:
         local_path = download_telegram_file(attachment_file_id)
         if not local_path:
             send_message(chat_id, "⚠️ Couldn't download that attachment from Telegram.", thread_id)
             return
+
+        # Auto-process: detect type, extract, persist, get summary
+        attachment_summary = _auto_process_attachment(local_path, chat_id, thread_id, session_id)
+
+        # Build the message for the LLM
         msg_text = caption or text or "Please inspect the attached file."
-        msg_text += (f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
-                     f"scan_qr_batch for QR images, extract_pdf_text for PDFs, "
-                     f"ocr_image for text extraction from images, or read_local_file for text. "
-                     f"After processing, use append_to_transcript to persist the extracted content.]")
+        if attachment_summary:
+            msg_text += f"\n\n{attachment_summary}"
+        else:
+            msg_text += (f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
+                         f"scan_qr_batch for QR images, extract_pdf_text for PDFs, "
+                         f"ocr_image for text extraction from images, or read_local_file for text. "
+                         f"After processing, use append_to_transcript to persist the extracted content.]")
+
         try:
             response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
             # If original message was a voice note with attachment, also send voice reply
