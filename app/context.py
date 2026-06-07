@@ -216,11 +216,14 @@ def _read_file(path: Path) -> str:
 
 
 def build_system_prompt() -> str:
-    """Build the system prompt — header only, no file inlining.
-    The LLM uses read_context_file to fetch files on demand,
-    keeping the system prompt small and leaving room for conversation + tool results.
+    """Build the system prompt — header + live host-identity block, no file
+    inlining. The LLM uses read_context_file to fetch files on demand, keeping
+    the system prompt small and leaving room for conversation + tool results.
+    The host-identity block tells Sophia which EC2 instance / machine she is on
+    so she never hallucinates her own location.
     """
-    return _SYSTEM_PROMPT_HEADER
+    from .host_identity import host_identity_block
+    return f"{_SYSTEM_PROMPT_HEADER}\n{host_identity_block()}"
 
 
 def get_context_file(path: str) -> str | None:
