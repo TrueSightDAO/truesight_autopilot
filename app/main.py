@@ -162,6 +162,41 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
     return _sessions[session_key]
 
 
+def _check_deploy_marker() -> None:
+    """Check for a deploy marker file written by deploy.py before restart.
+
+    If found, send a Telegram notification to the governor and delete the
+    marker file. This runs in the NEW process after startup, so the
+    notification reliably reaches the governor even though the old process
+    was killed mid-response.
+    """
+    marker = "/tmp/.autopilot_deployed"
+    if not os.path.exists(marker):
+        return
+    try:
+        with open(marker) as f:
+            data = json.load(f)
+        commit = data.get("commit", "unknown")
+        elapsed = data.get("elapsed_seconds", 0)
+        logger.info(
+            "Deploy marker found: commit=%s elapsed=%.1fs — sending notification",
+            commit, elapsed,
+        )
+        # Import and call the Telegram notification function.
+        # This is safe to call even if the Telegram adapter is not running —
+        # it sends directly via the Bot API using the shared settings.
+        from .telegram_adapter import send_deploy_notification
+        send_deploy_notification(commit, elapsed)
+    except Exception as e:
+        logger.warning("Failed to process deploy marker: %s", e)
+    finally:
+        try:
+            os.remove(marker)
+            logger.info("Removed deploy marker file: %s", marker)
+        except Exception:
+            pass
+
+
 def _install_signal_loggers():
     """Log every kill signal we receive (with pid+ppid+signal name) before
     chaining to the previous handler. Diagnoses 'why did the autopilot die
