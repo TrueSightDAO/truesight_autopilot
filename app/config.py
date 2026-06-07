@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     telegram_governor_name: str = Field(default="Gary Teh", validation_alias="TELEGRAM_GOVERNOR_NAME")
     # Where the FastAPI chat service is reachable from the adapter process.
     autopilot_chat_url: str = Field(default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL")
+    # The working group (forum) where create_telegram_topic opens topics when the
+    # request didn't originate inside a Telegram topic — i.e. the off-Telegram
+    # /chat handoff trigger. Numeric supergroup id, e.g. -1001234567890. Requires
+    # Sophia's bot to be a group admin with 'Manage Topics'.
+    telegram_home_group_id: str = Field(default="", validation_alias="TELEGRAM_HOME_GROUP_ID")
 
     # Telegram attention watchdog — MTProto USER-session (not the bot), so it
     # can see DMs + all groups. Read-only; nudges go to Saved Messages only.

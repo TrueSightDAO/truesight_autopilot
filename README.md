@@ -171,6 +171,24 @@ sudo systemctl disable truesight-autopilot
 
 This rsyncs the repo to `/opt/truesight_autopilot` on the EC2 instance, reinstalls dependencies, and restarts the systemd service.
 
+### Telegram forum topics — execution handoff (governor-prompted)
+
+Sophia can open a new **forum topic** in the working group on request (the
+`create_telegram_topic` tool) — the landing pad for the local-LLM → Sophia
+execution handoff: a governor crafts a plan + roadmap with a local LLM, commits
+the roadmap to `agentic_ai_context`, then triggers Sophia (e.g. `dao_client`'s
+`ping_sophia`, governor-signed). Sophia opens a dedicated topic, posts a
+kickoff, and the governor continues monitoring there (each topic is its own
+autopilot session).
+
+**One-time setup (operator):**
+- The group must have **Topics enabled** (Group Settings → Topics).
+- **Promote Sophia's bot to a group admin with the "Manage Topics" right.**
+  Without this the Bot API rejects topic creation.
+- Set **`TELEGRAM_HOME_GROUP_ID`** in the box `.env` to that group's numeric
+  supergroup id (`-100…`) so the off-Telegram `/chat` handoff trigger knows
+  where to open topics.
+
 ### Telegram attention watchdog — one-time login (operator-only)
 
 `app/attention_watchdog.py` (unit `truesight-autopilot-watchdog`) watches the
