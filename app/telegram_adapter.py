@@ -525,7 +525,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                         tool_active = tool_name
                         thinking_text = ""
                         _msg = _label_tool(tool_name)
-                        edit_message_text(chat_id, status_id, _msg)
+                        edit_message_text(chat_id, status_id, _msg, thread_id)
                         last_edit = time.time()
                     elif status == "done":
                         tool_active = None
