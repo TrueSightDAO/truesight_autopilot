@@ -552,11 +552,11 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                 return "⚠️ Autopilot produced an empty response."
 
     except httpx.ReadTimeout:
-        edit_message_text(chat_id, status_id, "⚠️ Autopilot timed out. Try a simpler request or try again.")
+        edit_message_text(chat_id, status_id, "⚠️ Autopilot timed out. Try a simpler request or try again.", thread_id)
         return "⚠️ Autopilot timed out — the LLM or a tool took too long."
     except Exception as e:
         logger.exception("call_chat_with_progress failed")
-        edit_message_text(chat_id, status_id, f"⚠️ Error: {e}")
+        edit_message_text(chat_id, status_id, f"⚠️ Error: {e}", thread_id)
         return f"⚠️ Error: {e}"
 
 
