@@ -162,6 +162,16 @@ fi
 scp -i "$EC2_KEY" -q "$HOME/.ssh/sophia_infra" "$HOME/.ssh/sophia_infra.pub" "$EC2_HOST:~/.ssh/"
 ssh -i "$EC2_KEY" "$EC2_HOST" "chmod 600 ~/.ssh/sophia_infra && chmod 644 ~/.ssh/sophia_infra.pub && echo 'sophia_infra key synced'"
 
+# Self-trust: authorize sophia_infra.pub on this box's OWN authorized_keys so
+# ssh_run(host='autopilot', ...) (loopback 127.0.0.1) works — Sophia's path to
+# running sudo / installing packages on the machine she runs on. Idempotent.
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+    PUB=\$(cat ~/.ssh/sophia_infra.pub)
+    grep -qF \"\$PUB\" ~/.ssh/authorized_keys || echo \"\$PUB\" >> ~/.ssh/authorized_keys
+    echo 'sophia_infra self-trust ensured (loopback self-exec enabled)'
+"
+
 echo "=== Installing Node 20 + clasp (GAS deploys) ==="
 # gas_deploy_project tool needs node + clasp on PATH (see its docstring).
 # NodeSource Node 20 matches the operator Mac (nvm v20.19.1); clasp pinned

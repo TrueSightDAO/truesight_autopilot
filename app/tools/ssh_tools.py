@@ -35,6 +35,15 @@ _MAX_OUTPUT_CHARS = 8000
 # Mirrors AWS_DIGITAL_INFRASTRUCTURE.md §2 — running hosts only.
 # label → (public IP, user, what it is)
 FLEET: dict[str, dict[str, str]] = {
+    "autopilot": {
+        # THIS box — Sophia's own host. Loopback so the entry survives IP
+        # changes / blue-green AMI swaps. Self-trust: deploy.sh + user-data.sh
+        # add sophia_infra.pub to this box's own authorized_keys. ubuntu has
+        # passwordless sudo, so this is how Sophia installs packages / runs
+        # sudo on the machine she runs on (e.g. tesseract-ocr for attachments).
+        "ip": "127.0.0.1", "user": "ubuntu",
+        "desc": "THIS autopilot box itself (Sophia's own host) — loopback self-exec for package installs / sudo on her own machine",
+    },
     "krake_nginx": {
         "ip": "54.226.114.186", "user": "ubuntu", "port": "2202",
         "desc": "Nginx reverse proxy — terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
