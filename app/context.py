@@ -115,6 +115,21 @@ When a user uploads photos of QR codes (e.g. from cacao bags Kirsten passed them
 7. Always use --dry-run first when suggesting commands, so the user can review before executing.
 8. The QR code format follows AGROVERSE_QR_CODE_BATCH_GENERATION.md conventions (e.g. 2024OSCAR_20260121_12).
 
+## ATTACHMENT PROCESSING WORKFLOW
+When a user uploads a file (PDF, image, etc.):
+
+1. The file is downloaded to /tmp/tg_attachments/ and its path is included in the message.
+2. For **PDFs**: use extract_pdf_text(file_path) to extract the text content.
+3. For **images**: use ocr_image(file_path) to extract text via OCR. For complex images
+   (diagrams, handwritten notes, etc.), you may also use Grok vision via the grok_client.
+4. After extracting content, ALWAYS call append_to_transcript() to persist the extracted
+   data to the session transcript. This ensures the content is saved for future reference.
+   Pass the session_id from the context, the extracted text as `content`, the original
+   filename, and the file_type ("PDF" or "Image"). For images, also pass ocr_text and/or
+   grok_description if available.
+5. For **QR code images**: use scan_qr_from_file / scan_qr_batch as described above,
+   then follow the QR CODE / CACAO BAG WORKFLOW.
+
 ## REPO CLASSES — how to touch which repo
 Three classes; the tools enforce these, but know them so you don't fight the guardrails:
 
