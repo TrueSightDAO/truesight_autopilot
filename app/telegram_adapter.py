@@ -1074,14 +1074,14 @@ def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
     action, repo, pr = beta_deploy.parse_callback_data(data)
     if action != "ship" or not repo or not pr:
         if chat_id and message_id:
-            edit_message_text(chat_id, message_id, "✕ Cancelled.")
+            edit_message_text(chat_id, message_id, "✕ Cancelled.", thread_id)
         return
 
     if chat_id and message_id:
-        edit_message_text(chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…")
+        edit_message_text(chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…", thread_id)
     result = beta_deploy.ship_pr(repo, pr)
     if chat_id and message_id:
-        edit_message_text(chat_id, message_id, result["message"])
+        edit_message_text(chat_id, message_id, result["message"], thread_id)
     elif chat_id:
         send_message(chat_id, result["message"], thread_id)
 
