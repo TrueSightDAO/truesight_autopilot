@@ -477,7 +477,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
             timeout=_CHAT_TIMEOUT,
         ) as resp:
             if resp.status_code != 200:
-                edit_message_text(chat_id, status_id, f"⚠️ Autopilot returned HTTP {resp.status_code}.")
+                edit_message_text(chat_id, status_id, f"⚠️ Autopilot returned HTTP {resp.status_code}.", thread_id)
                 return f"⚠️ Autopilot returned HTTP {resp.status_code}."
 
             final_response = ""
