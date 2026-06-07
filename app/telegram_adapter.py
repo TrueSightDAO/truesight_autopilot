@@ -531,7 +531,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                         tool_active = None
 
                 elif etype == "wanted_more_rounds":
-                    edit_message_text(chat_id, status_id, "⚠️ Hit round limit — forcing final response…")
+                    edit_message_text(chat_id, status_id, "⚠️ Hit round limit — forcing final response…", thread_id)
                     last_edit = time.time()
 
                 elif etype == "done":
