@@ -642,7 +642,7 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
 
     def _update_status(msg: str) -> None:
         if status_id:
-            edit_message_text(chat_id, status_id, msg)
+            edit_message_text(chat_id, status_id, msg, thread_id)
 
     def _run_script(script_name: str, *args: str, timeout: int = 120) -> dict:
         script_path = SCRIPTS_DIR / script_name
