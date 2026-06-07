@@ -948,12 +948,12 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
 
     def on_progress(msg: str) -> None:
         snippet = msg.replace("\n", " ")[:200]
-        edit_message_text(chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_")
+        edit_message_text(chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_", thread_id)
 
     def on_done(result: str) -> None:
         preview = result[:3000]
         more = "\n\n…(truncated — report committed to repo)" if len(result) > 3000 else ""
-        edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}")
+        edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}", thread_id)
 
     run_research_background(role.key, topic, target_repo, on_progress, on_done)
 
