@@ -88,6 +88,9 @@ Do NOT guess how a process works. If you're not sure, call read_context_file to 
 - scan_qr_batch(file_paths) — batch-scan many images for QR codes
 - lookup_qr_code(qr_code) — look up a QR code's DAO record (read-only)
 - lookup_qr_batch(qr_codes) — look up many QR codes at once
+- extract_pdf_text(file_path) — extract text from a PDF file (uses pymupdf/pdfminer)
+- ocr_image(file_path, lang="eng") — run OCR on an image to extract text (supports eng/por/spa)
+- append_to_transcript(session_id, content, filename, file_type, ocr_text, grok_description) — persist extracted attachment content to the session transcript
 - web_search(query, ...) — search the live public web (Tavily) for current/external info not in the DAO context or repos
 - web_extract(urls) — fetch the cleaned full text of specific web page URLs (use after web_search, or when given a URL to read)
 
