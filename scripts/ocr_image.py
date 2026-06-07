@@ -58,6 +58,8 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
     Returns:
         Dict with status, extracted text, confidence, and quality info.
     """
+    import time
+    start_time = time.time()
     p = Path(path)
     if not p.exists():
         return {"status": "error", "message": f"File not found: {path}"}
@@ -85,7 +87,10 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
             return {"status": "error", "message": "Tesseract OCR engine not found. Install: apt-get install tesseract-ocr"}
 
         # Open and preprocess
-        original = Image.open(path)
+        try:
+            original = Image.open(path)
+        except Exception as e:
+            return {"status": "error", "message": f"Cannot open image: {e}", "reason": "corrupt_file"}
         original_w, original_h = original.size
 
         processed = preprocess_image(original)
@@ -110,12 +115,15 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
         full_text = " ".join(text_parts)
         avg_confidence = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
 
-        # Quality assessment
+        # Quality assessment (fixed logic: <30 poor, <50 fair, >=50 good)
         quality = "good"
-        if avg_confidence < 50:
+        if avg_confidence < 30:
             quality = "poor"
-        elif avg_confidence < 70:
+        elif avg_confidence < 50:
             quality = "fair"
+
+        import time
+        elapsed_ms = int((time.time() - start_time) * 1000)
 
         return {
             "status": "success",
@@ -123,8 +131,10 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
             "word_count": len(text_parts),
             "avg_confidence": avg_confidence,
             "quality": quality,
+            "poor_quality": quality == "poor",
             "image_size": f"{original_w}x{original_h}",
             "language": lang,
+            "processing_time_ms": elapsed_ms,
         }
 
     except Exception as e:

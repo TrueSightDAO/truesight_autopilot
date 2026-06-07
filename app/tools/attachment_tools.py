@@ -45,6 +45,9 @@ def _run_script(script_name: str, *args: str) -> dict:
 def extract_pdf_text(path: str) -> str:
     """Extract text from a PDF file using pymupdf (fallback to pdfminer).
 
+    If the PDF is detected as scanned (image-only), the result includes
+    a suggest_ocr flag so the agent can run OCR on the file.
+
     Args:
         path: Full path to the PDF file.
 
@@ -54,6 +57,11 @@ def extract_pdf_text(path: str) -> str:
     if not path or not os.path.isfile(path):
         return json.dumps({"status": "error", "reason": f"File not found: {path}"})
     result = _run_script("extract_pdf_text.py", path)
+
+    # If the PDF is likely scanned (image-only), add OCR suggestion
+    if isinstance(result, dict) and result.get("suggest_ocr"):
+        result["ocr_suggestion"] = "This PDF appears to be scanned (image-only). Try running ocr_image on the file for text extraction."
+
     return json.dumps(result, indent=2)
 
 

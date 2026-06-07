@@ -27,7 +27,9 @@ MAX_CHARS_PER_PAGE = 50_000
 def extract_with_pymupdf(path: str) -> dict:
     """Extract text using pymupdf (fitz)."""
     import fitz  # pymupdf
+    import time
 
+    start = time.time()
     doc = fitz.open(path)
     pages = []
     total_chars = 0
@@ -57,6 +59,7 @@ def extract_with_pymupdf(path: str) -> dict:
     doc.close()
 
     scanned_ratio = sum(scanned_flags) / len(scanned_flags) if scanned_flags else 0
+    elapsed_ms = int((time.time() - start) * 1000)
 
     return {
         "status": "success",
@@ -65,6 +68,8 @@ def extract_with_pymupdf(path: str) -> dict:
         "total_chars": total_chars,
         "scanned_ratio": round(scanned_ratio, 2),
         "likely_scanned_pdf": scanned_ratio > 0.8,
+        "suggest_ocr": scanned_ratio > 0.8,
+        "processing_time_ms": elapsed_ms,
         "pages": pages,
     }
 
@@ -107,6 +112,11 @@ def extract_pdf_text(path: str) -> dict:
         return extract_with_pymupdf(path)
     except ImportError:
         logger.warning("pymupdf not available, trying pdfminer...")
+    except fitz.FileDataError as e:
+        msg = str(e).lower()
+        if "password" in msg or "encrypt" in msg:
+            return {"status": "error", "message": "PDF is password-protected. Cannot extract text without a password.", "reason": "password_protected"}
+        return {"status": "error", "message": f"PDF data error: {e}", "reason": "corrupt_file"}
     except Exception as e:
         logger.warning(f"pymupdf failed: {e}, trying pdfminer...")
 
