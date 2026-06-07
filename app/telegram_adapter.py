@@ -552,11 +552,11 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                 return "⚠️ Autopilot produced an empty response."
 
     except httpx.ReadTimeout:
-        edit_message_text(chat_id, status_id, "⚠️ Autopilot timed out. Try a simpler request or try again.")
+        edit_message_text(chat_id, status_id, "⚠️ Autopilot timed out. Try a simpler request or try again.", thread_id)
         return "⚠️ Autopilot timed out — the LLM or a tool took too long."
     except Exception as e:
         logger.exception("call_chat_with_progress failed")
-        edit_message_text(chat_id, status_id, f"⚠️ Error: {e}")
+        edit_message_text(chat_id, status_id, f"⚠️ Error: {e}", thread_id)
         return f"⚠️ Error: {e}"
 
 
@@ -642,7 +642,7 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
 
     def _update_status(msg: str) -> None:
         if status_id:
-            edit_message_text(chat_id, status_id, msg)
+            edit_message_text(chat_id, status_id, msg, thread_id)
 
     def _run_script(script_name: str, *args: str, timeout: int = 120) -> dict:
         script_path = SCRIPTS_DIR / script_name
@@ -948,12 +948,12 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
 
     def on_progress(msg: str) -> None:
         snippet = msg.replace("\n", " ")[:200]
-        edit_message_text(chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_")
+        edit_message_text(chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_", thread_id)
 
     def on_done(result: str) -> None:
         preview = result[:3000]
         more = "\n\n…(truncated — report committed to repo)" if len(result) > 3000 else ""
-        edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}")
+        edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}", thread_id)
 
     run_research_background(role.key, topic, target_repo, on_progress, on_done)
 
@@ -1074,14 +1074,14 @@ def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
     action, repo, pr = beta_deploy.parse_callback_data(data)
     if action != "ship" or not repo or not pr:
         if chat_id and message_id:
-            edit_message_text(chat_id, message_id, "✕ Cancelled.")
+            edit_message_text(chat_id, message_id, "✕ Cancelled.", thread_id)
         return
 
     if chat_id and message_id:
-        edit_message_text(chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…")
+        edit_message_text(chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…", thread_id)
     result = beta_deploy.ship_pr(repo, pr)
     if chat_id and message_id:
-        edit_message_text(chat_id, message_id, result["message"])
+        edit_message_text(chat_id, message_id, result["message"], thread_id)
     elif chat_id:
         send_message(chat_id, result["message"], thread_id)
 
