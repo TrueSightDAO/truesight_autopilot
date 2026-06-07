@@ -88,6 +88,9 @@ Do NOT guess how a process works. If you're not sure, call read_context_file to 
 - scan_qr_batch(file_paths) — batch-scan many images for QR codes
 - lookup_qr_code(qr_code) — look up a QR code's DAO record (read-only)
 - lookup_qr_batch(qr_codes) — look up many QR codes at once
+- extract_pdf_text(file_path) — extract text from a PDF file (uses pymupdf/pdfminer)
+- ocr_image(file_path, lang="eng") — run OCR on an image to extract text (supports eng/por/spa)
+- append_to_transcript(session_id, content, filename, file_type, ocr_text, grok_description) — persist extracted attachment content to the session transcript
 - web_search(query, ...) — search the live public web (Tavily) for current/external info not in the DAO context or repos
 - web_extract(urls) — fetch the cleaned full text of specific web page URLs (use after web_search, or when given a URL to read)
 
@@ -111,6 +114,21 @@ When a user uploads photos of QR codes (e.g. from cacao bags Kirsten passed them
 6. If codes show Status = "Scanned / Sold" already, warn the user they may have already been processed.
 7. Always use --dry-run first when suggesting commands, so the user can review before executing.
 8. The QR code format follows AGROVERSE_QR_CODE_BATCH_GENERATION.md conventions (e.g. 2024OSCAR_20260121_12).
+
+## ATTACHMENT PROCESSING WORKFLOW
+When a user uploads a file (PDF, image, etc.):
+
+1. The file is downloaded to /tmp/tg_attachments/ and its path is included in the message.
+2. For **PDFs**: use extract_pdf_text(file_path) to extract the text content.
+3. For **images**: use ocr_image(file_path) to extract text via OCR. For complex images
+   (diagrams, handwritten notes, etc.), you may also use Grok vision via the grok_client.
+4. After extracting content, ALWAYS call append_to_transcript() to persist the extracted
+   data to the session transcript. This ensures the content is saved for future reference.
+   Pass the session_id from the context, the extracted text as `content`, the original
+   filename, and the file_type ("PDF" or "Image"). For images, also pass ocr_text and/or
+   grok_description if available.
+5. For **QR code images**: use scan_qr_from_file / scan_qr_batch as described above,
+   then follow the QR CODE / CACAO BAG WORKFLOW.
 
 ## REPO CLASSES — how to touch which repo
 Three classes; the tools enforce these, but know them so you don't fight the guardrails:
