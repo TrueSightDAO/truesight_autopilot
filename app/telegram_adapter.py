@@ -243,10 +243,12 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                     msg_id = result.get("message_id")
             else:
                 logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
-                # Fallback: send the raw chunk as plain text, no thread. Covers both
+                # Fallback: send the raw chunk as plain text. Covers both
                 # "message thread not found" and any HTML parse error — the reply
                 # still lands (just unformatted) instead of vanishing.
-                fallback = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+                fallback: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+                if thread_id:
+                    fallback["message_thread_id"] = thread_id
                 resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                 if i == 0 and resp2.status_code == 200:
                     msg_id = resp2.json().get("result", {}).get("message_id")
@@ -281,7 +283,7 @@ def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bo
         return False
 
 
-def edit_message_text(chat_id: int, message_id: int, text: str) -> bool:
+def edit_message_text(chat_id: int, message_id: int, text: str, thread_id: int | None = None) -> bool:
     """Edit a previously sent message. Returns True on success."""
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -290,6 +292,8 @@ def edit_message_text(chat_id: int, message_id: int, text: str) -> bool:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+    if thread_id:
+        payload["message_thread_id"] = thread_id
     try:
         resp = httpx.post(_api("editMessageText"), json=payload, timeout=10.0)
         return resp.status_code == 200
@@ -473,7 +477,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
             timeout=_CHAT_TIMEOUT,
         ) as resp:
             if resp.status_code != 200:
-                edit_message_text(chat_id, status_id, f"⚠️ Autopilot returned HTTP {resp.status_code}.")
+                edit_message_text(chat_id, status_id, f"⚠️ Autopilot returned HTTP {resp.status_code}.", thread_id)
                 return f"⚠️ Autopilot returned HTTP {resp.status_code}."
 
             final_response = ""
@@ -505,7 +509,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                     else:
                         _msg = f"🔄 Thinking…"  # fallback, tool label takes over
                     if time.time() - last_edit > 3:
-                        edit_message_text(chat_id, status_id, _msg)
+                        edit_message_text(chat_id, status_id, _msg, thread_id)
                         last_edit = time.time()
 
                 elif etype == "token":
@@ -521,13 +525,13 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                         tool_active = tool_name
                         thinking_text = ""
                         _msg = _label_tool(tool_name)
-                        edit_message_text(chat_id, status_id, _msg)
+                        edit_message_text(chat_id, status_id, _msg, thread_id)
                         last_edit = time.time()
                     elif status == "done":
                         tool_active = None
 
                 elif etype == "wanted_more_rounds":
-                    edit_message_text(chat_id, status_id, "⚠️ Hit round limit — forcing final response…")
+                    edit_message_text(chat_id, status_id, "⚠️ Hit round limit — forcing final response…", thread_id)
                     last_edit = time.time()
 
                 elif etype == "done":
@@ -538,13 +542,13 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
 
             # Replace status message with final response
             if final_response:
-                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(chat_id, status_id, final_response):
+                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(chat_id, status_id, final_response, thread_id):
                     return final_response
                 delete_message(chat_id, status_id)
                 send_message(chat_id, final_response, thread_id)
                 return final_response
             else:
-                edit_message_text(chat_id, status_id, "⚠️ Autopilot produced an empty response.")
+                edit_message_text(chat_id, status_id, "⚠️ Autopilot produced an empty response.", thread_id)
                 return "⚠️ Autopilot produced an empty response."
 
     except httpx.ReadTimeout:
