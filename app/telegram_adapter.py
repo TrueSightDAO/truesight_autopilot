@@ -882,6 +882,12 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     dispatch_text = text
     if is_voice:
         dispatch_text = text + ' [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]'
+
+    # Prepend Telegram context so the LLM can reference chat_id and thread_id
+    if thread_id:
+        dispatch_text = f"[Telegram context: chat_id={chat_id}, thread_id={thread_id}] {dispatch_text}"
+    else:
+        dispatch_text = f"[Telegram context: chat_id={chat_id}] {dispatch_text}"
     try:
         response = call_chat_with_progress(chat_id, thread_id, dispatch_text, session_id, public_key)
         # If original message was a voice note, send voice reply + URL follow-up
