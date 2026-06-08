@@ -11,7 +11,9 @@ Usage:
         --filename <original_filename> \
         --type <PDF|Image> \
         [--ocr-text <ocr_result>] \
-        [--grok-description <grok_description>]
+        [--grok-description <grok_description>] \
+        [--chat-id <telegram_chat_id>] \
+        [--thread-id <telegram_thread_id>]
 
 Output:
     JSON with status and transcript URL.
