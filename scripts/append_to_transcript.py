@@ -210,6 +210,8 @@ def main():
     parser.add_argument("--type", required=True, choices=["PDF", "Image"], help="File type")
     parser.add_argument("--ocr-text", default="", help="OCR extracted text (for images)")
     parser.add_argument("--grok-description", default="", help="Grok vision description (for images)")
+    parser.add_argument("--chat-id", default="", help="Telegram chat ID (optional)")
+    parser.add_argument("--thread-id", default="", help="Telegram thread/topic ID (optional)")
 
     args = parser.parse_args()
     result = append_to_transcript(
@@ -219,6 +221,8 @@ def main():
         file_type=args.type,
         ocr_text=args.ocr_text,
         grok_description=args.grok_description,
+        chat_id=args.chat_id,
+        thread_id=args.thread_id,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
