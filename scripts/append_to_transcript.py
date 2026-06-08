@@ -104,6 +104,8 @@ def append_to_transcript(
     file_type: str,
     ocr_text: str = "",
     grok_description: str = "",
+    chat_id: str = "",
+    thread_id: str = "",
 ) -> dict:
     """Append attachment content to the session transcript.
 
@@ -141,6 +143,10 @@ def append_to_transcript(
     attachment_section += f"| **Type** | {file_type} |\n"
     attachment_section += f"| **Filename** | {filename} |\n"
     attachment_section += f"| **Received** | {timestamp} |\n"
+    if chat_id:
+        attachment_section += f"| **Telegram Chat ID** | {chat_id} |\n"
+    if thread_id:
+        attachment_section += f"| **Telegram Thread ID** | {thread_id} |\n"
 
     if file_type == "Image" and grok_description:
         attachment_section += f"| **Grok Description** | {grok_description[:200]} |\n"
@@ -200,6 +206,8 @@ def main():
     parser.add_argument("--type", required=True, choices=["PDF", "Image"], help="File type")
     parser.add_argument("--ocr-text", default="", help="OCR extracted text (for images)")
     parser.add_argument("--grok-description", default="", help="Grok vision description (for images)")
+    parser.add_argument("--chat-id", default="", help="Telegram chat ID the attachment came from")
+    parser.add_argument("--thread-id", default="", help="Telegram thread/topic ID the attachment came from")
 
     args = parser.parse_args()
     result = append_to_transcript(
@@ -209,6 +217,8 @@ def main():
         file_type=args.type,
         ocr_text=args.ocr_text,
         grok_description=args.grok_description,
+        chat_id=args.chat_id,
+        thread_id=args.thread_id,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
