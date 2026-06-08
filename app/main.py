@@ -50,6 +50,7 @@ from .tools.dao_identity import register_identity
 from .tools.inventory_lookup import list_matching_qr_codes
 from .tools.fs_tools import list_directory, read_local_file
 from .grok_client import grok_analyze_images, GROK_MODEL
+from .daily_briefing import handle_daily_briefing
 from .fix_agent import FixAgent
 from .github_client import GitHubClient
 from .email_poller import EmailPoller
@@ -633,6 +634,56 @@ async def oracle_advisory(
         "model": model_used,
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
+
+
+# ── Daily Briefing (Morning Oracle Standup) ──────────────────────────────
+
+
+@app.api_route("/daily-briefing", methods=["POST", "OPTIONS"])
+async def daily_briefing(request: Request):
+    """POST /daily-briefing — triggered by the oracle after a governor's reading.
+
+    Accepts a signed payload (same pattern as /chat-blocking):
+      - X-Public-Key header: the governor's public key
+      - JSON body with `payload` (dict) and `signature` (base64 string)
+
+    The payload should contain:
+      - reading: dict with primary_hexagram, related_hexagram, etc.
+      - timestamp_utc: ISO 8601 timestamp of the reading
+
+    Steps:
+      1. Verify the signature maps to a governor
+      2. Dedup per governor per day
+      3. Compose agenda from live sources
+      4. Post to Telegram #General
+      5. Return JSON result
+
+    Fire-and-forget from the oracle's perspective — the oracle POSTs and
+    doesn't wait for a rendered page.
+    """
+    # CORS preflight
+    if request.method == "OPTIONS":
+        from fastapi.responses import Response
+        return Response(status_code=204, headers=_CORS_HEADERS)
+
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        return _cors_json_response({"ok": False, "error": "X-Public-Key header required"}, status_code=400)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _cors_json_response({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+
+    payload = body.get("payload", {})
+    signature = body.get("signature", "")
+
+    if not payload or not signature:
+        return _cors_json_response({"ok": False, "error": "payload and signature required"}, status_code=400)
+
+    result = await handle_daily_briefing(payload, signature, public_key)
+    status_code = 200 if result.get("ok") else (400 if result.get("error") else 200)
+    return _cors_json_response(result, status_code=status_code)
 
 
 @app.get("/uploads/{filename}")
