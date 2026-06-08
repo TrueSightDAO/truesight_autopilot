@@ -147,6 +147,10 @@ def append_to_transcript(
     attachment_section += f"| **Type** | {file_type} |\n"
     attachment_section += f"| **Filename** | {filename} |\n"
     attachment_section += f"| **Received** | {timestamp} |\n"
+    if chat_id:
+        attachment_section += f"| **Telegram Chat ID** | {chat_id} |\n"
+    if thread_id:
+        attachment_section += f"| **Telegram Thread ID** | {thread_id} |\n"
 
     if file_type == "Image" and grok_description:
         attachment_section += f"| **Grok Description** | {grok_description[:200]} |\n"
