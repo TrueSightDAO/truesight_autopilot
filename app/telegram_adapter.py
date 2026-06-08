@@ -75,6 +75,64 @@ def build_session_id(chat_id: int, thread_id: int | None) -> str:
     return f"tg:{chat_id}:{thread_id or 0}"
 
 
+_HANDOFF_PLAN_RE = re.compile(r"`([^`]+\.md)`")
+
+
+def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
+    """Resolve the active handoff plan file for a Telegram topic via the registry.
+
+    Each forum topic that is a handoff has a row in
+    agentic_ai_context/SOPHIA_HANDOFFS.md mapping thread_id -> plan file. A bare
+    governor message like "go for it" carries no context on its own, so we look
+    up the current thread_id here and let the brain load the plan. Fail-safe:
+    any error returns None and the message is dispatched unchanged.
+    """
+    if not thread_id:
+        return None
+    try:
+        reg = settings.context_repos_dir / "agentic_ai_context" / "SOPHIA_HANDOFFS.md"
+        return _parse_handoff_plan(reg.read_text(encoding="utf-8"), thread_id)
+    except Exception:  # noqa: BLE001 — context enrichment must never break dispatch
+        return None
+
+
+def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
+    """Pure parse: find the active handoff plan file for thread_id in the
+    SOPHIA_HANDOFFS.md registry table. Matches the bare thread_id column or the
+    session_id cell (tg:<chat>:<id>); requires the row's status to be active."""
+    for line in registry_text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        matched = any(
+            c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}")
+            for c in cells
+        )
+        if not matched:
+            continue
+        if not any("active" in c.lower() for c in cells):
+            continue
+        m = _HANDOFF_PLAN_RE.search(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _handoff_prefix(thread_id: int | None) -> str:
+    """Context block to prepend so a bare go-signal in a handoff topic resolves."""
+    plan = _handoff_plan_for_thread(thread_id)
+    if not plan:
+        return ""
+    return (
+        f"[Handoff context — auto-injected from SOPHIA_HANDOFFS.md: this Telegram "
+        f"topic (thread {thread_id}) is the active handoff for `{plan}`. Before "
+        f"responding, read it with read_context_file(\"{plan}\") and resume from its "
+        f"RESUME HERE marker. Treat a short go-signal in this topic (\"go for it\", "
+        f"\"go\", \"proceed\", \"ship it\") as the governor's full authorization to "
+        f"execute that plan through its gates, reporting progress in this topic.]\n\n"
+    )
+
+
 def chunk_text(text: str, limit: int = _MESSAGE_LIMIT) -> list[str]:
     """Split a long reply into Telegram-sized chunks, preferring line breaks."""
     text = text if (text and text.strip()) else "(no response)"
@@ -863,6 +921,7 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
 
         # Build the message for the LLM
         msg_text = caption or text or "Please inspect the attached file."
+        msg_text = _handoff_prefix(thread_id) + msg_text
         if attachment_summary:
             msg_text += f"\n\n{attachment_summary}"
         else:
@@ -886,6 +945,7 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     dispatch_text = text
     if is_voice:
         dispatch_text = text + ' [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]'
+    dispatch_text = _handoff_prefix(thread_id) + dispatch_text
 
     # Prepend Telegram context so the LLM can reference chat_id and thread_id
     if thread_id:
