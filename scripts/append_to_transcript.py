@@ -11,7 +11,9 @@ Usage:
         --filename <original_filename> \
         --type <PDF|Image> \
         [--ocr-text <ocr_result>] \
-        [--grok-description <grok_description>]
+        [--grok-description <grok_description>] \
+        [--chat-id <telegram_chat_id>] \
+        [--thread-id <telegram_thread_id>]
 
 Output:
     JSON with status and transcript URL.
@@ -116,6 +118,8 @@ def append_to_transcript(
         file_type: "PDF" or "Image".
         ocr_text: OCR-extracted text (for images).
         grok_description: Grok vision description (for images).
+        chat_id: Telegram chat ID (optional).
+        thread_id: Telegram thread/topic ID (optional).
 
     Returns:
         Dict with status and transcript URL.
@@ -206,8 +210,7 @@ def main():
     parser.add_argument("--type", required=True, choices=["PDF", "Image"], help="File type")
     parser.add_argument("--ocr-text", default="", help="OCR extracted text (for images)")
     parser.add_argument("--grok-description", default="", help="Grok vision description (for images)")
-    parser.add_argument("--chat-id", default="", help="Telegram chat ID the attachment came from")
-    parser.add_argument("--thread-id", default="", help="Telegram thread/topic ID the attachment came from")
+>>>>>>> main
 
     args = parser.parse_args()
     result = append_to_transcript(
