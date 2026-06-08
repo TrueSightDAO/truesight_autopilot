@@ -703,6 +703,8 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
             "--filename", filename,
             "--type", "PDF",
             "--ocr-text", ocr_text[:10000] if ocr_text else "",
+            "--chat-id", str(chat_id),
+            "--thread-id", str(thread_id) if thread_id else "",
         )
 
         summary = (
@@ -743,6 +745,8 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
             "--filename", filename,
             "--type", "Image",
             "--ocr-text", extracted_text[:10000],
+            "--chat-id", str(chat_id),
+            "--thread-id", str(thread_id) if thread_id else "",
         )
 
         summary = (
