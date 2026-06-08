@@ -118,6 +118,8 @@ def append_to_transcript(
         file_type: "PDF" or "Image".
         ocr_text: OCR-extracted text (for images).
         grok_description: Grok vision description (for images).
+        chat_id: Telegram chat ID (optional).
+        thread_id: Telegram thread/topic ID (optional).
 
     Returns:
         Dict with status and transcript URL.
