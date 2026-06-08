@@ -106,6 +106,8 @@ def append_to_transcript(
     file_type: str,
     ocr_text: str = "",
     grok_description: str = "",
+    chat_id: str = "",
+    thread_id: str = "",
 ) -> dict:
     """Append attachment content to the session transcript.
 
