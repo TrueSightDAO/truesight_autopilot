@@ -26,3 +26,10 @@ dependencies = [
 
 [project.scripts]
 truesight-autopilot = "app.main:main"
+
+[tool.pytest.ini_options]
+# Default `pytest` runs the hermetic UNIT suite. Integration + e2e are excluded
+# here because they need a running server / playwright (run them explicitly with
+# their own setup). Test deps live in requirements-dev.txt; CI runs them in smoke.yml.
+testpaths = ["tests"]
+addopts = "--ignore=tests/integration --ignore=tests/test_upload_e2e.py"
