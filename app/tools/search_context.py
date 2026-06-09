@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
-from ..context import CONTEXT_REFRESH_LOCK
+from ..context import context_read_lock
 from ..tool_registry import ToolSpec
 
 _TEXT_EXTS = {".md", ".json", ".yml", ".yaml", ".txt", ".csv", ".html", ".py", ".js", ".gs", ".sh", ".template"}
@@ -57,12 +57,12 @@ def search_context(query: str, max_results: int = 30) -> dict[str, Any]:
     files_hit: dict[str, int] = {}
     truncated = False
 
-    # Hold the refresh lock for the whole walk so the tree can't be reset
-    # (git reset --hard) underneath us mid-traversal — otherwise a file could be
-    # half-written or vanish between rglob() and read_text(). Bounded: the repo
-    # is small and the walk is fast; the writer only contends during its
-    # sub-second reset. See CONTEXT_REFRESH_LOCK.
-    with CONTEXT_REFRESH_LOCK:
+    # Hold the shared (cross-process) read lock for the whole walk so the tree
+    # can't be reset (git reset --hard) underneath us mid-traversal — otherwise a
+    # file could be half-written or vanish between rglob() and read_text().
+    # Bounded: the repo is small and the walk is fast; the writer only contends
+    # during its sub-second reset. See context_read_lock / context_write_lock.
+    with context_read_lock():
         for path in sorted(root.rglob("*")):
             if len(matches) >= max_results:
                 truncated = True
