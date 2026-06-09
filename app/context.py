@@ -1,6 +1,7 @@
 """Context ingestion: build the system prompt from agentic_ai_context and related docs."""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from .config import settings
@@ -231,6 +232,57 @@ def _read_file(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except Exception as e:
         return f"<!-- Error reading {path}: {e} -->\n"
+
+
+# Read-only context mirrors that deploy.sh syncs at deploy time. They are kept
+# fresh CONTINUOUSLY (see _context_sync_loop in main.py) so that handoff plans
+# and docs committed since the last deploy are visible to read_context_file /
+# search_context — not just to read_repo_file (which always hits GitHub). This
+# closes the recurring "stale clone → Sophia can't find the new plan" gap.
+_CONTEXT_SYNC_REPOS = ("agentic_ai_context", "tokenomics")
+
+
+def _origin_default_branch(repo_dir: Path) -> str:
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_dir), "symbolic-ref", "--quiet", "--short",
+             "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip().rsplit("/", 1)[-1]
+    except Exception:
+        pass
+    return "main"
+
+
+def refresh_context_repos() -> dict[str, str]:
+    """Hard-refresh the read-only context mirrors to origin's default branch.
+
+    Mirrors deploy.sh's sync step but runs continuously. Best-effort: never
+    raises — returns a per-repo status map. Safe because these clones are
+    read-only mirrors; agents branch-edit code via separate working clones / the
+    GitHub Contents API, never here.
+    """
+    results: dict[str, str] = {}
+    for name in _CONTEXT_SYNC_REPOS:
+        repo_dir = settings.context_repos_dir / name
+        if not (repo_dir / ".git").exists():
+            continue
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "fetch", "--quiet", "origin"],
+                check=True, capture_output=True, timeout=120,
+            )
+            branch = _origin_default_branch(repo_dir)
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "reset", "--hard", f"origin/{branch}"],
+                check=True, capture_output=True, timeout=60,
+            )
+            results[name] = "ok"
+        except Exception as e:  # noqa: BLE001 — best-effort sync, never crash caller
+            results[name] = f"error: {e}"
+    return results
 
 
 def build_system_prompt() -> str:

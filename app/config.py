@@ -165,6 +165,10 @@ class Settings(BaseSettings):
 
     # Context
     context_repos_dir: Path = Path(os.getenv("CONTEXT_REPOS_DIR", "/opt/truesight_autopilot/context"))
+    # How often the background loop hard-refreshes the read-only context mirrors
+    # (agentic_ai_context, tokenomics) so handoff plans committed since the last
+    # deploy are visible to read_context_file / search_context. Default 5 min.
+    context_sync_interval_seconds: int = int(os.getenv("CONTEXT_SYNC_INTERVAL_SECONDS", "300"))
     agentic_context_repo: str = os.getenv(
         "AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git"
     )
