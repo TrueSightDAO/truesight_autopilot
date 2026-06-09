@@ -37,6 +37,33 @@ def test_handoff_prefix_empty_outside_topic():
     assert ta._handoff_prefix(0) == ""
 
 
+# --- post_to_telegram_topic (post into an EXISTING thread) ---
+from app.tools import telegram_post as tp
+
+
+def test_post_requires_message():
+    out = tp.post_to_telegram_topic(message="  ", thread_id=1955, chat_id="-1001234567890")
+    assert out["status"] == "error" and "message" in out["reason"]
+
+
+def test_post_requires_numeric_thread_id():
+    out = tp.post_to_telegram_topic(message="hi", thread_id="not-a-number", chat_id="-1001234567890")
+    assert out["status"] == "error" and "thread_id" in out["reason"]
+
+
+def test_post_missing_token_errors(monkeypatch):
+    monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "", raising=False)
+    out = tp.post_to_telegram_topic(message="hi", thread_id=1955, chat_id="-1001234567890")
+    assert out["status"] == "error" and "TELEGRAM_BOT_API_KEY" in out["reason"]
+
+
+def test_post_no_target_group_errors(monkeypatch):
+    monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "dummy", raising=False)
+    monkeypatch.setattr(tp.settings, "telegram_home_group_id", "", raising=False)
+    out = tp.post_to_telegram_topic(message="hi", thread_id=1955, session_id="pub:web-xyz")
+    assert out["status"] == "error" and "chat_id" in out["reason"]
+
+
 def test_chat_id_from_tg_session():
     assert tt._chat_id_from_session("abc123:tg:-1001234567890:42") == "-1001234567890"
 
