@@ -32,7 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Fil
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
-from .context import get_system_prompt, refresh_system_prompt, get_context_file
+from .context import get_system_prompt, refresh_system_prompt, get_context_file, refresh_context_repos
 from .governor_registry import refresh_cache as refresh_governor_cache, load_governors
 
 
@@ -229,6 +229,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_pending_janitor_loop())
         except Exception as e:
             logger.warning("Pending janitor failed to start: %s", e)
+        try:
+            asyncio.create_task(_context_sync_loop())
+        except Exception as e:
+            logger.warning("Context sync failed to start: %s", e)
     else:
         logger.info("DRY_RUN=true — no background tasks started")
 
@@ -2764,6 +2768,29 @@ async def github_webhook(payload: dict):
             logger.warning("Janitor webhook handler failed: %s", e)
             return {"status": "error", "message": str(e)}
     return {"status": "received", "action": action}
+
+
+async def _context_sync_loop():
+    """Periodic hard-refresh of the read-only context mirrors (agentic_ai_context,
+    tokenomics) so handoff plans and docs committed since the last deploy are
+    visible to read_context_file / search_context — without relying on an LLM to
+    remember the manual pull-first rule. Refreshes shortly after startup, then
+    every settings.context_sync_interval_seconds. Skipped under DRY_RUN."""
+    if settings.dry_run:
+        logger.info("Context sync: DRY_RUN=true — skipping context sync loop")
+        return
+    await asyncio.sleep(10)  # let startup settle, then make context fresh early
+    while True:
+        try:
+            results = refresh_context_repos()
+            errs = {k: v for k, v in results.items() if v != "ok"}
+            if errs:
+                logger.warning("Context sync: results=%s", results)
+            else:
+                logger.info("Context sync: refreshed %s", results or "(no mirrors found)")
+        except Exception as e:
+            logger.warning("Context sync pass failed: %s", e)
+        await asyncio.sleep(settings.context_sync_interval_seconds)
 
 
 async def _branch_janitor_loop():
