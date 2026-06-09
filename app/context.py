@@ -1,23 +1,66 @@
 """Context ingestion: build the system prompt from agentic_ai_context and related docs."""
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import subprocess
-import threading
 from pathlib import Path
 
 from .config import settings
 
-# Guards the working-tree mutation in refresh_context_repos() against concurrent
-# context reads (get_context_file / search_context). `git reset --hard` rewrites
-# changed files IN PLACE (git checkout does not temp-write+rename), so an
-# unguarded read during a reset can observe a half-written or briefly-missing
-# file. Readers hold this for the duration of their read; the writer holds it
-# ONLY around the sub-second reset — the slow network `git fetch` (which touches
-# only .git/, never the working tree) runs OUTSIDE the lock so readers are never
-# blocked behind it. The blocking git itself runs off the event loop (the sync
-# loop calls refresh_context_repos via asyncio.to_thread), so a coincident
-# reset/read contends on this lock in worker threads, not on the event loop.
-CONTEXT_REFRESH_LOCK = threading.Lock()
+# Guards context-clone reads (get_context_file / search_context) against the
+# refresh's in-place `git reset --hard`. `git reset --hard` rewrites changed
+# files IN PLACE (git checkout does not temp-write+rename), so an unguarded read
+# during a reset can observe a half-written or briefly-missing file.
+#
+# CROSS-PROCESS by design: uvicorn runs the app with multiple workers (--workers
+# 2), each with its OWN _context_sync_loop — so an in-process threading.Lock is
+# NOT enough; two workers could reset concurrently or one could read while the
+# other resets. fcntl.flock on a shared lockfile spans processes (and threads,
+# since each acquisition opens its own fd):
+#   - readers take a SHARED lock (they stack — concurrent reads across threads
+#     AND workers are fine, excluded only while a reset holds the exclusive lock);
+#   - the refresh takes an EXCLUSIVE lock, held ONLY around the sub-second reset.
+# The slow network `git fetch` runs OUTSIDE the lock (it touches only .git/,
+# never the working tree readers see) so readers never block behind it. The
+# blocking git runs off the event loop (sync loop uses asyncio.to_thread), so
+# contention happens in worker threads, not on the event loop. Best-effort: if
+# the lockfile can't be created we fall back to lock-free rather than hard-fail.
+_CONTEXT_LOCK_PATH = settings.context_repos_dir / ".context_refresh.lock"
+
+
+@contextlib.contextmanager
+def _context_lock(exclusive: bool):
+    f = None
+    try:
+        _CONTEXT_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        f = open(_CONTEXT_LOCK_PATH, "a+")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    except Exception:
+        if f is not None:
+            with contextlib.suppress(Exception):
+                f.close()
+        f = None
+    try:
+        yield
+    finally:
+        if f is not None:
+            with contextlib.suppress(Exception):
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                f.close()
+
+
+def context_read_lock():
+    """Shared cross-process lock: many concurrent readers, excluded only while a
+    refresh reset holds the exclusive lock. Use around any read of the context
+    clones' working tree."""
+    return _context_lock(exclusive=False)
+
+
+def context_write_lock():
+    """Exclusive cross-process lock: held only around the in-place
+    `git reset --hard` so no reader (any thread, any worker) sees a torn tree."""
+    return _context_lock(exclusive=True)
 
 CANONICAL_CONTEXT_FILES: list[str] = [
     "OPERATING_INSTRUCTIONS.md",
@@ -291,9 +334,10 @@ def refresh_context_repos() -> dict[str, str]:
                 check=True, capture_output=True, timeout=120,
             )
             branch = _origin_default_branch(repo_dir)
-            # reset --hard mutates the working tree in place → exclude readers
-            # for the (sub-second) duration so no one reads a torn file.
-            with CONTEXT_REFRESH_LOCK:
+            # reset --hard mutates the working tree in place → take the exclusive
+            # (cross-process) lock for the sub-second reset so no reader in any
+            # worker sees a torn file, and two workers can't reset concurrently.
+            with context_write_lock():
                 subprocess.run(
                     ["git", "-C", str(repo_dir), "reset", "--hard", f"origin/{branch}"],
                     check=True, capture_output=True, timeout=60,
@@ -338,9 +382,9 @@ def get_context_file(path: str) -> str | None:
         repo_dir = repo_dir.resolve()
         if not str(target).startswith(str(repo_dir)):
             return None
-        # Exclude a concurrent refresh reset (see CONTEXT_REFRESH_LOCK) so we
+        # Shared lock: exclude a concurrent refresh reset (any worker) so we
         # never read a half-written file mid git reset --hard.
-        with CONTEXT_REFRESH_LOCK:
+        with context_read_lock():
             if target.exists() and target.is_file():
                 return target.read_text(encoding="utf-8")
     except Exception:
