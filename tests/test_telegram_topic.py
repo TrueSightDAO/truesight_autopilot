@@ -1,5 +1,40 @@
 """Tests for create_telegram_topic chat-id resolution + guard paths."""
 from app.tools import telegram_topic as tt
+from app import telegram_adapter as ta
+
+
+_REG = """
+| Date | Handoff | Plan file | Topic | thread_id | session_id | Status |
+|------|---------|-----------|-------|-----------|------------|--------|
+| 2026-06-09 | Subs Phase 1 | `CHOCOLATE_SUBSCRIPTION_PLAN.md` | [t](x) | 1939 | `tg:-1003919341801:1939` | **active — parked GO-ready** |
+| 2026-06-09 | ~~initial~~ | `CHOCOLATE_SUBSCRIPTION_PLAN.md` | [t](x) | 1924 | `tg:-1003919341801:1924` | **SUPERSEDED by 1939** |
+"""
+
+
+def test_parse_handoff_plan_matches_active_thread():
+    assert ta._parse_handoff_plan(_REG, 1939) == "CHOCOLATE_SUBSCRIPTION_PLAN.md"
+
+
+def test_parse_handoff_plan_skips_superseded_row():
+    # 1924 row references the plan but is not active -> no match (and the
+    # "by 1939" mention in its status must not false-match thread 1939).
+    assert ta._parse_handoff_plan(_REG, 1924) is None
+
+
+def test_parse_handoff_plan_unknown_thread_is_none():
+    assert ta._parse_handoff_plan(_REG, 4242) is None
+
+
+def test_handoff_prefix_generic_fallback_when_no_plan(monkeypatch):
+    # Registry lookup misses -> non-empty generic hint, never empty.
+    monkeypatch.setattr(ta, "_handoff_plan_for_thread", lambda tid: None)
+    out = ta._handoff_prefix(777)
+    assert out and "HANDOFF_MANIFEST.md" in out and "lack context" in out
+
+
+def test_handoff_prefix_empty_outside_topic():
+    assert ta._handoff_prefix(None) == ""
+    assert ta._handoff_prefix(0) == ""
 
 
 def test_chat_id_from_tg_session():

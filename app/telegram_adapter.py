@@ -76,6 +76,9 @@ def build_session_id(chat_id: int, thread_id: int | None) -> str:
 
 
 _HANDOFF_PLAN_RE = re.compile(r"`([^`]+\.md)`")
+_HANDOFF_REGISTRY_RAW = (
+    "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/SOPHIA_HANDOFFS.md"
+)
 
 
 def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
@@ -86,14 +89,30 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
     governor message like "go for it" carries no context on its own, so we look
     up the current thread_id here and let the brain load the plan. Fail-safe:
     any error returns None and the message is dispatched unchanged.
+
+    Reads the local synced clone first (fast), then falls back to GitHub `main`
+    on a miss — a handoff registered since the last ~5-min context sync exists on
+    GitHub before it reaches the clone, and that freshness window is exactly when
+    a governor types "go for it" (caused the 2026-06-09 "no context" miss).
     """
     if not thread_id:
         return None
+    # 1) local synced clone — fast, no network
     try:
         reg = settings.context_repos_dir / "agentic_ai_context" / "SOPHIA_HANDOFFS.md"
-        return _parse_handoff_plan(reg.read_text(encoding="utf-8"), thread_id)
+        plan = _parse_handoff_plan(reg.read_text(encoding="utf-8"), thread_id)
+        if plan:
+            return plan
     except Exception:  # noqa: BLE001 — context enrichment must never break dispatch
-        return None
+        pass
+    # 2) GitHub main fallback — covers a just-registered handoff not yet synced
+    try:
+        resp = httpx.get(_HANDOFF_REGISTRY_RAW, timeout=8.0)
+        if resp.status_code == 200:
+            return _parse_handoff_plan(resp.text, thread_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
@@ -120,16 +139,30 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
 
 def _handoff_prefix(thread_id: int | None) -> str:
     """Context block to prepend so a bare go-signal in a handoff topic resolves."""
-    plan = _handoff_plan_for_thread(thread_id)
-    if not plan:
+    if not thread_id:
         return ""
+    plan = _handoff_plan_for_thread(thread_id)
+    if plan:
+        return (
+            f"[Handoff context — auto-injected from SOPHIA_HANDOFFS.md: this Telegram "
+            f"topic (thread {thread_id}) is the active handoff for `{plan}`. Before "
+            f"responding, read it with read_context_file(\"{plan}\") and resume from its "
+            f"RESUME HERE marker. Treat a short go-signal in this topic (\"go for it\", "
+            f"\"go\", \"proceed\", \"ship it\") as the governor's full authorization to "
+            f"execute that plan through its gates, reporting progress in this topic.]\n\n"
+        )
+    # Generic fallback — registry lookup missed (unregistered topic, parse/format
+    # change, or both clone AND GitHub unreachable). Never leave a forum-topic
+    # message context-less: tell the brain HOW to find its mission rather than
+    # let it answer "I have no context."
     return (
-        f"[Handoff context — auto-injected from SOPHIA_HANDOFFS.md: this Telegram "
-        f"topic (thread {thread_id}) is the active handoff for `{plan}`. Before "
-        f"responding, read it with read_context_file(\"{plan}\") and resume from its "
-        f"RESUME HERE marker. Treat a short go-signal in this topic (\"go for it\", "
-        f"\"go\", \"proceed\", \"ship it\") as the governor's full authorization to "
-        f"execute that plan through its gates, reporting progress in this topic.]\n\n"
+        f"[Handoff context — this Telegram topic (thread {thread_id}) may be an "
+        f"execution handoff. If the governor gives a go-signal (\"go for it\", \"go\", "
+        f"\"proceed\") or references a plan/mission, find this thread in "
+        f"agentic_ai_context/HANDOFF_MANIFEST.md + SOPHIA_HANDOFFS.md via "
+        f"read_context_file, open the referenced `*_PLAN.md`, and resume from its "
+        f"RESUME HERE. Do NOT reply that you lack context without checking the "
+        f"registry first.]\n\n"
     )
 
 
