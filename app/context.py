@@ -2,9 +2,22 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 from pathlib import Path
 
 from .config import settings
+
+# Guards the working-tree mutation in refresh_context_repos() against concurrent
+# context reads (get_context_file / search_context). `git reset --hard` rewrites
+# changed files IN PLACE (git checkout does not temp-write+rename), so an
+# unguarded read during a reset can observe a half-written or briefly-missing
+# file. Readers hold this for the duration of their read; the writer holds it
+# ONLY around the sub-second reset — the slow network `git fetch` (which touches
+# only .git/, never the working tree) runs OUTSIDE the lock so readers are never
+# blocked behind it. The blocking git itself runs off the event loop (the sync
+# loop calls refresh_context_repos via asyncio.to_thread), so a coincident
+# reset/read contends on this lock in worker threads, not on the event loop.
+CONTEXT_REFRESH_LOCK = threading.Lock()
 
 CANONICAL_CONTEXT_FILES: list[str] = [
     "OPERATING_INSTRUCTIONS.md",
@@ -270,15 +283,21 @@ def refresh_context_repos() -> dict[str, str]:
         if not (repo_dir / ".git").exists():
             continue
         try:
+            # fetch only writes .git/ (objects + refs), never the working tree
+            # readers see → safe to run UNLOCKED, so the slow network call never
+            # blocks get_context_file / search_context.
             subprocess.run(
                 ["git", "-C", str(repo_dir), "fetch", "--quiet", "origin"],
                 check=True, capture_output=True, timeout=120,
             )
             branch = _origin_default_branch(repo_dir)
-            subprocess.run(
-                ["git", "-C", str(repo_dir), "reset", "--hard", f"origin/{branch}"],
-                check=True, capture_output=True, timeout=60,
-            )
+            # reset --hard mutates the working tree in place → exclude readers
+            # for the (sub-second) duration so no one reads a torn file.
+            with CONTEXT_REFRESH_LOCK:
+                subprocess.run(
+                    ["git", "-C", str(repo_dir), "reset", "--hard", f"origin/{branch}"],
+                    check=True, capture_output=True, timeout=60,
+                )
             results[name] = "ok"
         except Exception as e:  # noqa: BLE001 — best-effort sync, never crash caller
             results[name] = f"error: {e}"
@@ -319,8 +338,11 @@ def get_context_file(path: str) -> str | None:
         repo_dir = repo_dir.resolve()
         if not str(target).startswith(str(repo_dir)):
             return None
-        if target.exists() and target.is_file():
-            return target.read_text(encoding="utf-8")
+        # Exclude a concurrent refresh reset (see CONTEXT_REFRESH_LOCK) so we
+        # never read a half-written file mid git reset --hard.
+        with CONTEXT_REFRESH_LOCK:
+            if target.exists() and target.is_file():
+                return target.read_text(encoding="utf-8")
     except Exception:
         pass
     return None

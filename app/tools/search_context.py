@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
+from ..context import CONTEXT_REFRESH_LOCK
 from ..tool_registry import ToolSpec
 
 _TEXT_EXTS = {".md", ".json", ".yml", ".yaml", ".txt", ".csv", ".html", ".py", ".js", ".gs", ".sh", ".template"}
@@ -56,33 +57,39 @@ def search_context(query: str, max_results: int = 30) -> dict[str, Any]:
     files_hit: dict[str, int] = {}
     truncated = False
 
-    for path in sorted(root.rglob("*")):
-        if len(matches) >= max_results:
-            truncated = True
-            break
-        if not path.is_file() or path.suffix.lower() not in _TEXT_EXTS:
-            continue
-        rel = str(path.relative_to(root))
-        if rel.startswith(".git/") or "/node_modules/" in rel:
-            continue
-        try:
-            if path.stat().st_size > _MAX_FILE_BYTES:
+    # Hold the refresh lock for the whole walk so the tree can't be reset
+    # (git reset --hard) underneath us mid-traversal — otherwise a file could be
+    # half-written or vanish between rglob() and read_text(). Bounded: the repo
+    # is small and the walk is fast; the writer only contends during its
+    # sub-second reset. See CONTEXT_REFRESH_LOCK.
+    with CONTEXT_REFRESH_LOCK:
+        for path in sorted(root.rglob("*")):
+            if len(matches) >= max_results:
+                truncated = True
+                break
+            if not path.is_file() or path.suffix.lower() not in _TEXT_EXTS:
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            if pattern.search(line):
-                files_hit[rel] = files_hit.get(rel, 0) + 1
-                if len(matches) < max_results:
-                    snippet = line.strip()
-                    if len(snippet) > _SNIPPET_LEN:
-                        cut = pattern.search(snippet)
-                        start = max(0, (cut.start() if cut else 0) - 60)
-                        snippet = ("…" if start else "") + snippet[start:start + _SNIPPET_LEN] + "…"
-                    matches.append({"file": rel, "line": lineno, "snippet": snippet})
-                else:
-                    truncated = True
+            rel = str(path.relative_to(root))
+            if rel.startswith(".git/") or "/node_modules/" in rel:
+                continue
+            try:
+                if path.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if pattern.search(line):
+                    files_hit[rel] = files_hit.get(rel, 0) + 1
+                    if len(matches) < max_results:
+                        snippet = line.strip()
+                        if len(snippet) > _SNIPPET_LEN:
+                            cut = pattern.search(snippet)
+                            start = max(0, (cut.start() if cut else 0) - 60)
+                            snippet = ("…" if start else "") + snippet[start:start + _SNIPPET_LEN] + "…"
+                        matches.append({"file": rel, "line": lineno, "snippet": snippet})
+                    else:
+                        truncated = True
 
     return {
         "status": "ok",

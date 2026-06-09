@@ -2871,7 +2871,11 @@ async def _context_sync_loop():
     await asyncio.sleep(10)  # let startup settle, then make context fresh early
     while True:
         try:
-            results = refresh_context_repos()
+            # Run the blocking git off the event loop so a multi-second fetch
+            # never stalls Telegram message pickup / posting. The in-place reset
+            # is mutually excluded from context reads via CONTEXT_REFRESH_LOCK
+            # (app/context.py), so there is no torn-read race either.
+            results = await asyncio.to_thread(refresh_context_repos)
             errs = {k: v for k, v in results.items() if v != "ok"}
             if errs:
                 logger.warning("Context sync: results=%s", results)
