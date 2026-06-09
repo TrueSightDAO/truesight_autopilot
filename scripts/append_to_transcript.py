@@ -210,7 +210,6 @@ def main():
     parser.add_argument("--type", required=True, choices=["PDF", "Image"], help="File type")
     parser.add_argument("--ocr-text", default="", help="OCR extracted text (for images)")
     parser.add_argument("--grok-description", default="", help="Grok vision description (for images)")
->>>>>>> main
 
     args = parser.parse_args()
     result = append_to_transcript(
