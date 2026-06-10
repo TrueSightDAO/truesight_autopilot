@@ -103,6 +103,21 @@ _pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission
 _active_streams: dict[str, float] = {}  # session_key -> last activity timestamp
 _cancel_flags: dict[str, bool] = {}  # session_key -> True when caller hit DELETE /chat/active/{session_id}
 _message_queues: dict[str, list[dict]] = {}  # session_key -> list of queued messages
+_session_locks: dict[str, asyncio.Lock] = {}  # session_key -> lock (one writer/executor per thread)
+
+
+def _session_lock(session_id: str) -> asyncio.Lock:
+    """Per-session async lock. session_id is ``tg:<chat>:<thread>`` for Telegram,
+    so this serializes one turn at a time *within* a thread (single writer / single
+    executor) while letting different threads run concurrently. This is the hard
+    guarantee that a second same-thread request can't interleave its transcript
+    writes with an in-flight turn — the race that bricked threads 3 and 780.
+    Requires ``--workers 1`` to be effective (the lock lives in one process)."""
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[session_id] = lock
+    return lock
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_LOG_DIR = settings.session_log_dir
@@ -2537,6 +2552,15 @@ async def chat_blocking(request: Request) -> JSONResponse:
             raise HTTPException(status_code=400, detail="message is required.")
 
     session_id = _session_key(public_key, request)
+    # Serialize per session (tg:<chat>:<thread>): one writer / one executor per
+    # thread. A second same-thread request waits for the in-flight turn instead of
+    # interleaving its writes — the race that bricked threads 3 and 780. Different
+    # threads have different locks, so they still run concurrently.
+    async with _session_lock(session_id):
+        return await _chat_blocking_turn(session_id, user_message, public_key)
+
+
+async def _chat_blocking_turn(session_id: str, user_message: str, public_key: str) -> JSONResponse:
     history = _load_or_create_session(session_id)
     role = find_role_in_history(history)
 

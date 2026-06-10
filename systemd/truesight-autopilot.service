@@ -8,7 +8,13 @@ User=ubuntu
 WorkingDirectory=/opt/truesight_autopilot
 Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/opt/truesight_autopilot/.env
-ExecStart=/opt/truesight_autopilot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 2
+# --workers 1 is REQUIRED, not a tuning choice: the app keeps per-session state
+# (sessions, queues, locks) in module-level dicts in one process. A 2nd worker has
+# its own copies, so same-thread requests on different workers race on the shared
+# transcript file (last-writer-wins) — this bricked threads 3 and 780 on 2026-06-10.
+# Single-user service; multiple workers buy no throughput. See agentic_ai_context/
+# SOPHIA_THREAD_CONCURRENCY_PLAN.md.
+ExecStart=/opt/truesight_autopilot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 Restart=always
 RestartSec=10
 StandardOutput=journal
