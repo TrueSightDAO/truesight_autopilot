@@ -2330,12 +2330,16 @@ async def chat(request: Request):
     _cancel_flags.pop(session_id, None)
 
     async def _stream_with_cleanup():
-        try:
-            async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish, role=role):
-                yield event
-        finally:
-            _active_streams.pop(session_id, None)
-            _cancel_flags.pop(session_id, None)
+        # Hold the per-session lock for the whole streamed turn so a second
+        # same-thread request can't run its turn concurrently (one writer / one
+        # executor per thread). Different sessions have different locks → parallel.
+        async with _session_lock(session_id):
+            try:
+                async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish, role=role):
+                    yield event
+            finally:
+                _active_streams.pop(session_id, None)
+                _cancel_flags.pop(session_id, None)
 
     return StreamingResponse(
         _stream_with_cleanup(),
