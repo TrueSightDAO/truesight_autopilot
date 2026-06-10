@@ -74,6 +74,21 @@ def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock
         return lock
 
 
+def _ack_queued_if_busy(chat_id: int, thread_id: int | None, lock: threading.Lock) -> None:
+    """If a turn is already running in this topic, immediately tell the governor
+    their new message was received and queued — it will be handled after the
+    current turn finishes. Without this, a message sent mid-task just blocks
+    silently on the lock, so it looks dropped. (The new message's own turn still
+    runs in arrival order once the lock frees.)"""
+    if lock.locked():
+        send_message(
+            chat_id,
+            "📥 Got it — I'm still finishing the previous task in this topic. "
+            "I've added this to the queue and will get to it right after.",
+            thread_id,
+        )
+
+
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
 
 def parse_allowed_ids(raw: str) -> set[int]:
@@ -965,7 +980,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         try:
             # Prep (download + extraction above) ran in parallel; the turn itself
             # is serialized per topic so it can't race a concurrent turn's writes.
-            with _thread_dispatch_lock(chat_id, thread_id):
+            lock = _thread_dispatch_lock(chat_id, thread_id)
+            _ack_queued_if_busy(chat_id, thread_id, lock)
+            with lock:
                 response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
             # If original message was a voice note with attachment, also send voice reply
             if is_voice and response:
@@ -990,7 +1007,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     try:
         # Serialize the turn per topic so rapid-fire messages to the same thread
         # queue instead of racing; different topics still run in parallel.
-        with _thread_dispatch_lock(chat_id, thread_id):
+        lock = _thread_dispatch_lock(chat_id, thread_id)
+        _ack_queued_if_busy(chat_id, thread_id, lock)
+        with lock:
             response = call_chat_with_progress(chat_id, thread_id, dispatch_text, session_id, public_key)
         # If original message was a voice note, send voice reply + URL follow-up
         if is_voice and response:
