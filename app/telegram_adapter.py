@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from typing import Any
@@ -51,6 +52,26 @@ _CHAT_TIMEOUT = 180.0          # /chat-blocking can run tools + multiple LLM cal
 _POLL_TIMEOUT = 30             # long-poll seconds
 _TYPING_INTERVAL = 4.0         # Telegram's "typing…" lasts ~5s; refresh under that
 _ATTACH_DIR = "/tmp/tg_attachments"   # adapter + autopilot share the EC2 box / user
+
+# Per-thread dispatch locks. The handler pool (max_workers=10) runs messages
+# concurrently, so without this two messages for the SAME topic would dispatch
+# overlapping turns and race on the transcript. One lock per (chat, thread)
+# serializes dispatch within a topic (one executor per thread, queued in arrival
+# order) while DIFFERENT topics stay parallel. Attachment prep (download + OCR /
+# extraction) runs BEFORE the lock, so it still parallelizes — only the turn is
+# serialized. See agentic_ai_context/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR2).
+_thread_dispatch_locks: dict[str, threading.Lock] = {}
+_thread_dispatch_guard = threading.Lock()
+
+
+def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock:
+    key = f"{chat_id}:{thread_id or 0}"
+    with _thread_dispatch_guard:
+        lock = _thread_dispatch_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _thread_dispatch_locks[key] = lock
+        return lock
 
 
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
@@ -784,31 +805,21 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
                 ocr_text = ocr_result.get("text", "")
                 extracted_text += f"\n\n--- OCR of scanned PDF ---\n{ocr_text}"
 
-        # Persist to transcript
-        _update_status("💾 Saving to transcript…")
+        # Do NOT persist the transcript from here. A separate process writing the
+        # session file while a turn holds the history in memory clobbers it — the
+        # cross-process race that bricked threads 3 and 780. Return the full
+        # extracted content inline instead: it rides in the dispatched message and
+        # the turn (the single writer) appends it under the per-session lock.
         filename = Path(local_path).name
-        transcript_result = _run_script(
-            "append_to_transcript.py",
-            "--session-id", session_id,
-            "--content", extracted_text[:50000],
-            "--filename", filename,
-            "--type", "PDF",
-            "--ocr-text", ocr_text[:10000] if ocr_text else "",
-            "--chat-id", str(chat_id),
-            "--thread-id", str(thread_id) if thread_id else "",
-        )
-
         summary = (
             f"[Attachment auto-processed: **{filename}**]\n"
             f"- Type: PDF ({page_count} page{'s' if page_count != 1 else ''}, {total_chars} chars)\n"
         )
         if is_scanned:
             summary += f"- Scanned PDF: OCR also applied ({len(ocr_text)} chars extracted)\n"
-        if transcript_result.get("status") == "success":
-            summary += f"- Saved to transcript\n"
-        summary += f"\nExtracted content:\n```\n{extracted_text[:8000]}\n```\n"
-        if len(extracted_text) > 8000:
-            summary += "\n*(content truncated in preview — full text saved to transcript)*\n"
+        summary += f"\nExtracted content:\n```\n{extracted_text[:45000]}\n```\n"
+        if len(extracted_text) > 45000:
+            summary += "\n*(content truncated to 45000 chars)*\n"
 
         _update_status(f"✅ Extracted {page_count} page{'s' if page_count != 1 else ''} from PDF")
         return summary
@@ -826,28 +837,16 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
         confidence = ocr_result.get("avg_confidence", 0)
         quality = ocr_result.get("quality", "unknown")
 
-        # Persist to transcript
-        _update_status("💾 Saving to transcript…")
+        # Do NOT persist the transcript from here (see the PDF branch). Return the
+        # content inline; the turn is the single writer that appends it under the
+        # per-session lock.
         filename = Path(local_path).name
-        transcript_result = _run_script(
-            "append_to_transcript.py",
-            "--session-id", session_id,
-            "--content", extracted_text[:50000],
-            "--filename", filename,
-            "--type", "Image",
-            "--ocr-text", extracted_text[:10000],
-            "--chat-id", str(chat_id),
-            "--thread-id", str(thread_id) if thread_id else "",
-        )
-
         summary = (
             f"[Attachment auto-processed: **{filename}**]\n"
             f"- Type: Image (OCR confidence: {confidence}%, quality: {quality})\n"
         )
-        if transcript_result.get("status") == "success":
-            summary += f"- Saved to transcript\n"
         if extracted_text:
-            summary += f"\nExtracted text:\n```\n{extracted_text[:8000]}\n```\n"
+            summary += f"\nExtracted text:\n```\n{extracted_text[:45000]}\n```\n"
         else:
             summary += "\n*(No text detected in image)*\n"
 
@@ -964,7 +963,10 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
                          f"After processing, use append_to_transcript to persist the extracted content.]")
 
         try:
-            response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
+            # Prep (download + extraction above) ran in parallel; the turn itself
+            # is serialized per topic so it can't race a concurrent turn's writes.
+            with _thread_dispatch_lock(chat_id, thread_id):
+                response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
             # If original message was a voice note with attachment, also send voice reply
             if is_voice and response:
                 _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
@@ -986,7 +988,10 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     else:
         dispatch_text = f"[Telegram context: chat_id={chat_id}] {dispatch_text}"
     try:
-        response = call_chat_with_progress(chat_id, thread_id, dispatch_text, session_id, public_key)
+        # Serialize the turn per topic so rapid-fire messages to the same thread
+        # queue instead of racing; different topics still run in parallel.
+        with _thread_dispatch_lock(chat_id, thread_id):
+            response = call_chat_with_progress(chat_id, thread_id, dispatch_text, session_id, public_key)
         # If original message was a voice note, send voice reply + URL follow-up
         if is_voice and response:
             _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
