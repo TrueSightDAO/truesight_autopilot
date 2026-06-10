@@ -63,32 +63,30 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     fi
 "
 
-# Sync .env separately (gitignored locally, needed on EC2)
-if [ -f ".env" ]; then
-    echo "=== Checking .env key parity (local vs production) ==="
-    LOCAL_KEYS=$(grep -v '^#' .env | grep -v '^$' | cut -d= -f1 | sort)
-    REMOTE_KEYS=$(ssh -i "$EC2_KEY" "$EC2_HOST" \
-        "grep -v '^#' $REMOTE_DIR/.env 2>/dev/null | grep -v '^$' | cut -d= -f1 | sort" 2>/dev/null || echo "")
-    if [ -n "$REMOTE_KEYS" ]; then
-        MISSING_FROM_LOCAL=$(comm -13 <(echo "$LOCAL_KEYS") <(echo "$REMOTE_KEYS"))
-        MISSING_FROM_PROD=$(comm -23 <(echo "$LOCAL_KEYS") <(echo "$REMOTE_KEYS"))
-        if [ -n "$MISSING_FROM_LOCAL" ]; then
-            echo "WARNING: Keys in production .env but NOT in local .env:"
-            echo "$MISSING_FROM_LOCAL" | sed 's/^/  - /'
-            echo "These will be LOST when .env is synced. Add them to local .env first."
-            if [ "${SKIP_KEY_CHECK:-0}" != "1" ]; then
-                echo "Aborting. Set SKIP_KEY_CHECK=1 to bypass."
-                exit 1
-            fi
-        fi
-        if [ -n "$MISSING_FROM_PROD" ]; then
-            echo "Keys in local .env but NOT in production .env:"
-            echo "$MISSING_FROM_PROD" | sed 's/^/  + /'
-            echo "These will be ADDED to production."
-        fi
+# Sync .env — MERGE-ONLY (never overwrite existing prod values).
+# The BOX .env is the source of truth for prod secrets — including Sophia's own
+# identity (EMAIL / PRIVATE_KEY / PUBLIC_KEY), which intentionally DIFFERS from a
+# developer's local .env. A wholesale `scp .env` would clobber that identity (and
+# any other prod-only value) with the deployer's local copy. So we only ADD keys
+# the box is MISSING and never touch an existing value. To change a value on the
+# box, edit it on the box directly. (Set ENV_SYNC=skip to skip this entirely.)
+if [ -f ".env" ] && [ "${ENV_SYNC:-merge}" != "skip" ]; then
+    echo "=== Syncing .env (merge-only: add missing keys, never overwrite existing) ==="
+    scp -i "$EC2_KEY" .env "$EC2_HOST:$REMOTE_DIR/.env.incoming"
+    ssh -i "$EC2_KEY" "$EC2_HOST" 'bash -s' "$REMOTE_DIR" <<'REMOTE_MERGE'
+set -e
+BOX_ENV="$1/.env"; INC="$1/.env.incoming"
+touch "$BOX_ENV"; added=0
+while IFS= read -r line; do
+    case "$line" in ''|\#*) continue;; esac
+    key="${line%%=*}"
+    if ! grep -q "^${key}=" "$BOX_ENV"; then
+        printf '%s\n' "$line" >> "$BOX_ENV"; added=$((added+1)); echo "  + added $key"
     fi
-    echo "=== Syncing .env ==="
-    scp -i "$EC2_KEY" .env "$EC2_HOST:$REMOTE_DIR/.env"
+done < "$INC"
+rm -f "$INC"; chmod 600 "$BOX_ENV"
+echo "merge complete: $added key(s) added; existing box values untouched"
+REMOTE_MERGE
 fi
 
 echo "=== Syncing Gmail OAuth tokens (config/gmail/*.json) ==="
