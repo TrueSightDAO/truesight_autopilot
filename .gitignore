@@ -25,3 +25,10 @@ config/gmail/*.json
 *.session-journal
 # Watchdog runtime state
 data/attention_watchdog_state.json
+
+# Runtime dirs — generated on the box, must NEVER be deleted by a deploy.
+# deploy.sh runs `git clean -fd`; if these are not ignored it wipes Sophia's
+# session memory + context mirrors. (Incident-adjacent, 2026-06-10.)
+sessions/
+context/
+oracle/
