@@ -1456,6 +1456,55 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
     return f"Unknown tool: {func_name}"
 
 
+# Tools that change shared state (PRs, deploys, ledger, infra). A turn that runs
+# any of these ends with an explicit "what I did" report so that — especially when
+# several instructions are queued for one topic and run as back-to-back turns —
+# the governor sees exactly what each turn accomplished before the next begins.
+# See agentic_ai_context/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR3, invariant 7).
+_SIDE_EFFECT_TOOLS = {
+    "open_fix_pr", "merge_pr", "deploy_autopilot", "submit_contribution",
+    "create_dao_submission", "upload_file_to_github", "register_identity",
+    "ssh_run", "run_command", "deploy_gas_project", "gas_deploy_project",
+    "create_branch", "commit_and_push", "open_pr", "append_to_transcript",
+}
+
+
+def _summarise_tool_result(result: str) -> str:
+    """One-line salient detail from a tool result — prefer a URL (PR/deploy), else
+    the first non-empty line."""
+    text = result or ""
+    urls = re.findall(r"https?://[^\s\"')]+", text)
+    if urls:
+        return urls[0]
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line[:200]
+    return ""
+
+
+def _build_turn_report(tool_trace: list[dict]) -> str:
+    """Markdown footer enumerating the side-effecting actions this turn took.
+    Returns '' when the turn only read/searched (nothing worth reporting)."""
+    effects = [t for t in (tool_trace or []) if t.get("name") in _SIDE_EFFECT_TOOLS]
+    if not effects:
+        return ""
+    lines = ["", "———", "**✅ Done this turn — actions taken:**"]
+    for t in effects:
+        label = str(t.get("name", "")).replace("_", " ")
+        detail = _summarise_tool_result(t.get("result", ""))
+        lines.append(f"• `{label}`" + (f" → {detail}" if detail else ""))
+    return "\n".join(lines)
+
+
+def _append_turn_report(assistant_text: str, state: dict) -> str:
+    """Append the actions-taken report to a turn's response, if any."""
+    report = _build_turn_report(state.get("tool_trace", []))
+    if not report:
+        return assistant_text
+    return (assistant_text or "").rstrip() + "\n" + report
+
+
 async def _run_tool_round_loop(
     *,
     client: LLMClient,
@@ -1487,6 +1536,7 @@ async def _run_tool_round_loop(
     round_num = 0
     state["cancelled"] = False
     state["wanted_more_rounds"] = False
+    state.setdefault("tool_trace", [])  # [{name, result}] for the per-turn report
 
     log_prefix = "QUEUE " if queue_msg_id else ""
     raw_label_prefix = "queue-" if queue_msg_id else ""
@@ -1585,6 +1635,7 @@ async def _run_tool_round_loop(
                 yield _sse_event("tool", {"tool": func_name, "status": "done"})
                 logger.info("[%d] %sTOOL RESULT: %s result=%.300s", req_id, log_prefix, func_name, result_text[:300])
 
+                state["tool_trace"].append({"name": func_name, "result": result_text})
                 history.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -1644,7 +1695,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str,
             yield ev
         if state.get("cancelled"):
             return
-        assistant_text = state.get("assistant_text", "")
+        assistant_text = _append_turn_report(state.get("assistant_text", ""), state)
 
     except LLMError as exc:
         logger.error("[%d] CHAT ERROR: %s", req_id, exc)
@@ -1715,7 +1766,7 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str,
                 yield ev
             if q_state.get("cancelled"):
                 return
-            queued_text = q_state.get("assistant_text", "")
+            queued_text = _append_turn_report(q_state.get("assistant_text", ""), q_state)
         except LLMError as exc:
             logger.error("[%d] QUEUE CHAT ERROR: %s", req_id, exc)
             _record_chat_error(str(exc))
@@ -2625,6 +2676,7 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
     # returns a final text answer or we hit the round budget.
     max_rounds = int(os.getenv("CHAT_BLOCKING_MAX_ROUNDS", "15"))
     assistant_text = ""
+    tool_trace: list[dict] = []
     try:
         for _round in range(max_rounds):
             completion = client.chat(system_prompt, history, tools=tools)
@@ -2650,6 +2702,7 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                 except (json.JSONDecodeError, TypeError):
                     func_args = {}
                 result_text = await _run_tool(func_name, func_args, history, session_id, gov_name)
+                tool_trace.append({"name": func_name, "result": result_text})
                 history.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
 
         # Force a clean text-only answer if we exhausted the budget, came back
@@ -2678,6 +2731,9 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                 assistant_text = re.sub(r"```json\s*\{.*?\}\s*```", "", assistant_text, flags=re.DOTALL).strip()
     except Exception:
         pass
+
+    # Per-turn actions-taken report (invariant 7) — same as the streaming path.
+    assistant_text = _append_turn_report(assistant_text, {"tool_trace": tool_trace})
 
     history.append({"role": "assistant", "content": assistant_text})
     _sessions[session_id] = history
