@@ -140,19 +140,10 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
                     c = re.sub(r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>', '', c, flags=re.DOTALL)
                     c = re.sub(r'<invoke\s+name="[^"]+"\s*>.*?</invoke>', '', c, flags=re.DOTALL)
                     m["content"] = c.strip()
-            # Remove orphaned tool messages (no preceding assistant with matching tool_calls)
-            known_call_ids: set = set()
-            cleaned: list[dict] = []
-            for m in messages:
-                if m.get("role") == "assistant":
-                    for tc in m.get("tool_calls", []):
-                        known_call_ids.add(tc.get("id", ""))
-                if m.get("role") == "tool":
-                    if m.get("tool_call_id", "") not in known_call_ids:
-                        logger.info("Dropped orphaned tool message id=%s", m.get("tool_call_id", ""))
-                        continue
-                cleaned.append(m)
-            messages = cleaned
+            # Heal BOTH tool-protocol corruption directions (orphan tool messages
+            # AND orphan tool_calls) so a transcript raced by a prior process never
+            # bricks the thread on the next load. See _sanitise_tool_messages.
+            _sanitise_tool_messages(messages)
             _sessions[session_key] = messages
             logger.info("Restored session %s with %d messages", sid_hash, len(messages))
             return messages
@@ -1758,7 +1749,11 @@ def _log_session(session_id: str, history: list[dict]) -> None:
             "message_count": len(history),
             "full_history": history,
         }
-        log_path.write_text(json.dumps(log_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Atomic write: a torn/clobbered transcript is what bricks a thread, so
+        # write to a temp file in the same dir and os.replace() it into place.
+        tmp_path = log_path.with_name(f"{sid_hash}.json.{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(log_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp_path, log_path)
         # Ease-of-access: symlink/pointer to latest session
         latest = SESSION_LOG_DIR / "_latest.json"
         latest.write_text(json.dumps({"session_hash": sid_hash, "updated_at": log_data["updated_at"], "message_count": log_data["message_count"]}))
@@ -2744,20 +2739,64 @@ def _looks_base64(s: str) -> bool:
     return " " not in s[:100] and len(s) > 50 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in s[:200].replace("\n", ""))
 
 
+_RECOVERED_TOOL_RESULT = "[tool result lost to a concurrent-write race; session auto-recovered]"
+
+
 def _sanitise_tool_messages(history: list[dict]) -> None:
-    """Remove orphaned tool messages (no preceding assistant with matching tool_calls).
-    DeepSeek rejects 'Messages with role tool must be a response to a preceding message with tool_calls'."""
+    """Make the message list valid for the OpenAI/DeepSeek tool protocol, in place.
+
+    Two failure modes corrupt a transcript — almost always via a concurrent-write
+    race (two turns for the same thread interleaving their writes):
+
+    1. **Orphaned ``tool`` message** — a tool result with no preceding assistant
+       ``tool_calls`` that owns its ``tool_call_id``. DeepSeek: "Messages with role
+       tool must be a response to a preceding message with tool_calls."
+    2. **Orphaned ``tool_calls``** — an assistant message whose ``tool_calls`` are
+       NOT each followed by a ``tool`` result. DeepSeek: "An assistant message with
+       'tool_calls' must be followed by tool messages responding to each
+       'tool_call_id'."
+
+    (1) is healed by dropping the orphan tool message. (2) is healed by injecting a
+    synthetic ``tool`` result so the assistant turn stays well-formed and the thread
+    is never bricked — worst case we lose one tool's output and say so. Healing both
+    directions means a raced transcript degrades gracefully instead of 400-ing every
+    subsequent reply in that thread forever.
+    """
+    # Pass 1 — drop orphaned tool messages (result with no owning tool_calls).
     known_call_ids: set = set()
     i = 0
     while i < len(history):
         m = history[i]
         if m.get("role") == "assistant":
-            for tc in m.get("tool_calls", []):
+            for tc in m.get("tool_calls", []) or []:
                 known_call_ids.add(tc.get("id", ""))
         if m.get("role") == "tool":
             if m.get("tool_call_id", "") not in known_call_ids:
                 logger.info("Dropped orphaned tool message at index %d id=%s", i, m.get("tool_call_id", ""))
                 history.pop(i)
+                continue
+        i += 1
+
+    # Pass 2 — heal orphaned tool_calls (assistant tool_calls lacking results).
+    i = 0
+    while i < len(history):
+        m = history[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            ids = [tc.get("id", "") for tc in m.get("tool_calls", [])]
+            j = i + 1
+            seen: set = set()
+            while j < len(history) and history[j].get("role") == "tool":
+                seen.add(history[j].get("tool_call_id", ""))
+                j += 1
+            missing = [cid for cid in ids if cid not in seen]
+            if missing:
+                stubs = [
+                    {"role": "tool", "tool_call_id": cid, "content": _RECOVERED_TOOL_RESULT}
+                    for cid in missing
+                ]
+                history[j:j] = stubs  # insert right after the existing contiguous tool run
+                logger.info("Healed %d orphaned tool_call(s) at assistant index %d", len(stubs), i)
+                i = j + len(stubs)
                 continue
         i += 1
 
