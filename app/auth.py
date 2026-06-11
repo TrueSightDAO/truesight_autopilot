@@ -70,7 +70,7 @@ def verify_payload(payload: dict, signature: str, public_key_b64: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid timestamp format.",
-        )
+        ) from None
     now = datetime.now(timezone.utc)
     skew = abs((now - ts).total_seconds())
     if skew > settings.timestamp_skew_seconds:
