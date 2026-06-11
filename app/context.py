@@ -303,7 +303,15 @@ _CONTEXT_SYNC_REPOS = ("agentic_ai_context", "tokenomics")
 def _origin_default_branch(repo_dir: Path) -> str:
     try:
         r = subprocess.run(
-            ["git", "-C", str(repo_dir), "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+            [
+                "git",
+                "-C",
+                str(repo_dir),
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ],
             capture_output=True,
             text=True,
             timeout=30,

@@ -18,7 +18,20 @@ from ..config import settings
 from ..context import context_read_lock
 from ..tool_registry import ToolSpec
 
-_TEXT_EXTS = {".md", ".json", ".yml", ".yaml", ".txt", ".csv", ".html", ".py", ".js", ".gs", ".sh", ".template"}
+_TEXT_EXTS = {
+    ".md",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".txt",
+    ".csv",
+    ".html",
+    ".py",
+    ".js",
+    ".gs",
+    ".sh",
+    ".template",
+}
 _MAX_FILE_BYTES = 2_000_000
 _SNIPPET_LEN = 220
 
@@ -47,7 +60,10 @@ def search_context(query: str, max_results: int = 30) -> dict[str, Any]:
 
     root = _context_dir()
     if root is None:
-        return {"status": "error", "message": "agentic_ai_context clone not found on this host."}
+        return {
+            "status": "error",
+            "message": "agentic_ai_context clone not found on this host.",
+        }
 
     try:
         pattern = re.compile(re.escape(query), re.IGNORECASE)
@@ -87,8 +103,14 @@ def search_context(query: str, max_results: int = 30) -> dict[str, Any]:
                         if len(snippet) > _SNIPPET_LEN:
                             cut = pattern.search(snippet)
                             start = max(0, (cut.start() if cut else 0) - 60)
-                            snippet = ("…" if start else "") + snippet[start : start + _SNIPPET_LEN] + "…"
-                        matches.append({"file": rel, "line": lineno, "snippet": snippet})
+                            snippet = (
+                                ("…" if start else "")
+                                + snippet[start : start + _SNIPPET_LEN]
+                                + "…"
+                            )
+                        matches.append(
+                            {"file": rel, "line": lineno, "snippet": snippet}
+                        )
                     else:
                         truncated = True
 
@@ -97,7 +119,10 @@ def search_context(query: str, max_results: int = 30) -> dict[str, Any]:
         "query": query,
         "match_count": len(matches),
         "truncated": truncated,
-        "files": [{"file": f, "hits": n} for f, n in sorted(files_hit.items(), key=lambda kv: -kv[1])],
+        "files": [
+            {"file": f, "hits": n}
+            for f, n in sorted(files_hit.items(), key=lambda kv: -kv[1])
+        ],
         "matches": matches,
     }
 
@@ -123,8 +148,14 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Term or phrase to search for (literal, case-insensitive)."},
-            "max_results": {"type": "integer", "description": "Max line matches to return (default 30)."},
+            "query": {
+                "type": "string",
+                "description": "Term or phrase to search for (literal, case-insensitive).",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Max line matches to return (default 30).",
+            },
         },
         "required": ["query"],
     },

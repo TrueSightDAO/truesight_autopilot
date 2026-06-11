@@ -69,7 +69,11 @@ def submit_ai_agent_contribution(
         cmd.append("--dry-run")
 
     result = subprocess.run(
-        cmd, capture_output=True, text=True, env=env, cwd=str(dao_client_dir) if use_module else None
+        cmd,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(dao_client_dir) if use_module else None,
     )
 
     try:
@@ -106,7 +110,10 @@ TOOL_SPECS = [
                     "type": "string",
                     "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT'.",
                 },
-                "attributes": {"type": "object", "description": "Key-value pairs describing the event."},
+                "attributes": {
+                    "type": "object",
+                    "description": "Key-value pairs describing the event.",
+                },
             },
             "required": ["event_name", "attributes"],
         },
@@ -120,10 +127,22 @@ TOOL_SPECS = [
             "properties": {
                 "title": {"type": "string", "description": "Short one-line title."},
                 "body": {"type": "string", "description": "Multi-line description."},
-                "pr_urls": {"type": "array", "items": {"type": "string"}, "description": "PR URLs as evidence."},
+                "pr_urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "PR URLs as evidence.",
+                },
                 "contributors": {"type": "string", "description": "Display name."},
-                "amount": {"type": "string", "description": "Minutes or dollar amount.", "default": "0"},
-                "tdg_issued": {"type": "string", "description": "TDG to issue.", "default": "0"},
+                "amount": {
+                    "type": "string",
+                    "description": "Minutes or dollar amount.",
+                    "default": "0",
+                },
+                "tdg_issued": {
+                    "type": "string",
+                    "description": "TDG to issue.",
+                    "default": "0",
+                },
                 "attachment_path": {
                     "type": "string",
                     "description": "Local file path to attach (e.g. /tmp/tg_attachments/receipt.pdf). File is uploaded to GitHub via Edgar.",

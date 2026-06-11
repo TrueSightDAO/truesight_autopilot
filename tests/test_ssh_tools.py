@@ -66,4 +66,6 @@ def test_tool_spec_registered_and_sre_gated():
     spec = get_registry().get("ssh_run")
     assert spec is not None
     assert spec.default_roles == frozenset({"infrastructure"})
-    assert sorted(ssh_tools.FLEET.keys()) == spec.parameters["properties"]["host"]["enum"]
+    assert (
+        sorted(ssh_tools.FLEET.keys()) == spec.parameters["properties"]["host"]["enum"]
+    )

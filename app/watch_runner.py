@@ -114,7 +114,9 @@ def _classify_aws(kind: str, resp: dict) -> tuple[str, str | None]:
     return "pending", state
 
 
-def _probe_aws(kind: str, resource_id: str, account: str, region: str | None) -> tuple[str, str | None]:
+def _probe_aws(
+    kind: str, resource_id: str, account: str, region: str | None
+) -> tuple[str, str | None]:
     # Imported lazily so unit tests of the pure logic don't require boto3/creds.
     from app.tools.aws_tools import aws_query
 
@@ -140,7 +142,9 @@ def _probe_aws(kind: str, resource_id: str, account: str, region: str | None) ->
     return _classify_aws(kind, resp)
 
 
-def _probe_http(url: str, expect_status: int, expect_substring: str | None) -> tuple[str, str | None]:
+def _probe_http(
+    url: str, expect_status: int, expect_substring: str | None
+) -> tuple[str, str | None]:
     from urllib.error import HTTPError, URLError
     from urllib.request import urlopen
 
@@ -183,7 +187,8 @@ def run(args: argparse.Namespace) -> int:
             _notify(
                 args.chat_id,
                 args.thread_id,
-                f"✅ <b>{label}</b> is ready — {target}" + (f" reached state <code>{state}</code>." if state else "."),
+                f"✅ <b>{label}</b> is ready — {target}"
+                + (f" reached state <code>{state}</code>." if state else "."),
             )
             return 0
         if status == "failed":

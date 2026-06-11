@@ -19,7 +19,9 @@ os.environ.setdefault("SESSION_LOG_DIR", tempfile.mkdtemp())
 try:
     import app.main as m
 except Exception as exc:  # noqa: BLE001
-    pytest.skip(f"app.main import unavailable in this env: {exc}", allow_module_level=True)
+    pytest.skip(
+        f"app.main import unavailable in this env: {exc}", allow_module_level=True
+    )
 
 
 def _dangling(history):
@@ -83,7 +85,9 @@ def test_different_sessions_run_concurrently():
             events.append(f"exit-{tag}")
 
     async def _main():
-        await asyncio.wait_for(asyncio.gather(turn("tg:X:1", "A"), turn("tg:X:2", "B")), timeout=5)
+        await asyncio.wait_for(
+            asyncio.gather(turn("tg:X:1", "A"), turn("tg:X:2", "B")), timeout=5
+        )
 
     asyncio.run(_main())
     # both enter before either exits → genuinely concurrent
@@ -105,7 +109,13 @@ def test_lock_prevents_dangling_tool_calls():
                 {
                     "role": "assistant",
                     "content": "",
-                    "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "f", "arguments": "{}"},
+                        }
+                    ],
                 }
             )
             await asyncio.sleep(0.01)  # tool-execution window where the race struck

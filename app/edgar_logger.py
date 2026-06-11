@@ -30,7 +30,9 @@ class EdgarLogger:
             logger.warning("EdgarClient init failed: %s", e)
 
     def is_configured(self) -> bool:
-        return self._client is not None and all([settings.email, settings.public_key, settings.private_key])
+        return self._client is not None and all(
+            [settings.email, settings.public_key, settings.private_key]
+        )
 
     def submit_contribution(
         self,
@@ -46,16 +48,24 @@ class EdgarLogger:
         try:
             resp = self._client.submit(event_name, attributes)
             if resp.ok:
-                logger.info("Edgar contribution submitted: %s", description or event_name)
+                logger.info(
+                    "Edgar contribution submitted: %s", description or event_name
+                )
                 return True
             else:
-                logger.error("Edgar submission failed (%d): %s", resp.status_code, resp.text[:300])
+                logger.error(
+                    "Edgar submission failed (%d): %s",
+                    resp.status_code,
+                    resp.text[:300],
+                )
                 return False
         except Exception as e:
             logger.error("Edgar submission exception: %s", e)
             return False
 
-    def log_contribution(self, minutes: int, description: str, pr_url: str | None = None) -> bool:
+    def log_contribution(
+        self, minutes: int, description: str, pr_url: str | None = None
+    ) -> bool:
         """Convenience: log an autopilot fix as a time-based contribution."""
         attrs: dict[str, object] = {
             "Type": "Time (Minutes)",
@@ -65,4 +75,6 @@ class EdgarLogger:
         }
         if pr_url:
             attrs["PR URL"] = pr_url
-        return self.submit_contribution("CONTRIBUTION EVENT", attrs, description=description)
+        return self.submit_contribution(
+            "CONTRIBUTION EVENT", attrs, description=description
+        )

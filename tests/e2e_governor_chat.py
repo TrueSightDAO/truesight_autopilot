@@ -59,7 +59,11 @@ class AutopilotClient:
             "nonce": str(uuid.uuid4()),
         }
         payload_str = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
-        sig = base64.b64encode(self.priv_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())).decode()
+        sig = base64.b64encode(
+            self.priv_key.sign(
+                payload_str.encode(), padding.PKCS1v15(), hashes.SHA256()
+            )
+        ).decode()
         return obj, sig, payload_str
 
     def chat(self, message: str) -> requests.Response:
@@ -76,7 +80,9 @@ class AutopilotClient:
             timeout=180,
         )
 
-    def upload(self, filepath: str, filename: str, message: str = "") -> requests.Response:
+    def upload(
+        self, filepath: str, filename: str, message: str = ""
+    ) -> requests.Response:
         obj, sig, payload_str = self._sign(message or f"Upload: {filename}")
         with open(filepath, "rb") as f:
             return requests.post(
@@ -140,7 +146,9 @@ def assert_true(condition: bool, name: str) -> bool:
 def test_image_upload_and_analysis(client: AutopilotClient) -> bool:
     """Test 1: Upload an image and verify pyzbar + Grok analysis runs."""
     print(f"\n{BOLD}Test 1: Image upload + analysis{RESET}")
-    resp = client.upload(TEST_IMAGE, "IMG_0885.HEIC", "QR photo from Kirsten. Process this bag.")
+    resp = client.upload(
+        TEST_IMAGE, "IMG_0885.HEIC", "QR photo from Kirsten. Process this bag."
+    )
     data = stream_to_end(resp)
     ok = True
     ok &= assert_true(len(data["errors"]) == 0, "No SSE errors")
@@ -158,7 +166,8 @@ def test_qr_lookup_and_correction(client: AutopilotClient) -> bool:
     ok = True
     ok &= assert_true("lookup_qr_code" in data["tools"], "lookup_qr_code tool called")
     ok &= assert_true(
-        "MINTED" in data["response"] or "2024OSCAR_20260330_22" in data["response"], "QR code found in ledger"
+        "MINTED" in data["response"] or "2024OSCAR_20260330_22" in data["response"],
+        "QR code found in ledger",
     )
     return ok
 
@@ -166,13 +175,16 @@ def test_qr_lookup_and_correction(client: AutopilotClient) -> bool:
 def test_submission_approval_gate(client: AutopilotClient) -> bool:
     """Test 3: submit_contribution must return pending_approval on first call."""
     print(f"\n{BOLD}Test 3: Submission approval gate{RESET}")
-    resp = client.chat("Submit the inventory movement from Kirsten to Gary Teh for 2024OSCAR_20260330_22. No dry run.")
+    resp = client.chat(
+        "Submit the inventory movement from Kirsten to Gary Teh for 2024OSCAR_20260330_22. No dry run."
+    )
     data = stream_to_end(resp)
     ok = True
     # On first call, submit_contribution should return pending_approval, not execute
     # (We check the response text for evidence of proposal/waiting)
     ok &= assert_true(
-        "submit_contribution" not in data["tools"] or "pending_approval" in data["response"].lower(),
+        "submit_contribution" not in data["tools"]
+        or "pending_approval" in data["response"].lower(),
         "Either didn't call submit_contribution, or it returned pending_approval",
     )
     return ok
@@ -181,18 +193,23 @@ def test_submission_approval_gate(client: AutopilotClient) -> bool:
 def test_duplicate_guard(client: AutopilotClient) -> bool:
     """Test 4: Same QR code should be rejected as duplicate."""
     print(f"\n{BOLD}Test 4: Duplicate QR guardrail{RESET}")
-    resp = client.chat("Process 2024OSCAR_20260330_22 again — move it from Kirsten to Gary Teh.")
+    resp = client.chat(
+        "Process 2024OSCAR_20260330_22 again — move it from Kirsten to Gary Teh."
+    )
     data = stream_to_end(resp)
     ok = True
     # Either submit_contribution returns duplicate, or LLM doesn't call it
     tools_called = set(data["tools"])
     if "submit_contribution" in tools_called:
         ok &= assert_true(
-            "duplicate" in data["response"].lower() or "already" in data["response"].lower(),
+            "duplicate" in data["response"].lower()
+            or "already" in data["response"].lower(),
             "submit_contribution returned duplicate status",
         )
     else:
-        ok &= assert_true(True, "submit_contribution not called — LLM detected duplicate")
+        ok &= assert_true(
+            True, "submit_contribution not called — LLM detected duplicate"
+        )
     return ok
 
 
@@ -202,7 +219,8 @@ def test_xml_no_leaks(client: AutopilotClient) -> bool:
     resp = client.chat("What tools are available?")
     data = stream_to_end(resp)
     ok = assert_true(
-        "<function_calls>" not in data["response"] and "<invoke" not in data["response"],
+        "<function_calls>" not in data["response"]
+        and "<invoke" not in data["response"],
         "No XML tool-call syntax in response",
     )
     return ok
@@ -219,7 +237,9 @@ def test_session_persistence(client: AutopilotClient) -> bool:
         },
     )
     data = resp.json()
-    ok = assert_true(len(data.get("messages", [])) >= 2, "Session has at least 2 saved messages")
+    ok = assert_true(
+        len(data.get("messages", [])) >= 2, "Session has at least 2 saved messages"
+    )
     return ok
 
 
@@ -229,7 +249,9 @@ def test_session_persistence(client: AutopilotClient) -> bool:
 def main() -> int:
     if not os.path.exists(TEST_IMAGE):
         print(f"{RED}Test image not found: {TEST_IMAGE}{RESET}")
-        print("Convert it first: sips -s format jpeg ~/Downloads/IMG_0885.HEIC --out /tmp/test_0885.jpg")
+        print(
+            "Convert it first: sips -s format jpeg ~/Downloads/IMG_0885.HEIC --out /tmp/test_0885.jpg"
+        )
         return 1
 
     client = AutopilotClient()

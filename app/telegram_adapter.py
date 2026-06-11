@@ -75,7 +75,9 @@ def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock
         return lock
 
 
-def _ack_queued_if_busy(chat_id: int, thread_id: int | None, lock: threading.Lock) -> None:
+def _ack_queued_if_busy(
+    chat_id: int, thread_id: int | None, lock: threading.Lock
+) -> None:
     """If a turn is already running in this topic, immediately tell the governor
     their new message was received and queued — it will be handled after the
     current turn finishes. Without this, a message sent mid-task just blocks
@@ -159,7 +161,10 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
         if not line.lstrip().startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        matched = any(c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}") for c in cells)
+        matched = any(
+            c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}")
+            for c in cells
+        )
         if not matched:
             continue
         if not any("active" in c.lower() for c in cells):
@@ -375,7 +380,11 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                 # NOTE: do NOT include message_thread_id in the fallback — if the
                 # original 400 was "message thread not found", the retry with the
                 # same thread_id would 400 again. Drop it so the message lands.
-                fallback: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+                fallback: dict[str, Any] = {
+                    "chat_id": chat_id,
+                    "text": chunk,
+                    "disable_web_page_preview": True,
+                }
                 resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                 if i == 0 and resp2.status_code == 200:
                     msg_id = resp2.json().get("result", {}).get("message_id")
@@ -395,7 +404,9 @@ def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bo
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id:
                 payload["message_thread_id"] = thread_id
-            resp = httpx.post(_api("sendVoice"), data=payload, files=files, timeout=30.0)
+            resp = httpx.post(
+                _api("sendVoice"), data=payload, files=files, timeout=30.0
+            )
             if resp.status_code == 200:
                 logger.info(
                     "Sent voice message (%d bytes) to chat %s",
@@ -411,7 +422,9 @@ def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bo
         return False
 
 
-def edit_message_text(chat_id: int, message_id: int, text: str, thread_id: int | None = None) -> bool:
+def edit_message_text(
+    chat_id: int, message_id: int, text: str, thread_id: int | None = None
+) -> bool:
     """Edit a previously sent message. Returns True on success."""
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -499,7 +512,9 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
     /chat-blocking needed since this is a standalone notification.
     """
     if not settings.telegram_bot_api_key:
-        logger.warning("send_deploy_notification: TELEGRAM_BOT_API_KEY not set — skipping")
+        logger.warning(
+            "send_deploy_notification: TELEGRAM_BOT_API_KEY not set — skipping"
+        )
         return False
 
     chat_id = resolve_governor_chat_id()
@@ -530,7 +545,11 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
             logger.info("Deploy notification sent to chat %s", chat_id)
             return True
         else:
-            logger.warning("send_deploy_notification HTTP %s: %s", resp.status_code, resp.text[:200])
+            logger.warning(
+                "send_deploy_notification HTTP %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
             return False
     except Exception as e:
         logger.warning("send_deploy_notification failed: %s", e)
@@ -555,11 +574,15 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
     if not text:
         text = "⚠️ Autopilot returned an empty response. Try rephrasing, or break the request into smaller steps."
     if data.get("proposal"):
-        text += "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
+        text += (
+            "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
+        )
     return text
 
 
-def call_chat_with_progress(chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str) -> str:
+def call_chat_with_progress(
+    chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str
+) -> str:
     """POST to /chat (SSE) and send styled interim progress updates to Telegram.
 
     Flow:
@@ -617,7 +640,12 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None, message: str, s
             timeout=_CHAT_TIMEOUT,
         ) as resp:
             if resp.status_code != 200:
-                edit_message_text(chat_id, status_id, f"⚠️ Autopilot returned HTTP {resp.status_code}.", thread_id)
+                edit_message_text(
+                    chat_id,
+                    status_id,
+                    f"⚠️ Autopilot returned HTTP {resp.status_code}.",
+                    thread_id,
+                )
                 return f"⚠️ Autopilot returned HTTP {resp.status_code}."
 
             final_response = ""
@@ -671,7 +699,12 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None, message: str, s
                         tool_active = None
 
                 elif etype == "wanted_more_rounds":
-                    edit_message_text(chat_id, status_id, "⚠️ Hit round limit — forcing final response…", thread_id)
+                    edit_message_text(
+                        chat_id,
+                        status_id,
+                        "⚠️ Hit round limit — forcing final response…",
+                        thread_id,
+                    )
                     last_edit = time.time()
 
                 elif etype == "done":
@@ -690,11 +723,21 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None, message: str, s
                 send_message(chat_id, final_response, thread_id)
                 return final_response
             else:
-                edit_message_text(chat_id, status_id, "⚠️ Autopilot produced an empty response.", thread_id)
+                edit_message_text(
+                    chat_id,
+                    status_id,
+                    "⚠️ Autopilot produced an empty response.",
+                    thread_id,
+                )
                 return "⚠️ Autopilot produced an empty response."
 
     except httpx.ReadTimeout:
-        edit_message_text(chat_id, status_id, "⚠️ Autopilot timed out. Try a simpler request or try again.", thread_id)
+        edit_message_text(
+            chat_id,
+            status_id,
+            "⚠️ Autopilot timed out. Try a simpler request or try again.",
+            thread_id,
+        )
         return "⚠️ Autopilot timed out — the LLM or a tool took too long."
     except Exception as e:
         logger.exception("call_chat_with_progress failed")
@@ -702,7 +745,9 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None, message: str, s
         return f"⚠️ Error: {e}"
 
 
-def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str) -> str:
+def call_chat_with_typing(
+    chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str
+) -> str:
     """Run call_chat in a worker thread, re-sending the 'typing…' action every
     few seconds so the indicator stays alive for the whole (often 30-60s+)
     multi-round generation instead of vanishing after ~5s."""
@@ -768,7 +813,9 @@ def _handle_voice_reply(
 # ── Update handling + loop ─────────────────────────────────────────────────
 
 
-def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | None, session_id: str) -> str | None:
+def _auto_process_attachment(
+    local_path: str, chat_id: int, thread_id: int | None, session_id: str
+) -> str | None:
     """Auto-detect file type, extract content, persist to transcript, return summary.
 
     Returns a summary string for the LLM, or None on failure.
@@ -801,7 +848,10 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
                 timeout=timeout,
             )
             if result.returncode != 0:
-                return {"status": "error", "message": f"Script exited {result.returncode}: {result.stderr[:500]}"}
+                return {
+                    "status": "error",
+                    "message": f"Script exited {result.returncode}: {result.stderr[:500]}",
+                }
             return json.loads(result.stdout)
         except json.JSONDecodeError:
             return {"status": "error", "message": "Script output was not valid JSON"}
@@ -816,7 +866,9 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
         pdf_result = _run_script("extract_pdf_text.py", local_path)
 
         if pdf_result.get("status") != "success":
-            _update_status(f"⚠️ PDF extraction failed: {pdf_result.get('message', 'unknown error')}")
+            _update_status(
+                f"⚠️ PDF extraction failed: {pdf_result.get('message', 'unknown error')}"
+            )
             return None
 
         page_count = pdf_result.get("page_count", 0)
@@ -851,12 +903,16 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
             f"- Type: PDF ({page_count} page{'s' if page_count != 1 else ''}, {total_chars} chars)\n"
         )
         if is_scanned:
-            summary += f"- Scanned PDF: OCR also applied ({len(ocr_text)} chars extracted)\n"
+            summary += (
+                f"- Scanned PDF: OCR also applied ({len(ocr_text)} chars extracted)\n"
+            )
         summary += f"\nExtracted content:\n```\n{extracted_text[:45000]}\n```\n"
         if len(extracted_text) > 45000:
             summary += "\n*(content truncated to 45000 chars)*\n"
 
-        _update_status(f"✅ Extracted {page_count} page{'s' if page_count != 1 else ''} from PDF")
+        _update_status(
+            f"✅ Extracted {page_count} page{'s' if page_count != 1 else ''} from PDF"
+        )
         return summary
 
     # --- Image path ---
@@ -865,7 +921,9 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
         ocr_result = _run_script("ocr_image.py", local_path, "eng")
 
         if ocr_result.get("status") != "success":
-            _update_status(f"⚠️ OCR failed: {ocr_result.get('message', 'unknown error')}")
+            _update_status(
+                f"⚠️ OCR failed: {ocr_result.get('message', 'unknown error')}"
+            )
             return None
 
         extracted_text = ocr_result.get("text", "")
@@ -893,7 +951,9 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
     return None
 
 
-def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
+def handle_message(
+    msg: dict[str, Any], allowed: set[int], public_key: str | None
+) -> None:
     chat = msg.get("chat", {})
     chat_id = chat.get("id")
     # Only treat a thread id as routable when it's a genuine forum topic.
@@ -905,7 +965,11 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     caption = (msg.get("caption") or "").strip()
     attachment_file_id = extract_attachment_file_id(msg)
     voice_file_id = extract_voice_file_id(msg)
-    if chat_id is None or user_id is None or (not text and not attachment_file_id and not voice_file_id):
+    if (
+        chat_id is None
+        or user_id is None
+        or (not text and not attachment_file_id and not voice_file_id)
+    ):
         return
 
     # Security gate
@@ -930,7 +994,11 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         local_audio = download_telegram_file(voice_file_id)
         transcribed_text = transcribe_voice(local_audio) if local_audio else ""
         if not transcribed_text:
-            send_message(chat_id, "🎤 I could not make out any speech in that voice note.", thread_id)
+            send_message(
+                chat_id,
+                "🎤 I could not make out any speech in that voice note.",
+                thread_id,
+            )
             return
         text = transcribed_text
 
@@ -974,7 +1042,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         return
 
     if public_key is None:
-        send_message(chat_id, "⚠️ No governor identity configured on the server.", thread_id)
+        send_message(
+            chat_id, "⚠️ No governor identity configured on the server.", thread_id
+        )
         return
 
     session_id = build_session_id(chat_id, thread_id)
@@ -983,11 +1053,15 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     if attachment_file_id:
         local_path = download_telegram_file(attachment_file_id)
         if not local_path:
-            send_message(chat_id, "⚠️ Couldn't download that attachment from Telegram.", thread_id)
+            send_message(
+                chat_id, "⚠️ Couldn't download that attachment from Telegram.", thread_id
+            )
             return
 
         # Auto-process: detect type, extract, persist, get summary
-        attachment_summary = _auto_process_attachment(local_path, chat_id, thread_id, session_id)
+        attachment_summary = _auto_process_attachment(
+            local_path, chat_id, thread_id, session_id
+        )
 
         # Build the message for the LLM
         msg_text = caption or text or "Please inspect the attached file."
@@ -1008,7 +1082,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
             lock = _thread_dispatch_lock(chat_id, thread_id)
             _ack_queued_if_busy(chat_id, thread_id, lock)
             with lock:
-                response = call_chat_with_progress(chat_id, thread_id, msg_text, session_id, public_key)
+                response = call_chat_with_progress(
+                    chat_id, thread_id, msg_text, session_id, public_key
+                )
             # If original message was a voice note with attachment, also send voice reply
             if is_voice and response:
                 _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
@@ -1038,7 +1114,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         lock = _thread_dispatch_lock(chat_id, thread_id)
         _ack_queued_if_busy(chat_id, thread_id, lock)
         with lock:
-            response = call_chat_with_progress(chat_id, thread_id, dispatch_text, session_id, public_key)
+            response = call_chat_with_progress(
+                chat_id, thread_id, dispatch_text, session_id, public_key
+            )
         # If original message was a voice note, send voice reply + URL follow-up
         if is_voice and response:
             _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
@@ -1047,7 +1125,9 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
 
 
-def _handle_research_command(chat_id: int, thread_id: int | None, text: str, public_key: str) -> None:
+def _handle_research_command(
+    chat_id: int, thread_id: int | None, text: str, public_key: str
+) -> None:
     """Handle /research command — spawn autonomous CrewAI research."""
     topic = text[len("/research") :].strip()
     if not topic:
@@ -1070,7 +1150,9 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
         )
         if resp.status_code != 200:
             send_message(
-                chat_id, "⚠️ Could not check current role. Set a role first by chatting in this topic.", thread_id
+                chat_id,
+                "⚠️ Could not check current role. Set a role first by chatting in this topic.",
+                thread_id,
             )
             return
         session_data = resp.json()
@@ -1084,7 +1166,11 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
 
     role = find_role_in_history(history)
     if role is None:
-        send_message(chat_id, "⚠️ No role set in this topic. Send any message first to pick a role.", thread_id)
+        send_message(
+            chat_id,
+            "⚠️ No role set in this topic. Send any message first to pick a role.",
+            thread_id,
+        )
         return
 
     if not role.crewai_enabled:
@@ -1103,7 +1189,9 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
 
     # Start autonomous research with progress
     status_id = send_message(
-        chat_id, f"🚀 Starting autonomous research on:\n*{topic[:100]}*…\n\nInitialising CrewAI…", thread_id
+        chat_id,
+        f"🚀 Starting autonomous research on:\n*{topic[:100]}*…\n\nInitialising CrewAI…",
+        thread_id,
     )
     if status_id is None:
         return
@@ -1112,11 +1200,15 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
 
     def on_progress(msg: str) -> None:
         snippet = msg.replace("\n", " ")[:200]
-        edit_message_text(chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_", thread_id)
+        edit_message_text(
+            chat_id, status_id, f"🔬 Researching…\n\n_{snippet}_", thread_id
+        )
 
     def on_done(result: str) -> None:
         preview = result[:3000]
-        more = "\n\n…(truncated — report committed to repo)" if len(result) > 3000 else ""
+        more = (
+            "\n\n…(truncated — report committed to repo)" if len(result) > 3000 else ""
+        )
         edit_message_text(
             chat_id,
             status_id,
@@ -1127,7 +1219,9 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
     run_research_background(role.key, topic, target_repo, on_progress, on_done)
 
 
-def _handle_reset(chat_id: int, thread_id: int | None, session_id: str, public_key: str) -> None:
+def _handle_reset(
+    chat_id: int, thread_id: int | None, session_id: str, public_key: str
+) -> None:
     """Reset session context: keep role tag, discard all other messages."""
     try:
         resp = httpx.get(
@@ -1164,14 +1258,24 @@ def _handle_reset(chat_id: int, thread_id: int | None, session_id: str, public_k
             timeout=10.0,
         )
         if resp.status_code == 200:
-            send_message(chat_id, f"✅ Context reset. Role: **{name}**.\n\nWhat would you like to work on?", thread_id)
+            send_message(
+                chat_id,
+                f"✅ Context reset. Role: **{name}**.\n\nWhat would you like to work on?",
+                thread_id,
+            )
         else:
-            send_message(chat_id, f"⚠️ Could not reset session (HTTP {resp.status_code}).", thread_id)
+            send_message(
+                chat_id,
+                f"⚠️ Could not reset session (HTTP {resp.status_code}).",
+                thread_id,
+            )
     except Exception as e:
         send_message(chat_id, f"⚠️ Reset failed: {e}", thread_id)
 
 
-def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict, thread_id: int | None = None) -> None:
+def send_message_with_keyboard(
+    chat_id: int, text: str, keyboard: dict, thread_id: int | None = None
+) -> None:
     """Send a message with an inline keyboard (HTML). Falls back to plain on error."""
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -1185,8 +1289,14 @@ def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict, thread_i
     try:
         resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
         if resp.status_code != 200:
-            logger.warning("sendMessage(keyboard) %s: %s", resp.status_code, resp.text[:200])
-            httpx.post(_api("sendMessage"), json={"chat_id": chat_id, "text": text}, timeout=20.0)
+            logger.warning(
+                "sendMessage(keyboard) %s: %s", resp.status_code, resp.text[:200]
+            )
+            httpx.post(
+                _api("sendMessage"),
+                json={"chat_id": chat_id, "text": text},
+                timeout=20.0,
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning("sendMessage(keyboard) failed: %s", e)
 
@@ -1194,7 +1304,9 @@ def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict, thread_i
 def answer_callback(callback_query_id: str, text: str = "") -> None:
     try:
         httpx.post(
-            _api("answerCallbackQuery"), json={"callback_query_id": callback_query_id, "text": text}, timeout=10.0
+            _api("answerCallbackQuery"),
+            json={"callback_query_id": callback_query_id, "text": text},
+            timeout=10.0,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -1225,7 +1337,10 @@ def _handle_ship_command(chat_id: int, thread_id: int | None, text: str) -> None
         for pr in prs[:5]:
             kb = beta_deploy.build_ship_keyboard(pr["repo"], pr["number"])
             send_message_with_keyboard(
-                chat_id, f"**{pr['repo']}#{pr['number']}** — {pr['title']}\n{pr['url']}", kb, thread_id
+                chat_id,
+                f"**{pr['repo']}#{pr['number']}** — {pr['title']}\n{pr['url']}",
+                kb,
+                thread_id,
             )
         return
     repo, pr = target
@@ -1234,7 +1349,12 @@ def _handle_ship_command(chat_id: int, thread_id: int | None, text: str) -> None
         send_message(chat_id, result["message"], thread_id)
         return
     kb = beta_deploy.build_ship_keyboard(repo, pr)  # B5 — one-tap confirm
-    send_message_with_keyboard(chat_id, f"Ship **{repo}#{pr}** to beta? I'll verify CI is green first.", kb, thread_id)
+    send_message_with_keyboard(
+        chat_id,
+        f"Ship **{repo}#{pr}** to beta? I'll verify CI is green first.",
+        kb,
+        thread_id,
+    )
 
 
 def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
@@ -1261,7 +1381,9 @@ def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
         return
 
     if chat_id and message_id:
-        edit_message_text(chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…", thread_id)
+        edit_message_text(
+            chat_id, message_id, f"⏳ Shipping {repo}#{pr} — checking CI…", thread_id
+        )
     result = beta_deploy.ship_pr(repo, pr)
     if chat_id and message_id:
         edit_message_text(chat_id, message_id, result["message"], thread_id)
@@ -1276,7 +1398,9 @@ def _handle_callback_safe(cb: dict[str, Any], allowed: set[int]) -> None:
         logger.exception("handle_callback_query crashed")
 
 
-def _handle_message_safe(msg: dict[str, Any], allowed: set[int], public_key: str | None) -> None:
+def _handle_message_safe(
+    msg: dict[str, Any], allowed: set[int], public_key: str | None
+) -> None:
     """Wrap handle_message for background-thread dispatch so exceptions don't vanish."""
     try:
         handle_message(msg, allowed, public_key)
@@ -1289,7 +1413,9 @@ def run() -> None:
     # sendMessage URLs, which embed the bot token. WARNING keeps errors, drops the token.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if not settings.telegram_bot_api_key:
-        raise SystemExit("TELEGRAM_BOT_API_KEY is not set — cannot start Telegram adapter.")
+        raise SystemExit(
+            "TELEGRAM_BOT_API_KEY is not set — cannot start Telegram adapter."
+        )
 
     allowed = parse_allowed_ids(settings.telegram_allowed_user_ids)
     public_key = resolve_governor_public_key()
@@ -1311,7 +1437,9 @@ def run() -> None:
         )
 
     offset: int | None = None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="tg-handle") as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=10, thread_name_prefix="tg-handle"
+    ) as executor:
         while True:
             try:
                 updates = get_updates(offset)

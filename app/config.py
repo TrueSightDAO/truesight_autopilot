@@ -10,7 +10,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        extra="ignore", env_file=".env", env_file_encoding="utf-8"
+    )
     # Service
     port: int = Field(default=8001, validation_alias="PORT")
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
@@ -22,12 +24,16 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]  # TODO: restrict to dapp.truesight.me in production
 
     # Security
-    jwt_secret: str = Field(default="change-me-in-production", validation_alias="JWT_SECRET")
+    jwt_secret: str = Field(
+        default="change-me-in-production", validation_alias="JWT_SECRET"
+    )
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
     nonce_ttl_seconds: int = 300
     timestamp_skew_seconds: int = 600
-    disable_governor_check: bool = Field(default=False, validation_alias="DISABLE_GOVERNOR_CHECK")
+    disable_governor_check: bool = Field(
+        default=False, validation_alias="DISABLE_GOVERNOR_CHECK"
+    )
 
     # GitHub
     github_pat: str = Field(default="", validation_alias="TRUESIGHT_DAO_AUTOPILOT")
@@ -104,7 +110,9 @@ class Settings(BaseSettings):
 
     # LLM — DeepSeek only (dropped Kimi + Claude for cost)
     llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
-    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("DEEPSEEK_SDK", "")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv(
+        "DEEPSEEK_SDK", ""
+    )
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
@@ -114,7 +122,10 @@ class Settings(BaseSettings):
 
     # BigModel (ZhipuAI / GLM)
     bigmodel_api_key: str = Field(default="", validation_alias="BIGMODEL_CN_API")
-    bigmodel_base_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", validation_alias="BIGMODEL_BASE_URL")
+    bigmodel_base_url: str = Field(
+        default="https://open.bigmodel.cn/api/paas/v4",
+        validation_alias="BIGMODEL_BASE_URL",
+    )
     bigmodel_model: str = Field(default="glm-4.5", validation_alias="BIGMODEL_MODEL")
 
     # Grok (xAI) — vision analysis for uploaded images
@@ -124,19 +135,29 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(default="", validation_alias="TAVILY_API")
 
     # Telegram — private single-user chat bot in front of /chat-blocking
-    telegram_bot_api_key: str = Field(default="", validation_alias="TELEGRAM_BOT_API_KEY")
+    telegram_bot_api_key: str = Field(
+        default="", validation_alias="TELEGRAM_BOT_API_KEY"
+    )
     # Comma-separated numeric Telegram user IDs allowed to talk to the bot.
     # Empty = bootstrap mode: the bot replies with the sender's own ID so you can pin it.
-    telegram_allowed_user_ids: str = Field(default="", validation_alias="TELEGRAM_ALLOWED_USER_IDS")
+    telegram_allowed_user_ids: str = Field(
+        default="", validation_alias="TELEGRAM_ALLOWED_USER_IDS"
+    )
     # Which governor identity the bot speaks as (resolved to a public key from the registry).
-    telegram_governor_name: str = Field(default="Gary Teh", validation_alias="TELEGRAM_GOVERNOR_NAME")
+    telegram_governor_name: str = Field(
+        default="Gary Teh", validation_alias="TELEGRAM_GOVERNOR_NAME"
+    )
     # Where the FastAPI chat service is reachable from the adapter process.
-    autopilot_chat_url: str = Field(default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL")
+    autopilot_chat_url: str = Field(
+        default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL"
+    )
     # The working group (forum) where create_telegram_topic opens topics when the
     # request didn't originate inside a Telegram topic — i.e. the off-Telegram
     # /chat handoff trigger. Numeric supergroup id, e.g. -1001234567890. Requires
     # Sophia's bot to be a group admin with 'Manage Topics'.
-    telegram_home_group_id: str = Field(default="", validation_alias="TELEGRAM_HOME_GROUP_ID")
+    telegram_home_group_id: str = Field(
+        default="", validation_alias="TELEGRAM_HOME_GROUP_ID"
+    )
 
     # Telegram attention watchdog — MTProto USER-session (not the bot), so it
     # can see DMs + all groups. Read-only; nudges go to Saved Messages only.
@@ -144,19 +165,32 @@ class Settings(BaseSettings):
     # the session file is created once by scripts/telethon_login.py.
     telegram_api_id: int = Field(default=0, validation_alias="TELEGRAM_API_ID")
     telegram_api_hash: str = Field(default="", validation_alias="TELEGRAM_API_HASH")
-    watchdog_session_path: str = Field(default=".telethon_watchdog", validation_alias="WATCHDOG_SESSION_PATH")
-    watchdog_state_path: str = Field(
-        default="data/attention_watchdog_state.json", validation_alias="WATCHDOG_STATE_PATH"
+    watchdog_session_path: str = Field(
+        default=".telethon_watchdog", validation_alias="WATCHDOG_SESSION_PATH"
     )
-    watchdog_nudge_hours: float = Field(default=4.0, validation_alias="WATCHDOG_NUDGE_HOURS")
+    watchdog_state_path: str = Field(
+        default="data/attention_watchdog_state.json",
+        validation_alias="WATCHDOG_STATE_PATH",
+    )
+    watchdog_nudge_hours: float = Field(
+        default=4.0, validation_alias="WATCHDOG_NUDGE_HOURS"
+    )
     # Asks that mention a date/time get the tighter SLA — those cancel events.
-    watchdog_urgent_nudge_hours: float = Field(default=2.0, validation_alias="WATCHDOG_URGENT_NUDGE_HOURS")
-    watchdog_digest_hour: int = Field(default=9, validation_alias="WATCHDOG_DIGEST_HOUR")
-    watchdog_tz: str = Field(default="America/Los_Angeles", validation_alias="WATCHDOG_TZ")
+    watchdog_urgent_nudge_hours: float = Field(
+        default=2.0, validation_alias="WATCHDOG_URGENT_NUDGE_HOURS"
+    )
+    watchdog_digest_hour: int = Field(
+        default=9, validation_alias="WATCHDOG_DIGEST_HOUR"
+    )
+    watchdog_tz: str = Field(
+        default="America/Los_Angeles", validation_alias="WATCHDOG_TZ"
+    )
 
     # Beta-deploy gate (Telegram /ship). Master switch is OFF by default — even
     # deployed, the gate does nothing until explicitly enabled.
-    beta_deploy_gate_enabled: bool = Field(default=False, validation_alias="BETA_DEPLOY_GATE_ENABLED")
+    beta_deploy_gate_enabled: bool = Field(
+        default=False, validation_alias="BETA_DEPLOY_GATE_ENABLED"
+    )
     # Repos the gate is allowed to merge into (beta only — prod stays manual-promote).
     beta_deploy_repos: list[str] = ["dapp_beta"]
     # B6 Tier 2: skip the one-tap confirmation and merge immediately when CI is green.
@@ -177,7 +211,9 @@ class Settings(BaseSettings):
     # email_poller's bugsnag_error classifier picks up, closing the
     # self-improvement loop. Disabled when bugsnag_api_key is empty.
     # Env var name BUG_SNAG_API matches the existing autopilot/.env convention.
-    bugsnag_api_key: str = os.getenv("BUG_SNAG_API", "") or os.getenv("BUGSNAG_API_KEY", "")
+    bugsnag_api_key: str = os.getenv("BUG_SNAG_API", "") or os.getenv(
+        "BUGSNAG_API_KEY", ""
+    )
     bugsnag_release_stage: str = os.getenv("BUGSNAG_RELEASE_STAGE", "production")
 
     # Bugsnag-project-name -> github-repo mapping for the inbound bugsnag_error
@@ -191,11 +227,15 @@ class Settings(BaseSettings):
     bugsnag_project_repos_raw: str = os.getenv("BUGSNAG_PROJECT_REPOS", "")
 
     # Context
-    context_repos_dir: Path = Path(os.getenv("CONTEXT_REPOS_DIR", "/opt/truesight_autopilot/context"))
+    context_repos_dir: Path = Path(
+        os.getenv("CONTEXT_REPOS_DIR", "/opt/truesight_autopilot/context")
+    )
     # How often the background loop hard-refreshes the read-only context mirrors
     # (agentic_ai_context, tokenomics) so handoff plans committed since the last
     # deploy are visible to read_context_file / search_context. Default 5 min.
-    context_sync_interval_seconds: int = int(os.getenv("CONTEXT_SYNC_INTERVAL_SECONDS", "300"))
+    context_sync_interval_seconds: int = int(
+        os.getenv("CONTEXT_SYNC_INTERVAL_SECONDS", "300")
+    )
     agentic_context_repo: str = os.getenv(
         "AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git"
     )
@@ -203,11 +243,15 @@ class Settings(BaseSettings):
 
     # SSH / Deploy
     ec2_host: str = os.getenv("EC2_HOST", "truesight-autopilot")
-    ec2_key_path: str = os.getenv("EC2_KEY_PATH", os.path.expanduser("~/.ssh/agentic_ai_github/id_ed25519"))
+    ec2_key_path: str = os.getenv(
+        "EC2_KEY_PATH", os.path.expanduser("~/.ssh/agentic_ai_github/id_ed25519")
+    )
     ec2_remote_dir: str = os.getenv("EC2_REMOTE_DIR", "/opt/truesight_autopilot")
 
     # Session logging (production: use persistent path, not /tmp)
-    session_log_dir: Path = Path(os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions"))
+    session_log_dir: Path = Path(
+        os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions")
+    )
 
 
 settings = Settings()

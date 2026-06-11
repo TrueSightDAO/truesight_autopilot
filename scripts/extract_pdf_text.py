@@ -96,7 +96,14 @@ def extract_with_pdfminer(path: str) -> dict:
         "total_chars": char_count,
         "scanned_ratio": 0.0,
         "likely_scanned_pdf": char_count < 50,
-        "pages": [{"page": 1, "char_count": char_count, "text": text.strip(), "is_scanned": char_count < 50}],
+        "pages": [
+            {
+                "page": 1,
+                "char_count": char_count,
+                "text": text.strip(),
+                "is_scanned": char_count < 50,
+            }
+        ],
     }
 
 
@@ -125,7 +132,11 @@ def extract_pdf_text(path: str) -> dict:
                 "message": "PDF is password-protected. Cannot extract text without a password.",
                 "reason": "password_protected",
             }
-        return {"status": "error", "message": f"PDF data error: {e}", "reason": "corrupt_file"}
+        return {
+            "status": "error",
+            "message": f"PDF data error: {e}",
+            "reason": "corrupt_file",
+        }
     except Exception as e:
         logger.warning(f"pymupdf failed: {e}, trying pdfminer...")
 
@@ -143,7 +154,11 @@ def extract_pdf_text(path: str) -> dict:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(json.dumps({"status": "error", "message": "Usage: extract_pdf_text.py <path>"}))
+        print(
+            json.dumps(
+                {"status": "error", "message": "Usage: extract_pdf_text.py <path>"}
+            )
+        )
         sys.exit(1)
 
     result = extract_pdf_text(sys.argv[1])

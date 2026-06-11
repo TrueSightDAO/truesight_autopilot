@@ -14,17 +14,30 @@ from app.tools import git_tools
 def bare_repo(tmp_path, monkeypatch):
     """A local bare repo seeded with one commit, served over file://."""
     bare = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(bare)],
+        check=True,
+        capture_output=True,
+    )
 
     seed = tmp_path / "seed"
-    subprocess.run(["git", "clone", str(bare), str(seed)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", str(bare), str(seed)], check=True, capture_output=True
+    )
     (seed / "README.md").write_text("# fixture\n\nhello world\n")
     big = "x" * 40_000  # >15KB — the size class the Contents-API tools choked on
     (seed / "big.html").write_text(f"<html>{big}<!-- MARKER --></html>\n")
     env_git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run([*env_git, "add", "-A"], cwd=seed, check=True, capture_output=True)
-    subprocess.run([*env_git, "commit", "-m", "seed"], cwd=seed, check=True, capture_output=True)
-    subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(
+        [*env_git, "commit", "-m", "seed"], cwd=seed, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "push", "origin", "HEAD:main"],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
 
     monkeypatch.setattr(git_tools, "_remote_url", lambda repo: f"file://{bare}")
     monkeypatch.setattr(git_tools.settings, "github_pat", "test-pat")
@@ -37,7 +50,11 @@ def bare_repo(tmp_path, monkeypatch):
 
 def _branch_file(bare: Path, branch: str, path: str, tmp_path: Path) -> str:
     check = tmp_path / f"check-{branch.replace('/', '-')}-{path.replace('/', '-')}"
-    subprocess.run(["git", "clone", "--branch", branch, f"file://{bare}", str(check)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "--branch", branch, f"file://{bare}", str(check)],
+        check=True,
+        capture_output=True,
+    )
     return (check / path).read_text()
 
 
@@ -82,15 +99,30 @@ def test_write_edit_delete_round_trip(bare_repo, tmp_path):
         branch="feature/round-trip",
         commit_message="round trip",
         writes=[{"path": "docs/new.md", "content": "fresh\n"}],
-        edits=[{"path": "big.html", "search": "<!-- MARKER -->", "replace": "<!-- EDITED -->"}],
+        edits=[
+            {
+                "path": "big.html",
+                "search": "<!-- MARKER -->",
+                "replace": "<!-- EDITED -->",
+            }
+        ],
         deletes=["README.md"],
         open_pr=False,
     )
     assert out["status"] == "success", out
-    assert sorted(out["applied"]) == ["delete README.md", "edit big.html", "write docs/new.md"]
+    assert sorted(out["applied"]) == [
+        "delete README.md",
+        "edit big.html",
+        "write docs/new.md",
+    ]
 
-    assert _branch_file(bare_repo, "feature/round-trip", "docs/new.md", tmp_path) == "fresh\n"
-    assert "<!-- EDITED -->" in _branch_file(bare_repo, "feature/round-trip", "big.html", tmp_path)
+    assert (
+        _branch_file(bare_repo, "feature/round-trip", "docs/new.md", tmp_path)
+        == "fresh\n"
+    )
+    assert "<!-- EDITED -->" in _branch_file(
+        bare_repo, "feature/round-trip", "big.html", tmp_path
+    )
 
 
 def test_ambiguous_edit_requires_replace_all(bare_repo):
@@ -98,7 +130,9 @@ def test_ambiguous_edit_requires_replace_all(bare_repo):
         repo="fixture-repo",
         branch="f/ambiguous",
         commit_message="m",
-        edits=[{"path": "big.html", "search": "x", "replace": "y"}],  # thousands of hits
+        edits=[
+            {"path": "big.html", "search": "x", "replace": "y"}
+        ],  # thousands of hits
         open_pr=False,
     )
     assert out["status"] == "error"

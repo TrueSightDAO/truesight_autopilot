@@ -108,9 +108,24 @@ def _brand_styles():
             spaceBefore=10,
             spaceAfter=4,
         ),
-        "body": style("body", fontSize=10, leading=14.5, textColor=HexColor(_BODY), spaceAfter=4),
-        "bullet": style("bullet", fontSize=10, leading=14.5, textColor=HexColor(_BODY), spaceAfter=3, leftIndent=14),
-        "th": style("th", fontName=_FONT_BOLD, fontSize=9, leading=12, textColor=HexColor(_CACAO_DARK)),
+        "body": style(
+            "body", fontSize=10, leading=14.5, textColor=HexColor(_BODY), spaceAfter=4
+        ),
+        "bullet": style(
+            "bullet",
+            fontSize=10,
+            leading=14.5,
+            textColor=HexColor(_BODY),
+            spaceAfter=3,
+            leftIndent=14,
+        ),
+        "th": style(
+            "th",
+            fontName=_FONT_BOLD,
+            fontSize=9,
+            leading=12,
+            textColor=HexColor(_CACAO_DARK),
+        ),
         "td": style("td", fontSize=9, leading=12, textColor=HexColor(_BODY)),
     }
 
@@ -148,7 +163,12 @@ def _build_table(header, rows, styles, content_width):
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), HexColor(_RULE)),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [HexColor(_WHITE), HexColor(_ZEBRA)]),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [HexColor(_WHITE), HexColor(_ZEBRA)],
+                ),
                 ("GRID", (0, 0), (-1, -1), 0.5, HexColor(_RULE)),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 5),
@@ -196,7 +216,9 @@ def _markdown_to_flowables(markdown: str, styles, content_width) -> list:
         elif line.lstrip().startswith(("- ", "* ")):
             indent = len(line) - len(line.lstrip())
             bullet = line.lstrip()[2:]
-            para = Paragraph("•&nbsp;" + _apply_inline_markdown(bullet), styles["bullet"])
+            para = Paragraph(
+                "•&nbsp;" + _apply_inline_markdown(bullet), styles["bullet"]
+            )
             para.leftIndent = 14 + indent * 4
             flowables.append(para)
         else:
@@ -247,7 +269,9 @@ def generate_pdf(
         return _err(f"reportlab unavailable: {e}")
 
     if output_path is None:
-        tmp = tempfile.NamedTemporaryFile(prefix="autopilot_pdf_", suffix=".pdf", delete=False)
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="autopilot_pdf_", suffix=".pdf", delete=False
+        )
         tmp.close()
         output_path = tmp.name
 

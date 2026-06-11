@@ -56,19 +56,29 @@ def _deep_link(chat_id: str, thread_id: int) -> str:
 
 
 def create_telegram_topic(
-    name: str, kickoff_message: str = "", chat_id: str | None = None, session_id: str | None = None
+    name: str,
+    kickoff_message: str = "",
+    chat_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     name = (name or "").strip()
     if not name:
         return {"status": "error", "reason": "topic name is required"}
     token = settings.telegram_bot_api_key
     if not token:
-        return {"status": "error", "reason": "TELEGRAM_BOT_API_KEY not configured on this box"}
+        return {
+            "status": "error",
+            "reason": "TELEGRAM_BOT_API_KEY not configured on this box",
+        }
 
     target = (
         chat_id
         or _chat_id_from_session(session_id)
-        or (str(settings.telegram_home_group_id) if settings.telegram_home_group_id else None)
+        or (
+            str(settings.telegram_home_group_id)
+            if settings.telegram_home_group_id
+            else None
+        )
     )
     if not target:
         return {
@@ -79,7 +89,9 @@ def create_telegram_topic(
 
     try:
         r = httpx.post(
-            f"{_API}/bot{token}/createForumTopic", json={"chat_id": target, "name": name[:128]}, timeout=_TIMEOUT
+            f"{_API}/bot{token}/createForumTopic",
+            json={"chat_id": target, "name": name[:128]},
+            timeout=_TIMEOUT,
         )
         data = r.json()
     except Exception as e:  # noqa: BLE001
@@ -87,10 +99,13 @@ def create_telegram_topic(
 
     if not data.get("ok"):
         desc = data.get("description", "unknown error")
-        hint = (
-            "Ensure the group has Topics enabled AND Sophia's bot is a group admin with the 'Manage Topics' permission."
-        )
-        return {"status": "error", "reason": f"Telegram: {desc}", "hint": hint, "chat_id": target}
+        hint = "Ensure the group has Topics enabled AND Sophia's bot is a group admin with the 'Manage Topics' permission."
+        return {
+            "status": "error",
+            "reason": f"Telegram: {desc}",
+            "hint": hint,
+            "chat_id": target,
+        }
 
     thread_id = data["result"]["message_thread_id"]
     posted = False
@@ -98,7 +113,11 @@ def create_telegram_topic(
         try:
             pr = httpx.post(
                 f"{_API}/bot{token}/sendMessage",
-                json={"chat_id": target, "message_thread_id": thread_id, "text": kickoff_message},
+                json={
+                    "chat_id": target,
+                    "message_thread_id": thread_id,
+                    "text": kickoff_message,
+                },
                 timeout=_TIMEOUT,
             )
             posted = bool(pr.json().get("ok"))
@@ -132,8 +151,14 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "name": {"type": "string", "description": "Topic title (e.g. 'Exec: warm-up auto-send')."},
-            "kickoff_message": {"type": "string", "description": "Optional first message to post in the new topic."},
+            "name": {
+                "type": "string",
+                "description": "Topic title (e.g. 'Exec: warm-up auto-send').",
+            },
+            "kickoff_message": {
+                "type": "string",
+                "description": "Optional first message to post in the new topic.",
+            },
             "chat_id": {
                 "type": "string",
                 "description": "Optional explicit group chat id; defaults to current group / configured working group.",

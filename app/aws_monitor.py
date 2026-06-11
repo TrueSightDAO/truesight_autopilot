@@ -59,7 +59,9 @@ def read_account_specs() -> list[dict]:
             upper = label.upper()
             key_id = os.environ.get(f"AWS_ACCESS_KEY_ID_{upper}", "").strip()
             secret = os.environ.get(f"AWS_SECRET_ACCESS_KEY_{upper}", "").strip()
-            region = os.environ.get(f"AWS_REGION_{upper}", "").strip() or settings.aws_region
+            region = (
+                os.environ.get(f"AWS_REGION_{upper}", "").strip() or settings.aws_region
+            )
             if not key_id or not secret:
                 logger.warning(
                     "[%s] AWS_ACCESS_KEY_ID_%s or AWS_SECRET_ACCESS_KEY_%s missing — skipping",
@@ -191,7 +193,9 @@ class AWSMonitor:
         if not acct.cw:
             return
         try:
-            metrics = acct.cw.list_metrics(Namespace="AWS/EC2", MetricName="StatusCheckFailed")
+            metrics = acct.cw.list_metrics(
+                Namespace="AWS/EC2", MetricName="StatusCheckFailed"
+            )
             for m in metrics.get("Metrics", []):
                 dimensions = {d["Name"]: d["Value"] for d in m.get("Dimensions", [])}
                 instance_id = dimensions.get("InstanceId")
@@ -207,7 +211,11 @@ class AWSMonitor:
                     )
                     datapoints = resp.get("Datapoints", [])
                     if any(d["Average"] > 0 for d in datapoints):
-                        logger.warning("[%s] EC2 %s has status check failures", acct.label, instance_id)
+                        logger.warning(
+                            "[%s] EC2 %s has status check failures",
+                            acct.label,
+                            instance_id,
+                        )
         except ClientError as e:
             logger.error("[%s] EC2 health check failed: %s", acct.label, e)
 
@@ -216,7 +224,9 @@ class AWSMonitor:
         if not acct.ce:
             return
         try:
-            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+                "%Y-%m-%d"
+            )
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             resp = acct.ce.get_cost_and_usage(
                 TimePeriod={"Start": yesterday, "End": today},
@@ -225,8 +235,12 @@ class AWSMonitor:
                 GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
             )
             for result in resp.get("ResultsByTime", []):
-                total = result.get("Total", {}).get("BlendedCost", {}).get("Amount", "0")
-                logger.info("[%s] AWS daily spend (%s): $%s", acct.label, yesterday, total)
+                total = (
+                    result.get("Total", {}).get("BlendedCost", {}).get("Amount", "0")
+                )
+                logger.info(
+                    "[%s] AWS daily spend (%s): $%s", acct.label, yesterday, total
+                )
                 # TODO: alert if spend > threshold
         except ClientError as e:
             logger.error("[%s] Cost check failed: %s", acct.label, e)
@@ -242,7 +256,9 @@ class AWSMonitor:
         if not acct.health or acct.health_unsupported:
             return
         try:
-            events = acct.health.describe_events(filter={"eventStatusCodes": ["open", "upcoming"]})
+            events = acct.health.describe_events(
+                filter={"eventStatusCodes": ["open", "upcoming"]}
+            )
             for event in events.get("events", []):
                 logger.warning(
                     "[%s] AWS Health event: %s (%s) — %s",

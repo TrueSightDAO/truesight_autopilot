@@ -26,13 +26,25 @@ def test_ami_states():
 def test_not_found_is_pending_not_done():
     # Eventual consistency: a describe that returns nothing yet must NOT be 'done'.
     assert wr._classify_aws("ami", {"Images": []}) == ("pending", None)
-    assert wr._classify_aws("snapshot", {"status": "error", "reason": "x"}) == ("pending", None)
+    assert wr._classify_aws("snapshot", {"status": "error", "reason": "x"}) == (
+        "pending",
+        None,
+    )
 
 
 def test_snapshot_and_volume_terminal_states():
-    assert wr._classify_aws("snapshot", {"Snapshots": [{"State": "completed"}]}) == ("done", "completed")
-    assert wr._classify_aws("snapshot", {"Snapshots": [{"State": "pending"}]})[0] == "pending"
-    assert wr._classify_aws("volume", {"Volumes": [{"State": "available"}]}) == ("done", "available")
+    assert wr._classify_aws("snapshot", {"Snapshots": [{"State": "completed"}]}) == (
+        "done",
+        "completed",
+    )
+    assert (
+        wr._classify_aws("snapshot", {"Snapshots": [{"State": "pending"}]})[0]
+        == "pending"
+    )
+    assert wr._classify_aws("volume", {"Volumes": [{"State": "available"}]}) == (
+        "done",
+        "available",
+    )
 
 
 def test_instance_nested_state_extraction():
@@ -40,7 +52,10 @@ def test_instance_nested_state_extraction():
     assert wr._classify_aws("instance_running", resp) == ("done", "running")
     booting = {"Reservations": [{"Instances": [{"State": {"Name": "pending"}}]}]}
     assert wr._classify_aws("instance_running", booting)[0] == "pending"
-    assert wr._classify_aws("instance_running", {"Reservations": []}) == ("pending", None)
+    assert wr._classify_aws("instance_running", {"Reservations": []}) == (
+        "pending",
+        None,
+    )
 
 
 def test_unknown_kind_raises():
@@ -60,12 +75,23 @@ def test_probe_unwraps_aws_query_envelope(monkeypatch):
         awt,
         "aws_query",
         lambda **kw: _json.dumps(
-            {"status": "ok", "account": "nelanco", "response": {"Images": [{"State": "available"}]}}
+            {
+                "status": "ok",
+                "account": "nelanco",
+                "response": {"Images": [{"State": "available"}]},
+            }
         ),
     )
-    assert wr._probe_aws("ami", "ami-1", "nelanco", "us-east-1") == ("done", "available")
+    assert wr._probe_aws("ami", "ami-1", "nelanco", "us-east-1") == (
+        "done",
+        "available",
+    )
 
-    monkeypatch.setattr(awt, "aws_query", lambda **kw: _json.dumps({"status": "error", "reason": "boom"}))
+    monkeypatch.setattr(
+        awt,
+        "aws_query",
+        lambda **kw: _json.dumps({"status": "error", "reason": "boom"}),
+    )
     assert wr._probe_aws("ami", "ami-1", "nelanco", "us-east-1") == ("pending", None)
 
 
@@ -83,9 +109,15 @@ def _import_watch_tools():
 
 def test_session_parse():
     wt = _import_watch_tools()
-    assert wt._chat_thread_from_session("tg:-1003919341801:780") == ("-1003919341801", "780")
+    assert wt._chat_thread_from_session("tg:-1003919341801:780") == (
+        "-1003919341801",
+        "780",
+    )
     assert wt._chat_thread_from_session("tg:-100:0") == ("-100", None)  # bare topic
-    assert wt._chat_thread_from_session("pubkeyabc:websess") == (None, None)  # DApp session
+    assert wt._chat_thread_from_session("pubkeyabc:websess") == (
+        None,
+        None,
+    )  # DApp session
     assert wt._chat_thread_from_session(None) == (None, None)
 
 

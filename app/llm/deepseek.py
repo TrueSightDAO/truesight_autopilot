@@ -71,7 +71,9 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 
         parsed = self._parse_xml_tool_calls(content)
         if parsed:
-            logger.info("XML tool-call fallback: parsed %d calls from content", len(parsed))
+            logger.info(
+                "XML tool-call fallback: parsed %d calls from content", len(parsed)
+            )
             # Rewrite message in-place so standard path works downstream
             message["tool_calls"] = parsed
             message["content"] = self._strip_provider_artifacts(content)

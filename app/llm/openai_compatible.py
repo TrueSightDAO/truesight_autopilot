@@ -106,8 +106,12 @@ class OpenAICompatibleProvider(LLMProvider):
             body = resp.json()
         except httpx.HTTPStatusError as exc:
             err_body = exc.response.text[:1000]
-            logger.error("%s API error %s: %s", self.name, exc.response.status_code, err_body)
-            raise LLMError(f"{self.name} API error {exc.response.status_code}: {err_body}") from exc
+            logger.error(
+                "%s API error %s: %s", self.name, exc.response.status_code, err_body
+            )
+            raise LLMError(
+                f"{self.name} API error {exc.response.status_code}: {err_body}"
+            ) from exc
         except httpx.RequestError as exc:
             logger.error("%s request failed: %s", self.name, exc)
             raise LLMError(f"{self.name} request failed: {exc}") from exc

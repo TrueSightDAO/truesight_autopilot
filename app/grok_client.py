@@ -111,7 +111,9 @@ def grok_analyze_images(
     user_parts: list[dict[str, Any]] = [
         {
             "type": "text",
-            "text": f"Analyze these photos.\n\n{user_context}" if user_context else "Analyze these photos.",
+            "text": f"Analyze these photos.\n\n{user_context}"
+            if user_context
+            else "Analyze these photos.",
         }
     ]
 
@@ -129,7 +131,10 @@ def grok_analyze_images(
         user_parts.append(
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{_b64(img_bytes)}", "detail": "high"},
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{_b64(img_bytes)}",
+                    "detail": "high",
+                },
             }
         )
 
@@ -160,7 +165,9 @@ def grok_analyze_images(
         content = resp.json()["choices"][0]["message"]["content"]
         return _parse_grok_response(content)
     except httpx.HTTPStatusError as exc:
-        logger.error("Grok API error %s: %s", exc.response.status_code, exc.response.text[:500])
+        logger.error(
+            "Grok API error %s: %s", exc.response.status_code, exc.response.text[:500]
+        )
         return {
             "status": "error",
             "message": f"Grok API error {exc.response.status_code}",

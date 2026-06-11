@@ -19,7 +19,11 @@ def test_parse_ship_target():
 def test_parse_callback_data():
     assert bd.parse_callback_data("ship:dapp_beta:12") == ("ship", "dapp_beta", 12)
     assert bd.parse_callback_data("cancel") == ("cancel", None, None)
-    assert bd.parse_callback_data("ship:dapp_beta") == ("ship", None, None)  # malformed → safe
+    assert bd.parse_callback_data("ship:dapp_beta") == (
+        "ship",
+        None,
+        None,
+    )  # malformed → safe
 
 
 def test_is_beta_repo(monkeypatch):
@@ -55,7 +59,9 @@ def test_ship_pr_rejects_non_beta_repo(monkeypatch):
 def test_ship_pr_refuses_when_ci_not_green(monkeypatch):
     monkeypatch.setattr(bd.settings, "beta_deploy_gate_enabled", True)
     monkeypatch.setattr(bd.settings, "beta_deploy_repos", ["dapp_beta"])
-    monkeypatch.setattr(bd, "check_ci_green", lambda repo, pr: (False, "CI still running: build"))
+    monkeypatch.setattr(
+        bd, "check_ci_green", lambda repo, pr: (False, "CI still running: build")
+    )
     res = bd.ship_pr("dapp_beta", 12)
     assert res["ok"] is False and "not shipping" in res["message"].lower()
 

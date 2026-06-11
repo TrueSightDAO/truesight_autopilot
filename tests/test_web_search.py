@@ -33,8 +33,18 @@ def test_web_search_success(monkeypatch):
         {
             "answer": "A synthesized answer.",
             "results": [
-                {"title": "Result One", "url": "https://example.com/1", "content": "snippet one", "score": 0.9},
-                {"title": "Result Two", "url": "https://example.com/2", "content": "snippet two", "score": 0.8},
+                {
+                    "title": "Result One",
+                    "url": "https://example.com/1",
+                    "content": "snippet one",
+                    "score": 0.9,
+                },
+                {
+                    "title": "Result Two",
+                    "url": "https://example.com/2",
+                    "content": "snippet two",
+                    "score": 0.8,
+                },
             ],
         },
         capture=capture,
@@ -84,7 +94,9 @@ def test_web_extract_success(monkeypatch):
     _mock_post(
         monkeypatch,
         {
-            "results": [{"url": "https://example.com/1", "raw_content": "full page text"}],
+            "results": [
+                {"url": "https://example.com/1", "raw_content": "full page text"}
+            ],
             "failed_results": [],
         },
         capture=capture,

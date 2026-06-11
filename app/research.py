@@ -68,7 +68,9 @@ def run_research(
             results = data.get("results", [])
             lines = []
             for r in results:
-                lines.append(f"**{r.get('title', 'Untitled')}**\n{r.get('url', '')}\n{r.get('content', '')[:500]}\n")
+                lines.append(
+                    f"**{r.get('title', 'Untitled')}**\n{r.get('url', '')}\n{r.get('content', '')[:500]}\n"
+                )
             answer = data.get("answer", "")
             if answer:
                 lines.insert(0, f"## Synthesised Answer\n{answer}\n")
@@ -101,7 +103,9 @@ def run_research(
                     logger.warning("Tavily extract failed: %s", fr.get("url"))
             lines = []
             for r in results:
-                lines.append(f"## {r.get('url', '')}\n{r.get('raw_content', '')[:5000]}\n")
+                lines.append(
+                    f"## {r.get('url', '')}\n{r.get('raw_content', '')[:5000]}\n"
+                )
             return "\n".join(lines) if lines else "No content extracted."
         except Exception as e:
             return f"Extract error: {e}"
@@ -189,7 +193,9 @@ def run_research(
         tasks=[task],
         verbose=True,
         step_callback=lambda step: (
-            on_progress(f"Research step: {step.get('tool', 'thinking')} — {str(step.get('output', ''))[:100]}")
+            on_progress(
+                f"Research step: {step.get('tool', 'thinking')} — {str(step.get('output', ''))[:100]}"
+            )
             if step
             else None
         ),

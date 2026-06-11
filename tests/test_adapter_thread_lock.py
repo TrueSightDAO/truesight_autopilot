@@ -19,7 +19,9 @@ os.environ.setdefault("AUTOPILOT_CHAT_URL", "http://localhost:8001")
 try:
     import app.telegram_adapter as ta
 except Exception as exc:  # noqa: BLE001
-    pytest.skip(f"app.telegram_adapter import unavailable: {exc}", allow_module_level=True)
+    pytest.skip(
+        f"app.telegram_adapter import unavailable: {exc}", allow_module_level=True
+    )
 
 
 def test_lock_identity():

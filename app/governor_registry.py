@@ -75,7 +75,10 @@ def load_governors(force_refresh: bool = False) -> dict:
     cache_url = os.getenv("GOVERNORS_RAW_URL", _DEFAULT_MEMBERS_URL)
 
     if not force_refresh and _cache["data"] is not None:
-        if _cache["url"] == cache_url and (now - _cache["fetched_at"]) < _CACHE_TTL_SECONDS:
+        if (
+            _cache["url"] == cache_url
+            and (now - _cache["fetched_at"]) < _CACHE_TTL_SECONDS
+        ):
             return _cache["data"]
 
     try:
@@ -94,7 +97,9 @@ def load_governors(force_refresh: bool = False) -> dict:
     except Exception as exc:
         import logging
 
-        logging.getLogger(__name__).warning("Failed to fetch remote dao_members.json: %s", exc)
+        logging.getLogger(__name__).warning(
+            "Failed to fetch remote dao_members.json: %s", exc
+        )
 
     local_path = settings.static_governors_json
     if local_path is not None:

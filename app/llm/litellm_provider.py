@@ -69,7 +69,9 @@ class LiteLLMProvider(LLMProvider):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": litellm_messages,
-            "temperature": temperature if temperature is not None else _settings.deepseek_temperature,
+            "temperature": temperature
+            if temperature is not None
+            else _settings.deepseek_temperature,
             "max_tokens": max_tokens or _settings.deepseek_max_tokens,
             "timeout": 120,
             "num_retries": 2,

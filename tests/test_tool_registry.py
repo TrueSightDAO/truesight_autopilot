@@ -90,7 +90,10 @@ def test_dispatch_returns_none_for_unknown_tool():
 
 def test_dispatch_returns_none_for_inline_orchestration():
     # Orchestration tools are still inline in main.py.
-    assert dispatch("submit_contribution", {"event_name": "x", "attributes": {}}, {}) is None
+    assert (
+        dispatch("submit_contribution", {"event_name": "x", "attributes": {}}, {})
+        is None
+    )
     assert dispatch("open_fix_pr", {"repo": "x", "issue_description": "y"}, {}) is None
 
 
