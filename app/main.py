@@ -1142,12 +1142,18 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             ledger = attributes.get("Destination Inventory File Location", "")
             summary = f"Move {qty}x {item} from {manager} to {recipient}" if item else f"Submit {event_name} for {qr}"
             command = f"truesight-dao-report-inventory-movement"
-            if manager: command += f' --manager-name "{manager}"'
-            if recipient: command += f' --recipient-name "{recipient}"'
-            if item: command += f' --inventory-item "{item}"'
-            if qr: command += f' --qr-code "{qr}"'
-            if qty: command += f' --quantity "{qty}"'
-            if ledger: command += f' --destination-inventory-file-location "{ledger}"'
+            if manager:
+                command += f' --manager-name "{manager}"'
+            if recipient:
+                command += f' --recipient-name "{recipient}"'
+            if item:
+                command += f' --inventory-item "{item}"'
+            if qr:
+                command += f' --qr-code "{qr}"'
+            if qty:
+                command += f' --quantity "{qty}"'
+            if ledger:
+                command += f' --destination-inventory-file-location "{ledger}"'
 
             proposal = {
                 "status": "pending_approval",
