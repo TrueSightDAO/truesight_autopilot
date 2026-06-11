@@ -1656,31 +1656,82 @@ _SIDE_EFFECT_TOOLS = {
 }
 
 
+# Tools whose own input (the command) is the useful detail, not their JSON output.
+_COMMAND_TOOLS = {"ssh_run", "run_command"}
+
+
+def _oneline(s: str) -> str:
+    r"""Collapse to a single clean line — also kills literal '\n'/'\t' that leak
+    from JSON-encoded tool results into a Telegram line."""
+    return re.sub(r"\s+", " ", str(s).replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")).strip()
+
+
 def _summarise_tool_result(result: str) -> str:
-    """One-line salient detail from a tool result — prefer a URL (PR/deploy), else
-    the first non-empty line."""
-    text = result or ""
-    urls = re.findall(r"https?://[^\s\"')]+", text)
-    if urls:
-        return urls[0]
-    for line in text.splitlines():
-        line = line.strip()
-        if line:
-            return line[:200]
+    """One short, human detail from a tool result. Prefer a URL; for JSON, pull a
+    salient field (never a bare '{'); else the first real line. '' if nothing useful."""
+    text = (result or "").strip()
+    if not text:
+        return ""
+    m = re.search(r"https?://[^\s\"'\\)]+", text)  # stop at backslash so '...repo\n' doesn't leak
+    if m:
+        return m.group(0)
+    if text[:1] in "{[":
+        try:
+            obj = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            obj = None
+        if isinstance(obj, dict):
+            for k in ("pr_url", "url", "html_url", "message", "error", "reason", "status", "stdout"):
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    return _oneline(v)[:140]
+            return ""  # structured but nothing worth quoting
+        if obj is not None:
+            return ""
+    for raw in text.splitlines():
+        line = _oneline(raw)
+        if line and line not in ("{", "[", "}", "]"):
+            return line[:140]
     return ""
 
 
+def _detail_for(name: str, args: object, result: str) -> str:
+    """Best one-line detail for a tool call: the command for shell tools, else a
+    summary of the result."""
+    if name in _COMMAND_TOOLS and isinstance(args, dict):
+        cmd = args.get("command") or args.get("cmd") or args.get("script") or ""
+        if cmd:
+            return _oneline(str(cmd))[:140]
+    return _summarise_tool_result(result if isinstance(result, str) else "")
+
+
 def _build_turn_report(tool_trace: list[dict]) -> str:
-    """Markdown footer enumerating the side-effecting actions this turn took.
-    Returns '' when the turn only read/searched (nothing worth reporting)."""
+    """Markdown footer enumerating the side-effecting actions this turn took,
+    GROUPED by tool with counts (so 16 ssh_run calls are one line, not sixteen
+    '• ssh run → {' lines), with up to a few distinct details each. Returns ''
+    when the turn only read/searched."""
     effects = [t for t in (tool_trace or []) if t.get("name") in _SIDE_EFFECT_TOOLS]
     if not effects:
         return ""
-    lines = ["", "———", "**✅ Done this turn — actions taken:**"]
+    groups: dict[str, list[str]] = {}
     for t in effects:
-        label = str(t.get("name", "")).replace("_", " ")
-        detail = _summarise_tool_result(t.get("result", ""))
-        lines.append(f"• `{label}`" + (f" → {detail}" if detail else ""))
+        name = str(t.get("name", ""))
+        groups.setdefault(name, []).append(_detail_for(name, t.get("args"), t.get("result", "")))
+    lines = ["", "———", "**✅ Done this turn — actions taken:**"]
+    for name, details in groups.items():
+        label = name.replace("_", " ")
+        count = len(details)
+        distinct: list[str] = []
+        for d in details:
+            if d and d not in distinct:
+                distinct.append(d)
+        head = f"• `{label}`" + (f" ×{count}" if count > 1 else "")
+        shown = distinct[:3]
+        if shown:
+            head += " → " + "; ".join(shown)
+            if len(distinct) > 3:
+                head += f"; …(+{len(distinct) - 3} more)"
+        lines.append(head)
     return "\n".join(lines)
 
 
@@ -1852,7 +1903,7 @@ async def _run_tool_round_loop(
                 yield _sse_event("tool", {"tool": func_name, "status": "done"})
                 logger.info("[%d] %sTOOL RESULT: %s result=%.300s", req_id, log_prefix, func_name, result_text[:300])
 
-                state["tool_trace"].append({"name": func_name, "result": result_text})
+                state["tool_trace"].append({"name": func_name, "args": func_args, "result": result_text})
                 history.append(
                     {
                         "role": "tool",
@@ -3043,7 +3094,7 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                 except (json.JSONDecodeError, TypeError):
                     func_args = {}
                 result_text = await _run_tool(func_name, func_args, history, session_id, gov_name)
-                tool_trace.append({"name": func_name, "result": result_text})
+                tool_trace.append({"name": func_name, "args": func_args, "result": result_text})
                 history.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
 
         # Force a clean text-only answer if we exhausted the budget, came back

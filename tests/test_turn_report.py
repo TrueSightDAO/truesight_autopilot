@@ -56,3 +56,39 @@ def test_summarise_prefers_url_then_first_line():
     assert m._summarise_tool_result("noise\nhttps://a.test/pr/1\nmore") == "https://a.test/pr/1"
     assert m._summarise_tool_result("\n\n  first real line\nsecond") == "first real line"
     assert m._summarise_tool_result("") == ""
+
+
+# ── regressions for the 2026-06-10 garbage report ────────────────────────────
+
+def test_json_result_never_shows_bare_brace():
+    # ssh_run returns a JSON object — must not surface a lone "{".
+    out = m._summarise_tool_result('{\n  "exit_code": 0,\n  "stdout": "ok done"\n}')
+    assert out != "{"
+    assert out == "ok done"  # pulls the salient field
+    # malformed/huge JSON that won't parse must still never yield "{"
+    assert m._summarise_tool_result('{ "stdout": "truncated...') != "{"
+
+
+def test_url_detail_strips_trailing_backslash_n():
+    # The exact leak: a URL with a literal \n glued on.
+    assert m._summarise_tool_result("pushed to https://github.com/TrueSightDAO/x\\nmore") == \
+        "https://github.com/TrueSightDAO/x"
+
+
+def test_repeated_tool_calls_are_grouped_with_count():
+    trace = [{"name": "ssh_run", "args": {"command": f"echo {i}"}, "result": "{}"} for i in range(16)]
+    trace.append({"name": "open_fix_pr", "result": "https://github.com/TrueSightDAO/x/pull/150"})
+    report = m._build_turn_report(trace)
+    # 16 ssh_run calls collapse to ONE grouped line, not sixteen.
+    assert report.count("ssh run") == 1
+    assert "×16" in report
+    assert report.count("→ {") == 0  # no bare-brace junk
+    assert "pull/150" in report
+    # the whole report stays compact (was 26+ lines / blew past Telegram's cap)
+    assert len(report.splitlines()) <= 8
+
+
+def test_command_tools_show_the_command_not_the_json():
+    trace = [{"name": "ssh_run", "args": {"command": "git checkout main"}, "result": '{"exit_code":0}'}]
+    report = m._build_turn_report(trace)
+    assert "git checkout main" in report
