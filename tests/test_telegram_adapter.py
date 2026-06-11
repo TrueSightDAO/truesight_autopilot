@@ -174,7 +174,8 @@ def test_handle_message_allowed_calls_chat(monkeypatch, sent):
     # real forum topic (is_topic_message=True) => threaded session + threaded routing
     ta.handle_message(_msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True),
                       allowed={111}, public_key="PK")
-    assert captured["message"] == "what shipped?"
+    # The message is now prefixed with Telegram context + handoff prefix
+    assert "what shipped?" in captured["message"]
     assert captured["session_id"] == "tg:555:7"
     assert captured["thread_id"] == 7
     assert captured["public_key"] == "PK"
