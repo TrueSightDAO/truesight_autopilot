@@ -2886,6 +2886,22 @@ async def queue_message(request: Request) -> JSONResponse:
     return JSONResponse({"queued": True, "position": position, "msg_id": msg_id})
 
 
+@app.get("/chat/progress")
+async def get_chat_progress(request: Request) -> JSONResponse:
+    """Read-only progress path — returns the live-progress snapshot for the
+    caller's session. Does NOT acquire the per-session lock, so a progress
+    query never blocks behind the running turn. Returns an empty snapshot
+    when nothing is running."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    snap = _render_progress(session_id)
+    if snap:
+        return JSONResponse({"running": True, "snapshot": snap})
+    return JSONResponse({"running": False, "snapshot": None})
+
+
 @app.get("/chat/queue")
 async def get_queue(request: Request) -> JSONResponse:
     """Return the current message queue for this session."""

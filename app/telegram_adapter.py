@@ -1112,6 +1112,30 @@ def handle_message(
         # Serialize the turn per topic so rapid-fire messages to the same thread
         # queue instead of racing; different topics still run in parallel.
         lock = _thread_dispatch_lock(chat_id, thread_id)
+
+        # PR2: progress-query immediate answer — lock-bypassing
+        # If the lock is held (a turn is running) AND the message is a short
+        # status-y phrase, answer immediately from the live-progress record
+        # without queuing or waiting for the lock.
+        if lock.locked() and _is_progress_query(dispatch_text):
+            try:
+                token = create_jwt(public_key)
+                headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
+                resp = httpx.get(
+                    f"{settings.autopilot_chat_url.rstrip('/')}/chat/progress",
+                    headers=headers,
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("running") and data.get("snapshot"):
+                        send_message(chat_id, f"📊 **Current progress:**\n{data['snapshot']}", thread_id)
+                    else:
+                        send_message(chat_id, "📊 Nothing running right now.", thread_id)
+                    return
+            except Exception:
+                pass  # fall through to normal queue if progress fetch fails
+
         _ack_queued_if_busy(chat_id, thread_id, lock)
         with lock:
             response = call_chat_with_progress(
