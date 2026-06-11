@@ -41,11 +41,16 @@ jobs:
       - name: Syntax check (compileall)
         run: python -m compileall -q app scripts
 
+      - name: Lint (ruff)
+        run: |
+          pip install -r requirements-dev.txt
+          ruff check app tests scripts
+
+      - name: Format check (ruff)
+        run: ruff format --check app tests scripts
+
       - name: Run tool smoke tests
         env:
-          # Auto-injected; gives the github call test rate-limited read access
-          # to public repos under TrueSightDAO. The smoke script also accepts
-          # TRUESIGHT_DAO_AUTOPILOT if you want to test against private repos.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/smoke_tools.py
 
