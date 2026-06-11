@@ -86,7 +86,9 @@ def rollup(records: list[dict]) -> dict[str, dict[str, float]]:
     return dict(by_provider)
 
 
-def submit_contribution(contributor: str, amount_usd: float, date_str: str, dry_run: bool = False) -> bool:
+def submit_contribution(
+    contributor: str, amount_usd: float, date_str: str, dry_run: bool = False
+) -> bool:
     """Submit a [CONTRIBUTION EVENT] to Edgar."""
     payload = {
         "Type": "USD",

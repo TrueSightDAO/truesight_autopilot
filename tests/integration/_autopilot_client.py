@@ -103,7 +103,9 @@ async def stream_chat(
     saw_done = False
     final_response: str | None = None
     async with httpx.AsyncClient(timeout=timeout) as cl:
-        async with cl.stream("POST", f"{url}/chat", json=body, headers=key.headers) as r:
+        async with cl.stream(
+            "POST", f"{url}/chat", json=body, headers=key.headers
+        ) as r:
             r.raise_for_status()
             async for raw in r.aiter_lines():
                 if not raw or not raw.startswith("data:"):
@@ -125,7 +127,9 @@ async def stream_chat(
     return {"events": events, "saw_done": saw_done, "final_response": final_response}
 
 
-async def queue_message(key: GovernorKey, message: str, *, url: str = DEFAULT_AUTOPILOT_URL) -> dict[str, Any]:
+async def queue_message(
+    key: GovernorKey, message: str, *, url: str = DEFAULT_AUTOPILOT_URL
+) -> dict[str, Any]:
     """POST a follow-up message to /chat/queue (mid-stream interjection)."""
     body = key.sign_payload(message)
     async with httpx.AsyncClient(timeout=10) as cl:
@@ -134,7 +138,9 @@ async def queue_message(key: GovernorKey, message: str, *, url: str = DEFAULT_AU
         return r.json()
 
 
-async def cancel_chat(key: GovernorKey, *, url: str = DEFAULT_AUTOPILOT_URL) -> dict[str, Any]:
+async def cancel_chat(
+    key: GovernorKey, *, url: str = DEFAULT_AUTOPILOT_URL
+) -> dict[str, Any]:
     """DELETE /chat/active/{session_short} — abort the in-flight stream."""
     async with httpx.AsyncClient(timeout=10) as cl:
         r = await cl.delete(

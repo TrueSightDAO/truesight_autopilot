@@ -18,7 +18,9 @@ _seen_nonces: set[str] = set()
 
 
 def _base64_to_bytes(b64: str) -> bytes:
-    normalized = b64.replace("\r", "").replace("\n", "").replace("-", "+").replace("_", "/")
+    normalized = (
+        b64.replace("\r", "").replace("\n", "").replace("-", "+").replace("_", "/")
+    )
     padded = normalized + "==="[: (4 - len(normalized) % 4) % 4]
     return base64.b64decode(padded)
 
@@ -33,7 +35,9 @@ def _import_spki_key(b64_spki: str):
     return public_key
 
 
-def verify_rsa_signature(payload_json: str, signature_b64: str, public_key_b64: str) -> bool:
+def verify_rsa_signature(
+    payload_json: str, signature_b64: str, public_key_b64: str
+) -> bool:
     """Verify an RSA-PKCS1-v1_5 / SHA-256 signature against a base64 SPKI public key."""
     try:
         from cryptography.hazmat.primitives import hashes
@@ -135,7 +139,9 @@ def verify_jwt(request: Request) -> str:
         )
 
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
         public_key = payload.get("sub")
         if not public_key:
             raise JWTError("No subject in token")

@@ -68,7 +68,9 @@ def upload_file_to_github(
 
     # Existing file? Fetch its sha so the PUT updates instead of failing.
     try:
-        head = httpx.get(url, headers=_github_headers(), params={"ref": branch}, timeout=15.0)
+        head = httpx.get(
+            url, headers=_github_headers(), params={"ref": branch}, timeout=15.0
+        )
         if head.status_code == 200 and isinstance(head.json(), dict):
             existing_sha = head.json().get("sha", "")
             if existing_sha:
@@ -165,11 +167,27 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
-                "path": {"type": "string", "description": "Path inside the repo, e.g. 'reports/market_analysis.md'."},
-                "content": {"type": "string", "description": "Plain-text content (auto base64-encoded)."},
-                "message": {"type": "string", "description": "Short one-line commit message (max 72 chars)."},
-                "branch": {"type": "string", "description": "Branch name. Default: main", "default": "main"},
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name under TrueSightDAO.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Path inside the repo, e.g. 'reports/market_analysis.md'.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Plain-text content (auto base64-encoded).",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Short one-line commit message (max 72 chars).",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch name. Default: main",
+                    "default": "main",
+                },
                 "content_base64": {
                     "type": "string",
                     "description": "Pre-base64-encoded content for binary uploads (JPGs, PDFs). Takes precedence over `content` when both are provided.",
@@ -200,14 +218,27 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "local_path": {"type": "string", "description": "Absolute path to the file on the autopilot host."},
-                "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
+                "local_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file on the autopilot host.",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name under TrueSightDAO.",
+                },
                 "path": {
                     "type": "string",
                     "description": "Path inside the repo, e.g. 'docs/aws-reports/attachments/case-123.jpg'.",
                 },
-                "message": {"type": "string", "description": "Short one-line commit message."},
-                "branch": {"type": "string", "description": "Branch name. Default: main", "default": "main"},
+                "message": {
+                    "type": "string",
+                    "description": "Short one-line commit message.",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch name. Default: main",
+                    "default": "main",
+                },
             },
             "required": ["local_path", "repo", "path", "message"],
         },

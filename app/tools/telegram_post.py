@@ -28,7 +28,10 @@ logger = logging.getLogger("autopilot.tools.telegram_post")
 
 
 def post_to_telegram_topic(
-    message: str, thread_id: int | str, chat_id: str | None = None, session_id: str | None = None
+    message: str,
+    thread_id: int | str,
+    chat_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     message = (message or "").strip()
     if not message:
@@ -43,12 +46,19 @@ def post_to_telegram_topic(
 
     token = settings.telegram_bot_api_key
     if not token:
-        return {"status": "error", "reason": "TELEGRAM_BOT_API_KEY not configured on this box"}
+        return {
+            "status": "error",
+            "reason": "TELEGRAM_BOT_API_KEY not configured on this box",
+        }
 
     target = (
         chat_id
         or _chat_id_from_session(session_id)
-        or (str(settings.telegram_home_group_id) if settings.telegram_home_group_id else None)
+        or (
+            str(settings.telegram_home_group_id)
+            if settings.telegram_home_group_id
+            else None
+        )
     )
     if not target:
         return {
@@ -104,8 +114,14 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "message": {"type": "string", "description": "The message text to post into the topic."},
-            "thread_id": {"type": "integer", "description": "The existing topic's message_thread_id (e.g. 1955)."},
+            "message": {
+                "type": "string",
+                "description": "The message text to post into the topic.",
+            },
+            "thread_id": {
+                "type": "integer",
+                "description": "The existing topic's message_thread_id (e.g. 1955).",
+            },
             "chat_id": {
                 "type": "string",
                 "description": "Optional explicit group chat id; defaults to current/working group.",

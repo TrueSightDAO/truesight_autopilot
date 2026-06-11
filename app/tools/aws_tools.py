@@ -186,7 +186,9 @@ def aws_query(
         )
 
     # Drop boto's ResponseMetadata noise but keep RequestId for tracing.
-    meta = response.pop("ResponseMetadata", None) if isinstance(response, dict) else None
+    meta = (
+        response.pop("ResponseMetadata", None) if isinstance(response, dict) else None
+    )
     request_id = meta.get("RequestId") if isinstance(meta, dict) else None
 
     logger.info(
@@ -230,7 +232,11 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "account": {"type": "string", "description": "AWS account label.", "enum": ["explorya", "nelanco"]},
+            "account": {
+                "type": "string",
+                "description": "AWS account label.",
+                "enum": ["explorya", "nelanco"],
+            },
             "service": {
                 "type": "string",
                 "description": "boto3 service name, e.g. 'ec2', 's3', 'logs', 'cloudwatch', 'ce'.",
@@ -239,8 +245,14 @@ TOOL_SPEC = ToolSpec(
                 "type": "string",
                 "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'RebootInstances'.",
             },
-            "parameters": {"type": "object", "description": "Operation parameters as a JSON object."},
-            "region": {"type": "string", "description": "Override the account's default region for this call."},
+            "parameters": {
+                "type": "object",
+                "description": "Operation parameters as a JSON object.",
+            },
+            "region": {
+                "type": "string",
+                "description": "Override the account's default region for this call.",
+            },
             "confirm_write": {
                 "type": "boolean",
                 "description": "Required true for write-class (mutating) operations. Leave unset for reads.",

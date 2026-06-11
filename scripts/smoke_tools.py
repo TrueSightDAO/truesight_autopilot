@@ -56,7 +56,9 @@ def _build_call_tests():
 
     from app.tools import fs_tools, github_tools  # noqa: F401
 
-    has_gh_token = bool(_os.getenv("TRUESIGHT_DAO_AUTOPILOT") or _os.getenv("GITHUB_TOKEN"))
+    has_gh_token = bool(
+        _os.getenv("TRUESIGHT_DAO_AUTOPILOT") or _os.getenv("GITHUB_TOKEN")
+    )
 
     def fs_list_repo_root() -> dict:
         out = fs_tools.list_directory(str(REPO_ROOT))
@@ -66,18 +68,27 @@ def _build_call_tests():
         # tolerate any of the common naming conventions
         entries = out.get("files") or out.get("entries") or out.get("items") or []
         names = {e.get("name") for e in entries if isinstance(e, dict)}
-        assert "app" in names, f"expected 'app' in repo root listing, got {sorted(names)[:10]}"
+        assert "app" in names, (
+            f"expected 'app' in repo root listing, got {sorted(names)[:10]}"
+        )
         return {"ok": True, "n_entries": len(entries)}
 
     def gh_read_known_file() -> dict:
         out = github_tools.read_repo_file("agentic_ai_context", "README.md")
         assert isinstance(out, dict), f"read_repo_file returned non-dict: {type(out)}"
         # Either a successful read with 'content', or an error key — both are valid shapes
-        assert "content" in out or "error" in out, f"unexpected shape: {list(out.keys())}"
+        assert "content" in out or "error" in out, (
+            f"unexpected shape: {list(out.keys())}"
+        )
         return {"ok": True, "shape": list(out.keys())}
 
     tests = [
-        ("app.tools.fs_tools.list_directory(repo_root)", "fs_tools", fs_list_repo_root, {}),
+        (
+            "app.tools.fs_tools.list_directory(repo_root)",
+            "fs_tools",
+            fs_list_repo_root,
+            {},
+        ),
     ]
     if has_gh_token:
         tests.append(
@@ -104,19 +115,31 @@ def _check_llm_schemas() -> dict:
         try:
             json.dumps(s)
         except TypeError as e:
-            raise AssertionError(f"schema not JSON-serializable: {s.get('function', {}).get('name', '?')} — {e}") from e
+            raise AssertionError(
+                f"schema not JSON-serializable: {s.get('function', {}).get('name', '?')} — {e}"
+            ) from e
         name = s.get("function", {}).get("name")
         assert name, f"schema missing function.name: {s}"
         assert name not in seen_names, f"duplicate schema name: {name}"
         seen_names.add(name)
-    return {"ok": True, "n_schemas": len(schemas), "names_sample": sorted(seen_names)[:5]}
+    return {
+        "ok": True,
+        "n_schemas": len(schemas),
+        "names_sample": sorted(seen_names)[:5],
+    }
 
 
 def _check_app_routes() -> dict:
     """Confirm key endpoints are wired in the FastAPI app."""
     from app import main as _main
 
-    expected_routes = {"/health", "/chat", "/chat/queue", "/chat/active/{session_short}", "/sessions/new"}
+    expected_routes = {
+        "/health",
+        "/chat",
+        "/chat/queue",
+        "/chat/active/{session_short}",
+        "/sessions/new",
+    }
     have = {r.path for r in _main.app.routes if hasattr(r, "path")}
     missing = expected_routes - have
     assert not missing, f"missing routes: {missing}"
@@ -133,7 +156,9 @@ def main() -> int:
             importlib.import_module(mod_path)
             passes.append(f"import: {mod_path}")
         except Exception as e:
-            failures.append(f"import: {mod_path} — {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            failures.append(
+                f"import: {mod_path} — {type(e).__name__}: {e}\n{traceback.format_exc()}"
+            )
 
     # 2. Call tests (guarded — if the lazy build itself fails, that's a failure)
     try:
@@ -142,23 +167,31 @@ def main() -> int:
                 result = fn()
                 passes.append(f"call: {label} — {result}")
             except Exception as e:
-                failures.append(f"call: {label} — {type(e).__name__}: {e}\n{traceback.format_exc()}")
+                failures.append(
+                    f"call: {label} — {type(e).__name__}: {e}\n{traceback.format_exc()}"
+                )
     except Exception as e:
-        failures.append(f"call test setup failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        failures.append(
+            f"call test setup failed: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
 
     # 3. LLM schema check
     try:
         result = _check_llm_schemas()
         passes.append(f"llm_schemas: {result}")
     except Exception as e:
-        failures.append(f"llm_schemas: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        failures.append(
+            f"llm_schemas: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
 
     # 4. FastAPI route check
     try:
         result = _check_app_routes()
         passes.append(f"app_routes: {result}")
     except Exception as e:
-        failures.append(f"app_routes: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        failures.append(
+            f"app_routes: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
 
     print(f"\nSmoke tests: {len(passes)} passed, {len(failures)} failed.\n")
     for p in passes:

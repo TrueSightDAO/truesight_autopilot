@@ -150,7 +150,9 @@ def _truncate(s: str) -> tuple[str, bool]:
     return s[-_MAX_OUTPUT_CHARS:], True
 
 
-def ssh_run(host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS) -> dict[str, Any]:
+def ssh_run(
+    host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS
+) -> dict[str, Any]:
     """Run ``command`` on a fleet host over SSH; return rc/stdout/stderr."""
     if not host or not command:
         return _err("host and command are required")
@@ -235,7 +237,10 @@ TOOL_SPEC = ToolSpec(
                 "description": "Fleet host label.",
                 "enum": sorted(FLEET.keys()),
             },
-            "command": {"type": "string", "description": "Shell command to run on the host."},
+            "command": {
+                "type": "string",
+                "description": "Shell command to run on the host.",
+            },
             "timeout_secs": {
                 "type": "integer",
                 "description": f"Timeout in seconds (default {_DEFAULT_TIMEOUT_SECS}, max {_MAX_TIMEOUT_SECS}).",

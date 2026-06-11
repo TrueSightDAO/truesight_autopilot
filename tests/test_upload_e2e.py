@@ -83,7 +83,9 @@ class TestBackendUpload:
         }
         payload_str = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         private_key = load_private_key(priv)
-        sig = private_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())
+        sig = private_key.sign(
+            payload_str.encode(), padding.PKCS1v15(), hashes.SHA256()
+        )
         signature = base64.b64encode(sig).decode()
 
         img = _ensure_test_image()
@@ -98,7 +100,9 @@ class TestBackendUpload:
                 },
                 timeout=30,
             )
-        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+        assert r.status_code == 200, (
+            f"Expected 200, got {r.status_code}: {r.text[:200]}"
+        )
         assert r.headers.get("content-type", "").startswith("text/event-stream")
         body = r.text
         assert "data:" in body, "Expected SSE data events"
@@ -119,7 +123,9 @@ class TestBackendUpload:
         }
         payload_str = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         private_key = load_private_key(priv)
-        sig = private_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())
+        sig = private_key.sign(
+            payload_str.encode(), padding.PKCS1v15(), hashes.SHA256()
+        )
         signature = base64.b64encode(sig).decode()
 
         r = requests.post(
@@ -147,7 +153,9 @@ class TestBackendUpload:
         }
         payload_str = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         private_key = load_private_key(priv)
-        sig = private_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())
+        sig = private_key.sign(
+            payload_str.encode(), padding.PKCS1v15(), hashes.SHA256()
+        )
         signature = base64.b64encode(sig).decode()
 
         img = _ensure_test_image()
@@ -218,11 +226,15 @@ class TestUploadE2E:
 
         # Wait for the user message to appear, then eventually the bot response
         page.wait_for_selector("#chat-messages .message.user", timeout=5000)
-        page.wait_for_selector("#chat-messages .message.bot:not(:first-child)", timeout=90000)
+        page.wait_for_selector(
+            "#chat-messages .message.bot:not(:first-child)", timeout=90000
+        )
 
         messages = page.locator("#chat-messages .message")
         count = messages.count()
-        assert count >= 2, f"Expected at least 2 messages (greeting + response), got {count}"
+        assert count >= 2, (
+            f"Expected at least 2 messages (greeting + response), got {count}"
+        )
         last_text = messages.nth(count - 1).locator(".text").inner_text()
         assert len(last_text) > 0, "Bot response should not be empty"
 
@@ -248,7 +260,9 @@ class TestUploadE2E:
 
         # Wait for bot response
         page.wait_for_selector("#chat-messages .message.user", timeout=5000)
-        page.wait_for_selector("#chat-messages .message.bot:not(:first-child)", timeout=120000)
+        page.wait_for_selector(
+            "#chat-messages .message.bot:not(:first-child)", timeout=120000
+        )
 
         messages = page.locator("#chat-messages .message")
         count = messages.count()

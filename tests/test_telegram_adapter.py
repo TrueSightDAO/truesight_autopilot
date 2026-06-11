@@ -54,7 +54,11 @@ def test_extract_attachment_file_id():
 
 def test_call_chat_with_typing_refreshes_indicator(monkeypatch):
     typing_calls = {"n": 0}
-    monkeypatch.setattr(ta, "send_typing", lambda *a, **k: typing_calls.__setitem__("n", typing_calls["n"] + 1))
+    monkeypatch.setattr(
+        ta,
+        "send_typing",
+        lambda *a, **k: typing_calls.__setitem__("n", typing_calls["n"] + 1),
+    )
     monkeypatch.setattr(ta, "_TYPING_INTERVAL", 0.05)
 
     def slow_call(message, session_id, public_key):
@@ -116,7 +120,9 @@ def test_call_chat_whitespace_response_falls_back(monkeypatch):
     monkeypatch.setattr(ta, "create_jwt", lambda pk: "tok")
 
     def fake_post(url, json=None, headers=None, timeout=None):  # noqa: A002
-        return httpx.Response(200, json={"response": "  \n "}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200, json={"response": "  \n "}, request=httpx.Request("POST", url)
+        )
 
     monkeypatch.setattr(ta.httpx, "post", fake_post)
     out = ta.call_chat("q", "tg:1:0", "PK")
@@ -145,7 +151,9 @@ def sent(monkeypatch):
     monkeypatch.setattr(
         ta,
         "send_message",
-        lambda chat_id, text, thread_id=None: calls.append({"chat_id": chat_id, "text": text, "thread_id": thread_id}),
+        lambda chat_id, text, thread_id=None: calls.append(
+            {"chat_id": chat_id, "text": text, "thread_id": thread_id}
+        ),
     )
     monkeypatch.setattr(ta, "send_typing", lambda *a, **k: None)
     return calls
@@ -180,12 +188,20 @@ def test_handle_message_allowed_calls_chat(monkeypatch, sent):
         ta,
         "call_chat_with_progress",
         lambda chat_id, thread_id, message, session_id, public_key: captured.update(
-            chat_id=chat_id, thread_id=thread_id, message=message, session_id=session_id, public_key=public_key
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message=message,
+            session_id=session_id,
+            public_key=public_key,
         ),
     )
     # real forum topic (is_topic_message=True) => threaded session + threaded routing
     ta.handle_message(
-        _msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True), allowed={111}, public_key="PK"
+        _msg(
+            user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True
+        ),
+        allowed={111},
+        public_key="PK",
     )
     assert "what shipped?" in captured["message"]
     assert captured["session_id"] == "tg:555:7"
@@ -204,19 +220,27 @@ def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
             session_id=session_id, thread_id=thread_id
         ),
     )
-    ta.handle_message(_msg(user_id=111, chat_id=555, text="hi", thread_id=4242), allowed={111}, public_key="PK")
+    ta.handle_message(
+        _msg(user_id=111, chat_id=555, text="hi", thread_id=4242),
+        allowed={111},
+        public_key="PK",
+    )
     assert captured["session_id"] == "tg:555:0"
     assert captured["thread_id"] is None
 
 
 def test_handle_message_photo_routes_with_path(monkeypatch, sent):
     # B4: a photo message downloads the file and injects its path for the QR/fs tools
-    monkeypatch.setattr(ta, "download_telegram_file", lambda fid: "/tmp/tg_attachments/x.jpg")
+    monkeypatch.setattr(
+        ta, "download_telegram_file", lambda fid: "/tmp/tg_attachments/x.jpg"
+    )
     captured = {}
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: captured.update(message=message),
+        lambda chat_id, thread_id, message, session_id, public_key: captured.update(
+            message=message
+        ),
     )
     msg = {
         "chat": {"id": 555},
@@ -249,7 +273,9 @@ def test_send_message_retries_without_thread_on_400(monkeypatch):
 
 def test_handle_message_help_no_chat_call(monkeypatch, sent):
     called = {"n": 0}
-    monkeypatch.setattr(ta, "call_chat", lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "x")
+    monkeypatch.setattr(
+        ta, "call_chat", lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "x"
+    )
     ta.handle_message(_msg(user_id=111, text="/help"), allowed={111}, public_key="PK")
     assert called["n"] == 0
     assert sent and "private DAO assistant" in sent[0]["text"]

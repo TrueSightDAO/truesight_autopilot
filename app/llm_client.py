@@ -47,7 +47,9 @@ class LLMClient:
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools,
-                temperature=temperature if temperature is not None else self.temperature,
+                temperature=temperature
+                if temperature is not None
+                else self.temperature,
                 max_tokens=max_tokens or self.max_tokens,
                 **extra,
             )
@@ -85,13 +87,17 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> str:
         """Simple completion (used by diagnosis engine)."""
-        resp = self.chat(system, messages, temperature=temperature, max_tokens=max_tokens)
+        resp = self.chat(
+            system, messages, temperature=temperature, max_tokens=max_tokens
+        )
         return self.extract_text(resp)
 
     def extract_text(self, completion: dict[str, Any]) -> str:
         choices = completion.get("choices", [])
         if not choices:
-            logger.warning("LLM response has no choices: %s", json.dumps(completion)[:500])
+            logger.warning(
+                "LLM response has no choices: %s", json.dumps(completion)[:500]
+            )
             return "(no response)"
         message = choices[0].get("message", {})
         content = message.get("content")

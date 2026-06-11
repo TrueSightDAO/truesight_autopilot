@@ -42,11 +42,18 @@ async def run() -> int:
 
     def on_event(t: str, data: dict) -> None:
         nonlocal seen_tool
-        if t == "tool" and data.get("tool") == "read_repo_file" and data.get("status") == "calling":
+        if (
+            t == "tool"
+            and data.get("tool") == "read_repo_file"
+            and data.get("status") == "calling"
+        ):
             seen_tool = True
             print("  → tool: read_repo_file calling", flush=True)
         elif t == "heartbeat":
-            print(f"  → heartbeat phase={data.get('phase')} elapsed={data.get('elapsed_s')}s", flush=True)
+            print(
+                f"  → heartbeat phase={data.get('phase')} elapsed={data.get('elapsed_s')}s",
+                flush=True,
+            )
 
     result = await stream_chat(key, PROMPT, on_event=on_event)
 

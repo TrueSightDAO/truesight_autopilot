@@ -13,13 +13,17 @@ os.environ.setdefault("AUTOPILOT_CHAT_URL", "http://localhost:8001")
 try:
     import app.telegram_adapter as ta
 except Exception as exc:  # noqa: BLE001
-    pytest.skip(f"app.telegram_adapter import unavailable: {exc}", allow_module_level=True)
+    pytest.skip(
+        f"app.telegram_adapter import unavailable: {exc}", allow_module_level=True
+    )
 
 
 def test_ack_sent_when_topic_busy(monkeypatch):
     sent: list[tuple] = []
     monkeypatch.setattr(
-        ta, "send_message", lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id))
+        ta,
+        "send_message",
+        lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id)),
     )
 
     lock = ta._thread_dispatch_lock(-100, 5)
@@ -38,7 +42,9 @@ def test_ack_sent_when_topic_busy(monkeypatch):
 def test_no_ack_when_topic_idle(monkeypatch):
     sent: list[tuple] = []
     monkeypatch.setattr(
-        ta, "send_message", lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id))
+        ta,
+        "send_message",
+        lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id)),
     )
 
     lock = ta._thread_dispatch_lock(-100, 6)  # not held

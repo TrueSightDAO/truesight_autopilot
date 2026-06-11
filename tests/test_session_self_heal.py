@@ -21,7 +21,9 @@ os.environ.setdefault("SESSION_LOG_DIR", tempfile.mkdtemp())
 try:
     import app.main as m
 except Exception as exc:  # noqa: BLE001
-    pytest.skip(f"app.main import unavailable in this env: {exc}", allow_module_level=True)
+    pytest.skip(
+        f"app.main import unavailable in this env: {exc}", allow_module_level=True
+    )
 
 
 def _assistant(call_ids):
@@ -29,7 +31,12 @@ def _assistant(call_ids):
         "role": "assistant",
         "content": "",
         "tool_calls": [
-            {"id": cid, "type": "function", "function": {"name": "do_thing", "arguments": "{}"}} for cid in call_ids
+            {
+                "id": cid,
+                "type": "function",
+                "function": {"name": "do_thing", "arguments": "{}"},
+            }
+            for cid in call_ids
         ],
     }
 

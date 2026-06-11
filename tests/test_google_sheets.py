@@ -36,7 +36,9 @@ def test_happy_path_returns_rows(monkeypatch):
         "values": [["Header1", "Header2"], ["v1", "v2"]],
     }
 
-    with patch("googleapiclient.discovery.build", return_value=fake_service) as build_mock:
+    with patch(
+        "googleapiclient.discovery.build", return_value=fake_service
+    ) as build_mock:
         out = json.loads(gs.read_google_sheet("sheetid", "Sheet1!A1:B2"))
 
     assert out["status"] == "ok"

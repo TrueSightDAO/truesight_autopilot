@@ -40,7 +40,9 @@ def test_dry_run_command_shape(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout="ok dry-run", stderr="")
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="ok dry-run", stderr=""
+        )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = json.loads(gdp.gas_deploy_project("1Dj3-fake"))
@@ -60,7 +62,9 @@ def test_push_without_hooks_passes_no_hooks_flag(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout="pushed", stderr="")
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="pushed", stderr=""
+        )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = json.loads(gdp.gas_deploy_project("1Dj3-fake", push=True))
@@ -80,7 +84,9 @@ def test_push_with_hooks_passes_with_hooks_flag(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout="pushed + hooks", stderr="")
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="pushed + hooks", stderr=""
+        )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = json.loads(gdp.gas_deploy_project("1Dj3-fake", push=True, with_hooks=True))
@@ -170,5 +176,8 @@ def test_tool_gated_on_infrastructure_role():
     """Regression: SRE role has access (it's a deploy tool)."""
     from app.roles import ROLES, get_tool_schemas_for_role
 
-    infra_names = {t["function"]["name"] for t in get_tool_schemas_for_role(ROLES["infrastructure"])}
+    infra_names = {
+        t["function"]["name"]
+        for t in get_tool_schemas_for_role(ROLES["infrastructure"])
+    }
     assert "gas_deploy_project" in infra_names

@@ -37,7 +37,12 @@ def web_search(
     if not query or not query.strip():
         return json.dumps({"status": "error", "message": "query is required"})
     if not settings.tavily_api_key:
-        return json.dumps({"status": "error", "message": "TAVILY_API is not configured on the server."})
+        return json.dumps(
+            {
+                "status": "error",
+                "message": "TAVILY_API is not configured on the server.",
+            }
+        )
 
     depth = search_depth if search_depth in ("basic", "advanced") else "basic"
     payload = {
@@ -87,9 +92,16 @@ def web_extract(urls: list[str] | str) -> str:
         urls = [urls]
     urls = [u.strip() for u in (urls or []) if u and u.strip()]
     if not urls:
-        return json.dumps({"status": "error", "message": "at least one url is required"})
+        return json.dumps(
+            {"status": "error", "message": "at least one url is required"}
+        )
     if not settings.tavily_api_key:
-        return json.dumps({"status": "error", "message": "TAVILY_API is not configured on the server."})
+        return json.dumps(
+            {
+                "status": "error",
+                "message": "TAVILY_API is not configured on the server.",
+            }
+        )
 
     payload = {"api_key": settings.tavily_api_key, "urls": urls[:10]}
     try:
@@ -110,7 +122,12 @@ def web_extract(urls: list[str] | str) -> str:
             for r in data.get("results", [])
         ]
         failed = data.get("failed_results", [])
-        logger.info("web_extract ok: urls=%d extracted=%d failed=%d", len(urls), len(results), len(failed))
+        logger.info(
+            "web_extract ok: urls=%d extracted=%d failed=%d",
+            len(urls),
+            len(results),
+            len(failed),
+        )
         return json.dumps(
             {
                 "status": "ok",
@@ -136,14 +153,22 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "The search query."},
-                "max_results": {"type": "integer", "description": "Number of results (1-10).", "default": 5},
+                "max_results": {
+                    "type": "integer",
+                    "description": "Number of results (1-10).",
+                    "default": 5,
+                },
                 "search_depth": {
                     "type": "string",
                     "description": "'basic' (fast) or 'advanced' (deeper).",
                     "enum": ["basic", "advanced"],
                     "default": "basic",
                 },
-                "include_answer": {"type": "boolean", "description": "Include a synthesized answer.", "default": True},
+                "include_answer": {
+                    "type": "boolean",
+                    "description": "Include a synthesized answer.",
+                    "default": True,
+                },
             },
             "required": ["query"],
         },

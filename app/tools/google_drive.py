@@ -42,7 +42,9 @@ def _err(reason: str, **extra: Any) -> str:
 def _build_service(service_account_name: str | None):
     creds = load_credentials(service_account_name, DRIVE_SCOPES)
     if creds is None:
-        return None, _err("credentials missing", service_account_name=service_account_name)
+        return None, _err(
+            "credentials missing", service_account_name=service_account_name
+        )
     try:
         from googleapiclient.discovery import build  # type: ignore
 
@@ -65,7 +67,11 @@ def read_drive_file(
         return err  # type: ignore[return-value]
 
     try:
-        meta = service.files().get(fileId=file_id, fields="id,name,mimeType,size,modifiedTime").execute()
+        meta = (
+            service.files()
+            .get(fileId=file_id, fields="id,name,mimeType,size,modifiedTime")
+            .execute()
+        )
     except Exception as e:
         return _err(str(e), file_id=file_id)
 
@@ -97,7 +103,10 @@ def read_drive_file(
         raw = raw[:_MAX_BYTES]
 
     # Try to decode as text; fall back to base64 for binary.
-    if effective_mime.startswith("text/") or effective_mime in {"application/json", "application/csv"}:
+    if effective_mime.startswith("text/") or effective_mime in {
+        "application/json",
+        "application/csv",
+    }:
         try:
             content = raw.decode("utf-8")
             encoding = "text"
@@ -182,8 +191,14 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "file_id": {"type": "string", "description": "The Drive file ID."},
-                "mime_type": {"type": "string", "description": "Optional explicit export/download MIME type."},
-                "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+                "mime_type": {
+                    "type": "string",
+                    "description": "Optional explicit export/download MIME type.",
+                },
+                "service_account_name": {
+                    "type": "string",
+                    "description": "Optional SA name (see read_google_sheet).",
+                },
             },
             "required": ["file_id"],
         },
@@ -205,7 +220,10 @@ TOOL_SPECS = [
                     "description": "Max files to return (1-200). Default 50.",
                     "default": 50,
                 },
-                "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
+                "service_account_name": {
+                    "type": "string",
+                    "description": "Optional SA name (see read_google_sheet).",
+                },
             },
             "required": ["folder_id"],
         },

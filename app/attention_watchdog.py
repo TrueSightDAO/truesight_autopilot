@@ -180,7 +180,9 @@ async def run() -> int:
     from telethon import TelegramClient, events
 
     if not settings.telegram_api_id or not settings.telegram_api_hash:
-        logger.error("TELEGRAM_API_ID / TELEGRAM_API_HASH not set — see scripts/telethon_login.py docstring. Exiting.")
+        logger.error(
+            "TELEGRAM_API_ID / TELEGRAM_API_HASH not set — see scripts/telethon_login.py docstring. Exiting."
+        )
         return 1
 
     client = TelegramClient(
@@ -190,7 +192,9 @@ async def run() -> int:
     )
     await client.connect()
     if not await client.is_user_authorized():
-        logger.error("Telethon session not authorized — run .venv/bin/python scripts/telethon_login.py once. Exiting.")
+        logger.error(
+            "Telethon session not authorized — run .venv/bin/python scripts/telethon_login.py once. Exiting."
+        )
         await client.disconnect()
         return 1
 
@@ -219,7 +223,15 @@ async def run() -> int:
             chat_key = str(event.chat_id)
             title = (
                 getattr(chat, "title", None)
-                or " ".join(filter(None, [getattr(chat, "first_name", None), getattr(chat, "last_name", None)]))
+                or " ".join(
+                    filter(
+                        None,
+                        [
+                            getattr(chat, "first_name", None),
+                            getattr(chat, "last_name", None),
+                        ],
+                    )
+                )
                 or chat_key
             )
             sender_name = (
@@ -247,7 +259,9 @@ async def run() -> int:
                     "sender": sender_name,
                     "snippet": (msg.message or "")[:_SNIPPET_CHARS],
                     "msg_id": msg.id,
-                    "link": chat_deep_link(event.chat_id, msg.id, getattr(chat, "username", None)),
+                    "link": chat_deep_link(
+                        event.chat_id, msg.id, getattr(chat, "username", None)
+                    ),
                     "detected_at": _now().isoformat(),
                     "dated": dated,
                     "last_nudge_at": "",
@@ -280,7 +294,11 @@ async def run() -> int:
                         state.pending.pop(chat_key)
                         changed = True
                         continue
-                    due_h = settings.watchdog_urgent_nudge_hours if item.get("dated") else settings.watchdog_nudge_hours
+                    due_h = (
+                        settings.watchdog_urgent_nudge_hours
+                        if item.get("dated")
+                        else settings.watchdog_nudge_hours
+                    )
                     last = item.get("last_nudge_at", "")
                     nudge_ok = (not last) or _age_hours(last) >= _RENUDGE_HOURS
                     if age_h >= due_h and nudge_ok:
@@ -298,10 +316,13 @@ async def run() -> int:
                     and state.last_digest_date != str(local.date())
                     and state.pending
                 ):
-                    items = sorted(state.pending.values(), key=lambda i: i["detected_at"])
+                    items = sorted(
+                        state.pending.values(), key=lambda i: i["detected_at"]
+                    )
                     await client.send_message(
                         "me",
-                        f"🌅 Waiting on you ({len(items)}):\n\n" + "\n\n".join(_fmt_item(i) for i in items),
+                        f"🌅 Waiting on you ({len(items)}):\n\n"
+                        + "\n\n".join(_fmt_item(i) for i in items),
                         link_preview=False,
                     )
                     state.last_digest_date = str(local.date())

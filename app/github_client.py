@@ -59,7 +59,10 @@ class GitHubClient:
             if isinstance(content, list):
                 return {
                     "type": "directory",
-                    "entries": [{"name": item.name, "type": item.type, "path": item.path} for item in content],
+                    "entries": [
+                        {"name": item.name, "type": item.type, "path": item.path}
+                        for item in content
+                    ],
                 }
             decoded = content.decoded_content.decode("utf-8", errors="replace")
             return {
@@ -73,7 +76,9 @@ class GitHubClient:
             logger.error("Failed to read %s/%s: %s", repo_name, path, e)
             return {"type": "error", "error": str(e)}
 
-    def fetch_workflow_log(self, repo_name: str, run_id: str, max_lines: int = 200) -> str:
+    def fetch_workflow_log(
+        self, repo_name: str, run_id: str, max_lines: int = 200
+    ) -> str:
         """Fetch the tail of a workflow run log."""
         try:
             repo = self.g.get_repo(self._full_name(repo_name))
@@ -118,7 +123,9 @@ class GitHubClient:
             logger.warning("Failed to delete branch %s on %s: %s", branch, repo_name, e)
             return False
 
-    def list_branches_matching(self, repo_name: str, prefix: str) -> list[dict[str, Any]]:
+    def list_branches_matching(
+        self, repo_name: str, prefix: str
+    ) -> list[dict[str, Any]]:
         """List branches whose name starts with `prefix`. Returns a list of
         {name, sha, last_commit_at (iso8601)} dicts. Used by the autopilot
         branch janitor to find orphan `autopilot/fix-*` branches."""
@@ -133,7 +140,9 @@ class GitHubClient:
                     last_at = b.commit.commit.author.date.isoformat()
                 except Exception:
                     pass
-                out.append({"name": b.name, "sha": b.commit.sha, "last_commit_at": last_at})
+                out.append(
+                    {"name": b.name, "sha": b.commit.sha, "last_commit_at": last_at}
+                )
         except Exception as e:
             logger.warning("Failed to list branches on %s: %s", repo_name, e)
         return out
@@ -214,7 +223,9 @@ class GitHubClient:
         """
         try:
             repo = self.g.get_repo(self._full_name(repo_name))
-            pr = repo.create_pull(title=title, body=body, head=head, base=base, draft=draft)
+            pr = repo.create_pull(
+                title=title, body=body, head=head, base=base, draft=draft
+            )
             logger.info("Opened PR #%d: %s", pr.number, pr.html_url)
             if labels:
                 self._apply_labels(repo, pr, labels)
@@ -235,10 +246,16 @@ class GitHubClient:
                 try:
                     repo.get_label(name)
                 except Exception:
-                    repo.create_label(name=name, color="f4a300", description="Created by truesight_autopilot")
+                    repo.create_label(
+                        name=name,
+                        color="f4a300",
+                        description="Created by truesight_autopilot",
+                    )
                 pr.add_to_labels(name)
             except Exception as e:
-                logger.warning("Could not apply label %r to PR #%d: %s", name, pr.number, e)
+                logger.warning(
+                    "Could not apply label %r to PR #%d: %s", name, pr.number, e
+                )
 
     def mark_pr_ready_for_review(
         self,
@@ -267,7 +284,9 @@ class GitHubClient:
                 "message": f"PR #{pr_number} on {repo_name} marked ready for review.",
             }
         except Exception as e:
-            logger.error("Failed to mark PR #%d on %s ready: %s", pr_number, repo_name, e)
+            logger.error(
+                "Failed to mark PR #%d on %s ready: %s", pr_number, repo_name, e
+            )
             return {
                 "status": "error",
                 "draft": True,
@@ -301,12 +320,21 @@ class GitHubClient:
             if pr.draft:
                 try:
                     pr.mark_ready_for_review()
-                    logger.info("Auto-promoted draft PR #%d on %s before merge", pr_number, repo_name)
+                    logger.info(
+                        "Auto-promoted draft PR #%d on %s before merge",
+                        pr_number,
+                        repo_name,
+                    )
                     # Re-fetch PR state after promotion so PyGithub's mergeability
                     # cache catches up to the new state.
                     pr = repo.get_pull(pr_number)
                 except Exception as e:
-                    logger.warning("Failed to auto-promote draft PR #%d on %s: %s", pr_number, repo_name, e)
+                    logger.warning(
+                        "Failed to auto-promote draft PR #%d on %s: %s",
+                        pr_number,
+                        repo_name,
+                        e,
+                    )
             result = pr.merge(merge_method=merge_method)
             logger.info(
                 "Merged PR #%d on %s (method=%s, sha=%s)",
@@ -322,7 +350,9 @@ class GitHubClient:
             }
         except Exception as e:
             error_msg = str(e)
-            logger.error("Failed to merge PR #%d on %s: %s", pr_number, repo_name, error_msg)
+            logger.error(
+                "Failed to merge PR #%d on %s: %s", pr_number, repo_name, error_msg
+            )
             return {
                 "sha": "",
                 "merged": False,
@@ -348,7 +378,9 @@ class GitHubClient:
                         "state": pr.state,
                         "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
                         "url": pr.html_url,
-                        "created_at": pr.created_at.isoformat() if pr.created_at else None,
+                        "created_at": pr.created_at.isoformat()
+                        if pr.created_at
+                        else None,
                     }
                 )
             return result

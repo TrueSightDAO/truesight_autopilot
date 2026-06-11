@@ -41,7 +41,9 @@ _GIT_AUTHOR_NAME = "Sophia (TrueSight Autopilot)"
 _GIT_AUTHOR_EMAIL = "sophia@truesight.me"
 # Inline helper: git asks it for credentials; it answers from $GIT_PAT.
 # Single-quoted shell function — the PAT stays in the subprocess env only.
-_CREDENTIAL_HELPER = '!f() { echo "username=x-access-token"; echo "password=${GIT_PAT}"; }; f'
+_CREDENTIAL_HELPER = (
+    '!f() { echo "username=x-access-token"; echo "password=${GIT_PAT}"; }; f'
+)
 _CLONE_TIMEOUT = 180
 _PUSH_TIMEOUT = 180
 _MAX_ERR_CHARS = 2000
@@ -56,7 +58,9 @@ def _remote_url(repo: str) -> str:
     return f"https://github.com/TrueSightDAO/{repo}.git"
 
 
-def _git(args: list[str], cwd: str | Path, timeout: int = 60) -> subprocess.CompletedProcess:
+def _git(
+    args: list[str], cwd: str | Path, timeout: int = 60
+) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["GIT_PAT"] = settings.github_pat or ""
     env["GIT_TERMINAL_PROMPT"] = "0"  # fail fast instead of hanging on a prompt
@@ -117,7 +121,9 @@ def git_push_changes(
     if not repo or not branch or not commit_message:
         return _err("repo, branch, and commit_message are required")
     if repo not in settings.allowed_repos:
-        return _err("repo not in allowed list", repo=repo, allowed=settings.allowed_repos)
+        return _err(
+            "repo not in allowed list", repo=repo, allowed=settings.allowed_repos
+        )
     if repo in settings.api_only_repos:
         return _err(
             "API-only data repo: never clone or branch-edit. This repo is "
@@ -154,7 +160,9 @@ def git_push_changes(
         except subprocess.TimeoutExpired:
             return _err(f"git clone timed out after {_CLONE_TIMEOUT}s", repo=repo)
         if r.returncode != 0:
-            return _err("git clone failed", repo=repo, stderr=r.stderr[-_MAX_ERR_CHARS:])
+            return _err(
+                "git clone failed", repo=repo, stderr=r.stderr[-_MAX_ERR_CHARS:]
+            )
         clone = workdir / "repo"
 
         # ── never push to the default branch ──────────────────────────────
@@ -193,14 +201,20 @@ def git_push_changes(
             text = target.read_text(encoding="utf-8")
             count = text.count(search)
             if count == 0:
-                return _err("search string not found in file", path=path, search_preview=search[:120])
+                return _err(
+                    "search string not found in file",
+                    path=path,
+                    search_preview=search[:120],
+                )
             if count > 1 and not e.get("replace_all"):
                 return _err(
                     f"search string occurs {count} times; make it more specific or pass replace_all=true",
                     path=path,
                 )
             target.write_text(
-                text.replace(search, replace) if e.get("replace_all") else text.replace(search, replace, 1),
+                text.replace(search, replace)
+                if e.get("replace_all")
+                else text.replace(search, replace, 1),
                 encoding="utf-8",
             )
             applied.append(f"edit {path}")
@@ -219,11 +233,18 @@ def git_push_changes(
         _git(["add", "-A"], cwd=clone)
         r = _git(["commit", "-m", commit_message], cwd=clone)
         if r.returncode != 0:
-            return _err("git commit failed (no effective changes?)", stderr=(r.stderr or r.stdout)[-_MAX_ERR_CHARS:])
+            return _err(
+                "git commit failed (no effective changes?)",
+                stderr=(r.stderr or r.stdout)[-_MAX_ERR_CHARS:],
+            )
         commit_sha = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
 
         try:
-            r = _git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=clone, timeout=_PUSH_TIMEOUT)
+            r = _git(
+                ["push", "origin", f"HEAD:refs/heads/{branch}"],
+                cwd=clone,
+                timeout=_PUSH_TIMEOUT,
+            )
         except subprocess.TimeoutExpired:
             return _err(f"git push timed out after {_PUSH_TIMEOUT}s")
         if r.returncode != 0:
@@ -252,7 +273,8 @@ def git_push_changes(
                         "title": pr_title or commit_message,
                         "head": branch,
                         "base": base_branch or default_branch,
-                        "body": pr_body or f"Opened by Sophia (truesight_autopilot).\n\n{commit_message}",
+                        "body": pr_body
+                        or f"Opened by Sophia (truesight_autopilot).\n\n{commit_message}",
                     },
                     timeout=20.0,
                 )
@@ -266,7 +288,11 @@ def git_push_changes(
                 result["pr_error"] = f"branch pushed but PR creation failed: {exc}"
 
         logger.info(
-            "git_push_changes: %s -> %s (%d changes, pr=%s)", repo, branch, len(applied), result.get("pr_url", "-")
+            "git_push_changes: %s -> %s (%d changes, pr=%s)",
+            repo,
+            branch,
+            len(applied),
+            result.get("pr_url", "-"),
         )
         return result
     finally:
@@ -291,7 +317,10 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "repo": {"type": "string", "description": "Repo name under TrueSightDAO (must be in the allowed list)."},
+            "repo": {
+                "type": "string",
+                "description": "Repo name under TrueSightDAO (must be in the allowed list).",
+            },
             "branch": {
                 "type": "string",
                 "description": "Feature branch to create/push, e.g. 'fix/partner-page-hero'. Must not be the default branch.",
@@ -335,9 +364,19 @@ TOOL_SPEC = ToolSpec(
                 "type": "string",
                 "description": "Branch to base the work on (default: the repo's default branch).",
             },
-            "pr_title": {"type": "string", "description": "PR title (default: commit_message)."},
-            "pr_body": {"type": "string", "description": "PR body — explain goal, changes, testing."},
-            "open_pr": {"type": "boolean", "description": "Open a PR after pushing (default true).", "default": True},
+            "pr_title": {
+                "type": "string",
+                "description": "PR title (default: commit_message).",
+            },
+            "pr_body": {
+                "type": "string",
+                "description": "PR body — explain goal, changes, testing.",
+            },
+            "open_pr": {
+                "type": "boolean",
+                "description": "Open a PR after pushing (default true).",
+                "default": True,
+            },
         },
         "required": ["repo", "branch", "commit_message"],
     },

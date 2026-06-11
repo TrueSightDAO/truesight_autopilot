@@ -103,7 +103,12 @@ def test_read_message_extracts_plain_text(tmp_path):
             ],
             "parts": [
                 {"mimeType": "text/plain", "body": {"data": encoded}},
-                {"mimeType": "text/html", "body": {"data": base64.urlsafe_b64encode(b"<b>html</b>").decode("ascii")}},
+                {
+                    "mimeType": "text/html",
+                    "body": {
+                        "data": base64.urlsafe_b64encode(b"<b>html</b>").decode("ascii")
+                    },
+                },
             ],
         },
     }
@@ -125,7 +130,11 @@ def test_send_builds_raw_payload(tmp_path):
     def capture_send(userId, body):
         captured["body"] = body
         exec_mock = MagicMock()
-        exec_mock.execute.return_value = {"id": "sent-1", "threadId": "t1", "labelIds": ["SENT"]}
+        exec_mock.execute.return_value = {
+            "id": "sent-1",
+            "threadId": "t1",
+            "labelIds": ["SENT"],
+        }
         return exec_mock
 
     service.users.return_value.messages.return_value.send.side_effect = capture_send
@@ -143,7 +152,9 @@ def test_send_builds_raw_payload(tmp_path):
 
     assert out["status"] == "ok"
     assert out["id"] == "sent-1"
-    raw = base64.urlsafe_b64decode(captured["body"]["raw"].encode("ascii")).decode("utf-8")
+    raw = base64.urlsafe_b64decode(captured["body"]["raw"].encode("ascii")).decode(
+        "utf-8"
+    )
     assert "To: p@q.com" in raw
     assert "Cc: r@q.com" in raw
     assert "Subject: Re: hi" in raw

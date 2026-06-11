@@ -59,7 +59,10 @@ def build_ship_keyboard(repo: str, pr: int) -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": f"🚀 Ship #{pr} → {repo}", "callback_data": f"ship:{repo}:{pr}"},
+                {
+                    "text": f"🚀 Ship #{pr} → {repo}",
+                    "callback_data": f"ship:{repo}:{pr}",
+                },
                 {"text": "✕ Cancel", "callback_data": "cancel"},
             ]
         ]
@@ -81,7 +84,8 @@ def check_ci_green(repo: str, pr_number: int) -> tuple[bool, str]:
         failed = [
             cr.name
             for cr in runs
-            if cr.status == "completed" and cr.conclusion not in ("success", "neutral", "skipped")
+            if cr.status == "completed"
+            and cr.conclusion not in ("success", "neutral", "skipped")
         ]
         state = commit.get_combined_status().state  # success / pending / failure
         if pending:
@@ -101,7 +105,10 @@ def check_ci_green(repo: str, pr_number: int) -> tuple[bool, str]:
 def ship_pr(repo: str, pr_number: int) -> dict:
     """Gate + CI check + merge into a beta repo. Returns {ok, message, sha?}."""
     if not settings.beta_deploy_gate_enabled:
-        return {"ok": False, "message": "Beta-deploy gate is disabled (set BETA_DEPLOY_GATE_ENABLED=true)."}
+        return {
+            "ok": False,
+            "message": "Beta-deploy gate is disabled (set BETA_DEPLOY_GATE_ENABLED=true).",
+        }
     if not is_beta_repo(repo):
         return {
             "ok": False,
@@ -117,7 +124,10 @@ def ship_pr(repo: str, pr_number: int) -> dict:
             "sha": res.get("sha", ""),
             "message": f"✅ Merged {repo}#{pr_number} (CI green) — beta is deploying.",
         }
-    return {"ok": False, "message": f"Merge failed: {res.get('message', 'unknown error')}"}
+    return {
+        "ok": False,
+        "message": f"Merge failed: {res.get('message', 'unknown error')}",
+    }
 
 
 def list_open_beta_prs() -> list[dict]:
@@ -128,7 +138,12 @@ def list_open_beta_prs() -> list[dict]:
         try:
             for pr in gh.list_prs(repo, state="open", limit=10):
                 out.append(
-                    {"repo": repo, "number": pr.get("number"), "title": pr.get("title", ""), "url": pr.get("url", "")}
+                    {
+                        "repo": repo,
+                        "number": pr.get("number"),
+                        "title": pr.get("title", ""),
+                        "url": pr.get("url", ""),
+                    }
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning("list_open_beta_prs failed for %s: %s", repo, e)

@@ -24,7 +24,9 @@ try:
     import app.main as m
     from app.roles import build_role_menu
 except Exception as exc:  # noqa: BLE001
-    pytest.skip(f"app.main import unavailable in this env: {exc}", allow_module_level=True)
+    pytest.skip(
+        f"app.main import unavailable in this env: {exc}", allow_module_level=True
+    )
 
 
 def test_log_session_syncs_in_memory_cache(monkeypatch, tmp_path):

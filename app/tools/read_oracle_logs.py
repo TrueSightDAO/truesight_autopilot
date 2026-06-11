@@ -9,7 +9,9 @@ import httpx
 
 logger = logging.getLogger("autopilot.oracle_logs")
 
-ORACLE_LOGS_BASE = "https://raw.githubusercontent.com/TrueSightDAO/oracle_logs/main/draws"
+ORACLE_LOGS_BASE = (
+    "https://raw.githubusercontent.com/TrueSightDAO/oracle_logs/main/draws"
+)
 
 
 def read_oracle_logs(date: str | None = None) -> str:
@@ -25,28 +27,58 @@ def read_oracle_logs(date: str | None = None) -> str:
         if date is None:
             # List available draws via GitHub API
             url = "https://api.github.com/repos/TrueSightDAO/oracle_logs/contents/draws"
-            resp = httpx.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=10.0)
+            resp = httpx.get(
+                url, headers={"Accept": "application/vnd.github+json"}, timeout=10.0
+            )
             if resp.status_code != 200:
-                return json.dumps({"status": "error", "message": f"GitHub API error: {resp.status_code}"})
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": f"GitHub API error: {resp.status_code}",
+                    }
+                )
             files = resp.json()
             if not isinstance(files, list) or len(files) == 0:
-                return json.dumps({"status": "ok", "draws": [], "message": "No draws found"})
-            names = [f["name"].replace(".md", "") for f in files if f.get("name", "").endswith(".md")]
+                return json.dumps(
+                    {"status": "ok", "draws": [], "message": "No draws found"}
+                )
+            names = [
+                f["name"].replace(".md", "")
+                for f in files
+                if f.get("name", "").endswith(".md")
+            ]
             names.sort(reverse=True)
-            return json.dumps({"status": "ok", "draws": names, "message": f"{len(names)} draws available"})
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "draws": names,
+                    "message": f"{len(names)} draws available",
+                }
+            )
 
         if date == "latest":
             # Find the latest draw
             url = "https://api.github.com/repos/TrueSightDAO/oracle_logs/contents/draws"
-            resp = httpx.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=10.0)
+            resp = httpx.get(
+                url, headers={"Accept": "application/vnd.github+json"}, timeout=10.0
+            )
             if resp.status_code != 200:
-                return json.dumps({"status": "error", "message": f"GitHub API error: {resp.status_code}"})
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": f"GitHub API error: {resp.status_code}",
+                    }
+                )
             files = resp.json()
             if not isinstance(files, list) or len(files) == 0:
-                return json.dumps({"status": "ok", "content": "", "message": "No draws found"})
+                return json.dumps(
+                    {"status": "ok", "content": "", "message": "No draws found"}
+                )
             names = [f["name"] for f in files if f.get("name", "").endswith(".md")]
             if not names:
-                return json.dumps({"status": "ok", "content": "", "message": "No draws found"})
+                return json.dumps(
+                    {"status": "ok", "content": "", "message": "No draws found"}
+                )
             names.sort(reverse=True)
             date = names[0].replace(".md", "")
 
@@ -57,7 +89,12 @@ def read_oracle_logs(date: str | None = None) -> str:
             return json.dumps({"status": "error", "message": f"Draw not found: {date}"})
 
         return json.dumps(
-            {"status": "ok", "date": date, "content": resp.text, "message": f"Oracle draw for {date} retrieved"}
+            {
+                "status": "ok",
+                "date": date,
+                "content": resp.text,
+                "message": f"Oracle draw for {date} retrieved",
+            }
         )
 
     except Exception as e:

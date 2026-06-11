@@ -40,7 +40,11 @@ def main() -> int:
         return 1
     from telethon.sync import TelegramClient
 
-    with TelegramClient(settings.watchdog_session_path, settings.telegram_api_id, settings.telegram_api_hash) as client:
+    with TelegramClient(
+        settings.watchdog_session_path,
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    ) as client:
         me = client.get_me()
         print(
             f"\nAuthorized as {me.first_name or ''} {me.last_name or ''} "

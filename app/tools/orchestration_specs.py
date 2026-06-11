@@ -28,7 +28,10 @@ TOOL_SPECS = [
                     "type": "string",
                     "description": f"Repo name under TrueSightDAO. Allowed: {_ALLOWED_CHAT_REPOS}",
                 },
-                "issue_description": {"type": "string", "description": "Description of the issue to fix."},
+                "issue_description": {
+                    "type": "string",
+                    "description": "Description of the issue to fix.",
+                },
             },
             "required": ["repo", "issue_description"],
         },

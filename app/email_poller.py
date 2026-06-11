@@ -21,14 +21,22 @@ from .llm_client import LLMClient
 logger = logging.getLogger("autopilot.email")
 
 # Tier 1: fast rule-based classification
-GITHUB_FAILURE_SUBJECTS = re.compile(r"(workflow run failed|action required|scheduled workflow failed)", re.IGNORECASE)
-GAS_ERROR_SUBJECTS = re.compile(r"(google apps script|script has failed|execution error)", re.IGNORECASE)
-SECURITY_ALERT_SUBJECTS = re.compile(r"(security alert|dependabot|vulnerability)", re.IGNORECASE)
+GITHUB_FAILURE_SUBJECTS = re.compile(
+    r"(workflow run failed|action required|scheduled workflow failed)", re.IGNORECASE
+)
+GAS_ERROR_SUBJECTS = re.compile(
+    r"(google apps script|script has failed|execution error)", re.IGNORECASE
+)
+SECURITY_ALERT_SUBJECTS = re.compile(
+    r"(security alert|dependabot|vulnerability)", re.IGNORECASE
+)
 # Bugsnag-emitted error notifications (sender + subject signature). Bugsnag
 # sends from support@bugsnag.com or notifications@bugsnag.com with subjects
 # like "[Bugsnag] Error in <Project> - <Message>" or "New error in <Project>".
 BUGSNAG_SENDER = re.compile(r"@bugsnag\.com", re.IGNORECASE)
-BUGSNAG_SUBJECTS = re.compile(r"(\[bugsnag\]|new error|error in|reopened|spike in errors)", re.IGNORECASE)
+BUGSNAG_SUBJECTS = re.compile(
+    r"(\[bugsnag\]|new error|error in|reopened|spike in errors)", re.IGNORECASE
+)
 
 
 class EmailPoller:
@@ -49,7 +57,9 @@ class EmailPoller:
                 creds.refresh(Request())
             return build("gmail", "v1", credentials=creds, cache_discovery=False)
         except Exception as e:
-            logger.error("Failed to build Gmail service: %s — email polling disabled", e)
+            logger.error(
+                "Failed to build Gmail service: %s — email polling disabled", e
+            )
             return None
 
     async def run_loop(self, interval_seconds: int = 300):
@@ -71,7 +81,12 @@ class EmailPoller:
         """Process unread actionable emails. Returns count processed."""
         if self.gmail is None:
             return 0
-        results = self.gmail.users().messages().list(userId="me", q="is:unread", maxResults=20).execute()
+        results = (
+            self.gmail.users()
+            .messages()
+            .list(userId="me", q="is:unread", maxResults=20)
+            .execute()
+        )
         messages = results.get("messages", [])
         processed = 0
 
@@ -81,7 +96,9 @@ class EmailPoller:
             # so fetching here is safe — the message stays UNREAD until we decide.
             msg = self.gmail.users().messages().get(userId="me", id=msg_id).execute()
             payload = msg.get("payload", {})
-            headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
+            headers = {
+                h["name"].lower(): h["value"] for h in payload.get("headers", [])
+            }
 
             subject = headers.get("subject", "")
             sender = headers.get("from", "")
@@ -178,7 +195,12 @@ class EmailPoller:
             ).execute()
             logger.info("Applied Gmail label %r to message %s", label_name, msg_id)
         except Exception as e:
-            logger.warning("Could not apply Gmail label %r to message %s: %s", label_name, msg_id, e)
+            logger.warning(
+                "Could not apply Gmail label %r to message %s: %s",
+                label_name,
+                msg_id,
+                e,
+            )
 
     def _get_or_create_label(self, name: str) -> str | None:
         """Return Gmail label ID for `name`, creating it if missing."""
@@ -256,7 +278,9 @@ class EmailPoller:
     # Bugsnag re-emails about it (re-occurrences, regression alerts, etc.).
     # JSON file at /opt/truesight_autopilot/state/bugsnag_triaged_errors.json,
     # structured as { error_id: {pr_url, triaged_at_utc, project} }.
-    BUGSNAG_DEDUP_PATH = Path("/opt/truesight_autopilot/state/bugsnag_triaged_errors.json")
+    BUGSNAG_DEDUP_PATH = Path(
+        "/opt/truesight_autopilot/state/bugsnag_triaged_errors.json"
+    )
 
     def _load_bugsnag_dedup(self) -> dict:
         try:
@@ -270,7 +294,9 @@ class EmailPoller:
     def _save_bugsnag_dedup(self, state: dict) -> None:
         try:
             self.BUGSNAG_DEDUP_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.BUGSNAG_DEDUP_PATH.write_text(json.dumps(state, indent=2, sort_keys=True))
+            self.BUGSNAG_DEDUP_PATH.write_text(
+                json.dumps(state, indent=2, sort_keys=True)
+            )
         except Exception as e:
             logger.warning("could not persist bugsnag dedup state: %s", e)
 
@@ -309,7 +335,9 @@ class EmailPoller:
 
         # Bugsnag error_id — stable across re-occurrences. Pulled from the
         # 'errors/<hex>' URL pattern Bugsnag puts in every notification body.
-        error_id_match = re.search(r"app\.bugsnag\.com/[^/\s]+/[^/\s]+/errors/([0-9a-f]+)", body, re.IGNORECASE)
+        error_id_match = re.search(
+            r"app\.bugsnag\.com/[^/\s]+/[^/\s]+/errors/([0-9a-f]+)", body, re.IGNORECASE
+        )
         error_id = error_id_match.group(1) if error_id_match else None
 
         logger.info(
@@ -365,7 +393,9 @@ class EmailPoller:
         # the agent has the context it needs without inflating tokens.
         body_excerpt = (body or "").strip()
         if len(body_excerpt) > 2000:
-            body_excerpt = body_excerpt[:2000] + "\n\n[... truncated for fix-agent context ...]"
+            body_excerpt = (
+                body_excerpt[:2000] + "\n\n[... truncated for fix-agent context ...]"
+            )
         issue_description = (
             f"Bugsnag error in project '{project}': {error_class}\n\n"
             f"Email subject: {subject}\n\n"
