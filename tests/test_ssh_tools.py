@@ -15,9 +15,12 @@ def test_unknown_host_rejected_with_fleet_listing():
 
 def test_missing_key_is_a_clear_error(tmp_path, monkeypatch):
     monkeypatch.setenv("SOPHIA_SSH_KEY_PATH", str(tmp_path / "nope"))
+    # _key_path() falls through to real keys on the autopilot box; mock it
+    # to return the non-existent path so the test is hermetic.
+    monkeypatch.setattr(ssh_tools, "_key_path", lambda: tmp_path / "nope")
     out = ssh_tools.ssh_run(host="seni_ror", command="uptime")
     assert out["status"] == "error"
-    assert "SSH key not found" in out["reason"]
+    assert "No SSH key found" in out["reason"]
 
 
 def test_dispatch_builds_correct_ssh_command(tmp_path, monkeypatch):
