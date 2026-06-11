@@ -41,6 +41,14 @@ jobs:
       - name: Syntax check (compileall)
         run: python -m compileall -q app scripts
 
+      - name: Lint (ruff)
+        run: |
+          pip install -r requirements-dev.txt
+          ruff check app tests scripts
+
+      - name: Format check (ruff)
+        run: ruff format --check app tests scripts
+
       - name: Run tool smoke tests
         env:
           # Auto-injected; gives the github call test rate-limited read access

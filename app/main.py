@@ -5,57 +5,45 @@ import asyncio
 import base64
 import json
 import logging
+import mimetypes
 import os
 import re
+import subprocess
+import tempfile
 import time
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+
+from .auth import create_jwt, verify_jwt, verify_payload
+from .aws_monitor import AWSMonitor
+from .config import settings
+from .context import get_context_file, get_system_prompt, refresh_context_repos, refresh_system_prompt
+from .daily_briefing import handle_daily_briefing
+from .edgar_logger import EdgarLogger as EdgarDirectClient
+from .email_poller import EmailPoller
+from .fix_agent import FixAgent
+from .github_client import GitHubClient
+from .governor_registry import load_governors, refresh_cache as refresh_governor_cache
+from .grok_client import GROK_MODEL, grok_analyze_images
+from .llm_client import LLMClient, LLMError, get_tool_schemas
 from .roles import (
     RESET_CONTEXT_THRESHOLD, ROLE_SELECTION_MESSAGE, archive_old_history,
     build_role_menu, find_pending_role, find_role_in_history, get_default_role,
     get_system_prompt_for_role, get_tool_schemas_for_role,
     pending_role_tag, reset_context_prompt, resolve_role, set_role_in_history,
 )
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from typing import Any, List
-
-import mimetypes
-import subprocess
-import tempfile
-import uuid
-from pathlib import Path
-
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
-
-from .auth import create_jwt, verify_jwt, verify_payload
-from .config import settings
-from .context import get_system_prompt, refresh_system_prompt, get_context_file, refresh_context_repos
-from .governor_registry import refresh_cache as refresh_governor_cache, load_governors
-
-
-def _gov_name_for_key(public_key_b64: str) -> str | None:
-    """Look up governor name from public key. Returns name or None."""
-    data = load_governors()
-    for g in data.get("governors", []):
-        if g.get("public_key") == public_key_b64:
-            return g.get("name")
-    return None
-from .llm_client import LLMClient, LLMError, get_tool_schemas
-from .tools.github_tools import read_repo_file
-from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
 from .tools.dao_identity import register_identity
-from .tools.inventory_lookup import list_matching_qr_codes
 from .tools.fs_tools import list_directory, read_local_file
-from .grok_client import grok_analyze_images, GROK_MODEL
-from .daily_briefing import handle_daily_briefing
-from .fix_agent import FixAgent
-from .github_client import GitHubClient
-from .email_poller import EmailPoller
-from .aws_monitor import AWSMonitor
-from .edgar_logger import EdgarLogger as EdgarDirectClient
+from .tools.github_tools import read_repo_file
+from .tools.inventory_lookup import list_matching_qr_codes
+from .tools.qr_scanner import lookup_qr_batch, lookup_qr_code, scan_qr_batch, scan_qr_from_file
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
