@@ -1443,21 +1443,21 @@ async def _run_tool(
                     "tool_args": {"event_name": event_name, "attributes": attributes},
                 },
                 "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
-            }
+        }
 
-            # Persist pending approval to server + GitHub for durability
-            if qr and governor_name:
-                _add_pending(
-                    governor_name,
-                    {
-                        "title": f"{event_name}: {qr}" if qr else event_name,
-                        "qr_code": qr,
-                        "summary": summary,
-                        "action": "submit_contribution",
-                    },
-                )
+        # Persist pending approval to server + GitHub for durability
+        if qr and governor_name:
+            _add_pending(
+                governor_name,
+                {
+                    "title": f"{event_name}: {qr}" if qr else event_name,
+                    "qr_code": qr,
+                    "summary": summary,
+                    "action": "submit_contribution",
+                },
+            )
 
-            return json.dumps(proposal)
+        return json.dumps(proposal)
 
         # APPROVED — execute
         # Add agentic traceability: who approved this, with proof of their authenticated session
