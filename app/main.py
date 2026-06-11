@@ -33,16 +33,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Fil
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
 from .context import get_system_prompt, refresh_system_prompt, get_context_file, refresh_context_repos
-from .governor_registry import refresh_cache as refresh_governor_cache, load_governors
-
-
-def _gov_name_for_key(public_key_b64: str) -> str | None:
-    """Look up governor name from public key. Returns name or None."""
-    data = load_governors()
-    for g in data.get("governors", []):
-        if g.get("public_key") == public_key_b64:
-            return g.get("name")
-    return None
+from .governor_registry import refresh_cache as refresh_governor_cache, load_governors, resolve_gov_name
 from .llm_client import LLMClient, LLMError, get_tool_schemas
 from .tools.github_tools import read_repo_file
 from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
