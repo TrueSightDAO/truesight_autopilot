@@ -1484,21 +1484,21 @@ async def _run_tool(
                     "tool_args": {"event_name": event_name, "attributes": attributes},
                 },
                 "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
-            }
+        }
 
-            # Persist pending approval to server + GitHub for durability
-            if qr and governor_name:
-                _add_pending(
-                    governor_name,
-                    {
-                        "title": f"{event_name}: {qr}" if qr else event_name,
-                        "qr_code": qr,
-                        "summary": summary,
-                        "action": "submit_contribution",
-                    },
-                )
+        # Persist pending approval to server + GitHub for durability
+        if qr and governor_name:
+            _add_pending(
+                governor_name,
+                {
+                    "title": f"{event_name}: {qr}" if qr else event_name,
+                    "qr_code": qr,
+                    "summary": summary,
+                    "action": "submit_contribution",
+                },
+            )
 
-            return json.dumps(proposal)
+        return json.dumps(proposal)
 
         # APPROVED — execute
         # Add agentic traceability: who approved this, with proof of their authenticated session
@@ -2953,6 +2953,22 @@ async def queue_message(request: Request) -> JSONResponse:
     position = len(_message_queues[session_id])
 
     return JSONResponse({"queued": True, "position": position, "msg_id": msg_id})
+
+
+@app.get("/chat/progress")
+async def get_chat_progress(request: Request) -> JSONResponse:
+    """Read-only progress path — returns the live-progress snapshot for the
+    caller's session. Does NOT acquire the per-session lock, so a progress
+    query never blocks behind the running turn. Returns an empty snapshot
+    when nothing is running."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    snap = _render_progress(session_id)
+    if snap:
+        return JSONResponse({"running": True, "snapshot": snap})
+    return JSONResponse({"running": False, "snapshot": None})
 
 
 @app.get("/chat/queue")
