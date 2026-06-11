@@ -52,10 +52,5 @@ jobs:
       - name: Unit tests (pytest)
         run: |
           pip install -r requirements-dev.txt
-          # The 3 deselected tests are PRE-EXISTING failures (real network calls /
-          # missing mocks) tracked in agentic_ai_context/OPEN_FOLLOWUPS.md — fix
-          # them, then drop the --deselect flags so the full unit suite gates.
-          pytest -q \
-            --deselect tests/test_ssh_tools.py::test_missing_key_is_a_clear_error \
-            --deselect tests/test_telegram_adapter.py::test_handle_message_allowed_calls_chat \
-            --deselect tests/test_telegram_adapter.py::test_send_message_retries_without_thread_on_400
+          # Full unit suite gates CI — all tests are now hermetic.
+          pytest -q
