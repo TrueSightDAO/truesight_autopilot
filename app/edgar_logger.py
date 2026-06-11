@@ -63,6 +63,49 @@ class EdgarLogger:
             logger.error("Edgar submission exception: %s", e)
             return False
 
+    def register_qr_code(self, attributes: dict[str, object]) -> bool:
+        """Submit a QR code registration event to Edgar, then trigger GAS."""
+        if not self.is_configured():
+            logger.warning("Edgar credentials incomplete — skipping")
+            return False
+
+        try:
+            # Step 1: POST to Edgar
+            payload, request_txn_id, share_text = self._client.sign(
+                event_name="QR CODE REGISTRATION",
+                attributes=attributes,
+            )
+            resp = self._client.session.post(
+                f"{self._client.base_url}/dao/qr_code_register",
+                data={"text": share_text},
+                timeout=30.0,
+            )
+            if not resp.ok:
+                logger.error(
+                    "Edgar QR registration failed (%d): %s",
+                    resp.status_code,
+                    resp.text[:300],
+                )
+                return False
+
+            # Step 2: Trigger GAS processing
+            import requests as _requests
+            gas_url = (
+                "https://script.google.com/macros/s/"
+                "AKfycbzlUS6-b3_wZaGwTVenx3pBNNNScGDt9TB0ueUyDPvbkt64zryH5QI_hrvT7i2EPYEc"
+                "/exec?action=processQRCodeGenerationTelegramLogs"
+            )
+            gas_resp = _requests.get(gas_url, timeout=60)
+            if gas_resp.ok:
+                logger.info("GAS processing triggered for QR registration")
+            else:
+                logger.warning("GAS trigger returned %d: %s", gas_resp.status_code, gas_resp.text[:200])
+
+            return True
+        except Exception as e:
+            logger.error("QR registration exception: %s", e)
+            return False
+
     def log_contribution(
         self, minutes: int, description: str, pr_url: str | None = None
     ) -> bool:

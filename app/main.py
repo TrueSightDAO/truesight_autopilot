@@ -1079,6 +1079,18 @@ _CANONICAL_LABELS: dict[str, list[str]] = {
         "Attached Filename",
         "Destination Inventory File Location",
     ],
+    "QR CODE REGISTRATION": [
+        "QR Code",
+        "Landing Page",
+        "Farm Name",
+        "State",
+        "Country",
+        "Year",
+        "Currency",
+        "Status",
+        "Manager",
+        "Creation Date",
+    ],
 }
 
 # Map of LLM-invented field names → canonical labels (case-insensitive matching)
@@ -1115,6 +1127,16 @@ _FIELD_ALIASES: dict[str, str] = {
     "attached_filename": "Attached Filename",
     "filename": "Attached Filename",
     "attachment": "Attached Filename",
+    # QR Code Registration
+    "qr_code": "QR Code",
+    "landing_page": "Landing Page",
+    "landing": "Landing Page",
+    "page": "Landing Page",
+    "farm_name": "Farm Name",
+    "farm": "Farm Name",
+    "manager": "Manager",
+    "creation_date": "Creation Date",
+    "date": "Creation Date",
     # Sales
     "sales_price": "Sales price",
     "price": "Sales price",
@@ -1185,6 +1207,7 @@ def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
         "SALES EVENT": ["Item", "Sales price", "Sold by"],
         "CONTRIBUTION EVENT": ["Type", "Amount"],
         "CAPITAL INJECTION EVENT": ["Ledger", "Amount"],
+        "QR CODE REGISTRATION": ["QR Code", "Landing Page", "Farm Name", "Manager"],
     }
     missing = []
     for field in required.get(event_name, []):
@@ -1376,7 +1399,41 @@ async def _run_tool(
             if ledger:
                 command += f' --destination-inventory-file-location "{ledger}"'
 
-            proposal = {
+        if event_name == "QR CODE REGISTRATION":
+            qr_code = attributes.get("QR Code", "")
+            landing_page = attributes.get("Landing Page", "")
+            farm_name = attributes.get("Farm Name", "")
+            state = attributes.get("State", "")
+            country = attributes.get("Country", "")
+            year = attributes.get("Year", "")
+            currency = attributes.get("Currency", "")
+            status = attributes.get("Status", "SAMPLE")
+            manager = attributes.get("Manager", "")
+            creation_date = attributes.get("Creation Date", "")
+            summary = f"Register QR code {qr_code} for {farm_name}"
+            command = "truesight-dao-register-qr-code"
+            if qr_code:
+                command += f' --qr-code "{qr_code}"'
+            if landing_page:
+                command += f' --landing-page "{landing_page}"'
+            if farm_name:
+                command += f' --farm-name "{farm_name}"'
+            if state:
+                command += f' --state "{state}"'
+            if country:
+                command += f' --country "{country}"'
+            if year:
+                command += f' --year "{year}"'
+            if currency:
+                command += f' --currency "{currency}"'
+            if status:
+                command += f' --status "{status}"'
+            if manager:
+                command += f' --manager "{manager}"'
+            if creation_date:
+                command += f' --creation-date "{creation_date}"'
+
+        proposal = {
                 "status": "pending_approval",
                 "proposal": {
                     "action": "submit_contribution",
@@ -1417,6 +1474,13 @@ async def _run_tool(
             )
 
         edgar = EdgarDirectClient()
+        if event_name == "QR CODE REGISTRATION":
+            ok = edgar.register_qr_code(attributes)
+            return (
+                "QR code registered successfully."
+                if ok
+                else "Failed to register QR code."
+            )
         ok = edgar.submit_contribution(
             event_name, attributes, description=attributes.get("Description", "")
         )
