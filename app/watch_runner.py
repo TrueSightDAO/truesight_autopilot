@@ -109,6 +109,13 @@ def _probe_aws(kind: str, resource_id: str, account: str, region: str | None) ->
         resp = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return "pending", None
+    # aws_query wraps the boto3 result: {"status": "ok", "response": {<describe>}}.
+    # Unwrap before classifying; an error envelope → treat as still pending.
+    if isinstance(resp, dict):
+        if resp.get("status") == "error":
+            return "pending", None
+        if "response" in resp and isinstance(resp["response"], dict):
+            resp = resp["response"]
     return _classify_aws(kind, resp)
 
 

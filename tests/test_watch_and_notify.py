@@ -45,6 +45,20 @@ def test_unknown_kind_raises():
         wr._resource_spec("nope")
 
 
+def test_probe_unwraps_aws_query_envelope(monkeypatch):
+    """aws_query wraps the boto3 result as {'status':'ok','response':{...}}; the
+    probe must unwrap it (regression: top-level lookup made every AMI look pending
+    so the watcher would falsely report 'still not done')."""
+    import json as _json
+    import app.tools.aws_tools as awt
+    monkeypatch.setattr(awt, "aws_query", lambda **kw: _json.dumps(
+        {"status": "ok", "account": "nelanco", "response": {"Images": [{"State": "available"}]}}))
+    assert wr._probe_aws("ami", "ami-1", "nelanco", "us-east-1") == ("done", "available")
+
+    monkeypatch.setattr(awt, "aws_query", lambda **kw: _json.dumps({"status": "error", "reason": "boom"}))
+    assert wr._probe_aws("ami", "ami-1", "nelanco", "us-east-1") == ("pending", None)
+
+
 # ── tools: session parsing + detached launch ─────────────────────────────────
 
 def _import_watch_tools():
