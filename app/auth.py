@@ -145,4 +145,4 @@ def verify_jwt(request: Request) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session token.",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
