@@ -75,8 +75,36 @@ def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock
         return lock
 
 
+# Short status-check phrases that, when sent into a BUSY topic, should be
+# answered immediately from the live-progress record (lock-bypassing) rather
+# than queued as a new instruction.
+_PROGRESS_QUERY_RE = re.compile(
+    r"\b(progress|status|update|how('?s| is| are)\s+(it|things|you|we)|"
+    r"how'?s\s+it\s+going|where\s+(are|r)\s+(you|u|we)|"
+    r"(are|r)\s+(you|u|we)\s+(done|finished|there)|done\s+yet|finished\s+yet|"
+    r"what'?s\s+(happening|going\s+on)|any\s+update)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_progress_query(text: str | None) -> bool:
+    """True only when *text* is a SHORT status check about the in-flight turn, so
+    it can be answered immediately from live progress instead of queued. Biased
+    hard toward False — a real instruction must never be misread as a status
+    query (which would silently drop it). Long messages are always treated as
+    instructions."""
+    if not text:
+        return False
+    t = text.strip()
+    if len(t) > 80:  # real instructions are longer than a status ping
+        return False
+    return bool(_PROGRESS_QUERY_RE.search(t))
+
+
 def _ack_queued_if_busy(
-    chat_id: int, thread_id: int | None, lock: threading.Lock,
+    chat_id: int,
+    thread_id: int | None,
+    lock: threading.Lock,
     session_id: str | None = None,
 ) -> None:
     """If a turn is already running in this topic, immediately tell the governor
@@ -93,6 +121,7 @@ def _ack_queued_if_busy(
         if session_id:
             try:
                 from .main import _render_progress
+
                 snap = _render_progress(session_id)
                 if snap:
                     progress = f"\n\nRight now: {snap}"
@@ -101,8 +130,7 @@ def _ack_queued_if_busy(
         send_message(
             chat_id,
             "📥 Got it — I'm still finishing the previous task in this topic. "
-            "I've added this to the queue and will get to it right after."
-            + progress,
+            "I've added this to the queue and will get to it right after." + progress,
             thread_id,
         )
 
@@ -1134,7 +1162,10 @@ def handle_message(
         if lock.locked() and _is_progress_query(dispatch_text):
             try:
                 token = create_jwt(public_key)
-                headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "X-Session-Id": session_id,
+                }
                 resp = httpx.get(
                     f"{settings.autopilot_chat_url.rstrip('/')}/chat/progress",
                     headers=headers,
@@ -1143,9 +1174,15 @@ def handle_message(
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get("running") and data.get("snapshot"):
-                        send_message(chat_id, f"📊 **Current progress:**\n{data['snapshot']}", thread_id)
+                        send_message(
+                            chat_id,
+                            f"📊 **Current progress:**\n{data['snapshot']}",
+                            thread_id,
+                        )
                     else:
-                        send_message(chat_id, "📊 Nothing running right now.", thread_id)
+                        send_message(
+                            chat_id, "📊 Nothing running right now.", thread_id
+                        )
                     return
             except Exception:
                 pass  # fall through to normal queue if progress fetch fails
