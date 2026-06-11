@@ -27,6 +27,38 @@ dependencies = [
 [project.scripts]
 truesight-autopilot = "app.main:main"
 
+[tool.ruff]
+# Lenient baseline — catches style bugs cheaply without blocking on
+# high-noise categories. Tighten incrementally as the codebase improves.
+lint.select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modern syntax)
+    "B",    # flake8-bugbear (logic bugs)
+    "SIM",  # flake8-simplify (simplifiable patterns)
+]
+lint.ignore = [
+    "E501",   # line-too-long — not enforcing
+    "ARG",    # unused-arg — common in tool specs / lambdas
+    "E402",   # module-import-not-at-top-of-file — intentional late imports
+    "ERA001", # commented-out-code — not worth the churn
+    "E741",   # ambiguous-variable-name — `l`, `O`, `I` are fine in context
+    "N",      # naming-convention — too noisy for existing codebase
+    "SIM105", # suppressible-exception — bare except: pass is intentional
+    "SIM102", # collapsible-if — readability preference
+    "SIM108", # if-else-block-instead-of-if-exp — readability preference
+    "SIM110", # reimplemented-builtin — minor
+    "SIM115", # open-file-with-context-handler — some cases need raw open
+    "SIM117", # multiple-with-statements — readability preference
+]
+
+# Format: match black-ish defaults
+line-length = 120
+indent-width = 4
+target-version = "py310"
+
 [tool.pytest.ini_options]
 # Default `pytest` runs the hermetic UNIT suite. Integration + e2e are excluded
 # here because they need a running server / playwright (run them explicitly with
