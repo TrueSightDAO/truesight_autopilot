@@ -103,8 +103,8 @@ class FollowupState:
 # and the full block (including fences) for round-trip replacement.
 _FOLLOWUP_BLOCK_RE = re.compile(
     r"^(?P<fence>```followup)\s*\n"
-    r"(?P<body>.*?)\n"
-    r"^```\s*$",
+    r"(?P<body>.*?)"
+    r"\n?^```\s*$",
     re.MULTILINE | re.DOTALL,
 )
 
@@ -129,6 +129,13 @@ def _parse_block_body(body: str) -> dict:
     current_section: str | None = None
     current_nested: dict[str, str] = {}
 
+    def _flush_section():
+        nonlocal current_section, current_nested
+        if current_section is not None and current_nested:
+            result[current_section] = dict(current_nested)
+        current_section = None
+        current_nested = {}
+
     for line in body.split("\n"):
         # Check for section header (a key with no value, followed by indented lines)
         top_match = _KEY_VALUE_RE.match(line)
@@ -137,16 +144,18 @@ def _parse_block_body(body: str) -> dict:
             value = top_match.group("value").strip()
             if value == "":
                 # This starts a nested section (condition: / schedule:)
+                # Flush any previous section first
+                _flush_section()
                 current_section = key
                 current_nested = {}
             else:
-                current_section = None
+                _flush_section()
                 result[key] = value
             continue
 
         # Check for nested key under a section
         nested_match = _NESTED_KEY_RE.match(line)
-        if nested_match and current_section:
+        if nested_match and current_section is not None:
             current_nested[nested_match.group("key")] = nested_match.group(
                 "value"
             ).strip()
@@ -154,15 +163,11 @@ def _parse_block_body(body: str) -> dict:
 
         # Blank line — end any open section
         if not line.strip():
-            if current_section and current_nested:
-                result[current_section] = dict(current_nested)
-                current_section = None
-                current_nested = {}
+            _flush_section()
             continue
 
     # Flush any remaining nested section
-    if current_section and current_nested:
-        result[current_section] = dict(current_nested)
+    _flush_section()
 
     return result
 
