@@ -374,8 +374,9 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                 # "message thread not found" and any HTML parse error — the reply
                 # still lands (just unformatted) instead of vanishing.
                 fallback: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
-                if thread_id:
-                    fallback["message_thread_id"] = thread_id
+                # NOTE: deliberately NOT passing message_thread_id in the fallback
+                # — the first attempt already failed with it (e.g. 400 "message thread
+                # not found"), so the retry drops it to avoid the same error.
                 resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                 if i == 0 and resp2.status_code == 200:
                     msg_id = resp2.json().get("result", {}).get("message_id")
