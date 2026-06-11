@@ -76,18 +76,33 @@ def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock
 
 
 def _ack_queued_if_busy(
-    chat_id: int, thread_id: int | None, lock: threading.Lock
+    chat_id: int, thread_id: int | None, lock: threading.Lock,
+    session_id: str | None = None,
 ) -> None:
     """If a turn is already running in this topic, immediately tell the governor
     their new message was received and queued — it will be handled after the
     current turn finishes. Without this, a message sent mid-task just blocks
     silently on the lock, so it looks dropped. (The new message's own turn still
-    runs in arrival order once the lock frees.)"""
+    runs in arrival order once the lock frees.)
+
+    If *session_id* is provided, includes a live-progress snapshot from the
+    running turn (current tool, round, elapsed, done-so-far) so the ack is
+    informative rather than blind."""
     if lock.locked():
+        progress = ""
+        if session_id:
+            try:
+                from .main import _render_progress
+                snap = _render_progress(session_id)
+                if snap:
+                    progress = f"\n\nRight now: {snap}"
+            except Exception:
+                pass
         send_message(
             chat_id,
             "📥 Got it — I'm still finishing the previous task in this topic. "
-            "I've added this to the queue and will get to it right after.",
+            "I've added this to the queue and will get to it right after."
+            + progress,
             thread_id,
         )
 
@@ -1080,7 +1095,7 @@ def handle_message(
             # Prep (download + extraction above) ran in parallel; the turn itself
             # is serialized per topic so it can't race a concurrent turn's writes.
             lock = _thread_dispatch_lock(chat_id, thread_id)
-            _ack_queued_if_busy(chat_id, thread_id, lock)
+            _ack_queued_if_busy(chat_id, thread_id, lock, session_id)
             with lock:
                 response = call_chat_with_progress(
                     chat_id, thread_id, msg_text, session_id, public_key
@@ -1112,7 +1127,7 @@ def handle_message(
         # Serialize the turn per topic so rapid-fire messages to the same thread
         # queue instead of racing; different topics still run in parallel.
         lock = _thread_dispatch_lock(chat_id, thread_id)
-        _ack_queued_if_busy(chat_id, thread_id, lock)
+        _ack_queued_if_busy(chat_id, thread_id, lock, session_id)
         with lock:
             response = call_chat_with_progress(
                 chat_id, thread_id, dispatch_text, session_id, public_key
