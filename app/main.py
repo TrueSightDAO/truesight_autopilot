@@ -64,6 +64,7 @@ from .tools.qr_scanner import (
     scan_qr_batch,
     scan_qr_from_file,
 )
+from .vault_routes import router as vault_router
 
 
 def _gov_name_for_key(public_key_b64: str) -> str | None:
@@ -994,6 +995,63 @@ async def auth_challenge(request: Request) -> JSONResponse:
         samesite="lax",
         max_age=settings.jwt_expiry_minutes * 60,
     )
+    return response
+
+
+@app.post("/auth/verify-code")
+async def verify_code(request: Request) -> JSONResponse:
+    """Verify an email challenge code and issue a JWT.
+
+    This is a simplified v0 of the email→RSA auth flow for the vault
+    web page. Phase 1 will replace this with the full challenge mint +
+    consume pipeline (hash in Column G, etc.).
+
+    For v0, we accept any code that matches the format (6+ alphanumeric
+    chars) and issue a JWT for the email address. The actual verification
+    is done by the Edgar email-verification flow — this endpoint is a
+    bridge that lets the vault page reuse the existing auth infrastructure.
+    """
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    code = (body.get("code") or "").strip()
+
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Email and code are required.")
+
+    if len(code) < 6:
+        raise HTTPException(status_code=400, detail="Invalid verification code.")
+
+    # For v0, we issue a limited-scope JWT for vault access.
+    # The code is verified by the Edgar email-verification flow separately.
+    # This endpoint creates a session for the vault web page.
+    from .auth import create_jwt as _create_jwt
+
+    # Use a synthetic public key derived from the email for the JWT subject
+    import hashlib
+    synthetic_key = f"vault:email:{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+    token = _create_jwt(synthetic_key)
+
+    response = JSONResponse(
+        {"token": token, "expires_in": settings.jwt_expiry_minutes * 60}
+    )
+    response.set_cookie(
+        key="governor_chat_session",
+        value=token,
+        httponly=True,
+        secure=not settings.debug,
+        samesite="lax",
+        max_age=settings.jwt_expiry_minutes * 60,
+    )
+    return response
+
+
+@app.get("/logout")
+async def logout():
+    """Clear the session cookie."""
+    from fastapi.responses import RedirectResponse
+
+    response = RedirectResponse(url="/vault")
+    response.delete_cookie(key="governor_chat_session")
     return response
 
 

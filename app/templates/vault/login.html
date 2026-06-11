@@ -1,0 +1,78 @@
+{% extends "vault/base.html" %}
+{% block title %}Sign in — Credential Vault{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 500px; margin: 2rem auto;">
+    <h2>Sign in to the Credential Vault</h2>
+    <p style="margin-bottom: 1.5rem; color: var(--text-muted);">
+        The credential vault stores service credentials used by the TrueSight DAO Autopilot.
+        Access is restricted to verified DAO governors.
+    </p>
+
+    <div id="step-email">
+        <label for="email">Your DAO-registered email address</label>
+        <input type="email" id="email" placeholder="you@example.com" />
+        <button class="btn btn-primary" onclick="sendChallenge()">Send verification code</button>
+        <div id="email-error" class="error" style="display:none; margin-top: 0.5rem;"></div>
+    </div>
+
+    <div id="step-code" style="display:none;">
+        <label for="code">Verification code (check your email)</label>
+        <input type="text" id="code" placeholder="Paste the code from your email" />
+        <button class="btn btn-primary" onclick="verifyCode()">Verify &amp; sign in</button>
+        <div id="code-error" class="error" style="display:none; margin-top: 0.5rem;"></div>
+        <p style="margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted);">
+            Didn't receive a code? <a href="#" onclick="sendChallenge(); return false;">Resend</a>
+        </p>
+    </div>
+</div>
+
+<script>
+let currentEmail = '';
+
+async function sendChallenge() {
+    const email = document.getElementById('email').value.trim();
+    const errorEl = document.getElementById('email-error');
+    if (!email) {
+        errorEl.textContent = 'Please enter your email address.';
+        errorEl.style.display = 'block';
+        return;
+    }
+    errorEl.style.display = 'none';
+    document.getElementById('step-email').style.display = 'none';
+    document.getElementById('step-code').style.display = 'block';
+    currentEmail = email;
+    // The actual challenge is sent via the Edgar email-verification flow.
+    // For now, show the code input — the user pastes the code they received.
+    document.getElementById('code').focus();
+}
+
+async function verifyCode() {
+    const code = document.getElementById('code').value.trim();
+    const errorEl = document.getElementById('code-error');
+    if (!code) {
+        errorEl.textContent = 'Please enter the verification code.';
+        errorEl.style.display = 'block';
+        return;
+    }
+    errorEl.style.display = 'none';
+    // Submit the code to the auth endpoint
+    try {
+        const resp = await fetch('/auth/verify-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: currentEmail, code: code })
+        });
+        if (resp.ok) {
+            window.location.href = '/vault';
+        } else {
+            const data = await resp.json();
+            errorEl.textContent = data.detail || 'Verification failed. Please try again.';
+            errorEl.style.display = 'block';
+        }
+    } catch (e) {
+        errorEl.textContent = 'Network error. Please try again.';
+        errorEl.style.display = 'block';
+    }
+}
+</script>
+{% endblock %}
