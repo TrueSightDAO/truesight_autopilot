@@ -72,7 +72,10 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
 
     ext = p.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
-        return {"status": "error", "message": f"Unsupported image format: {ext}. Supported: {SUPPORTED_EXTENSIONS}"}
+        return {
+            "status": "error",
+            "message": f"Unsupported image format: {ext}. Supported: {SUPPORTED_EXTENSIONS}",
+        }
 
     try:
         import pytesseract
@@ -99,13 +102,19 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
         try:
             original = Image.open(path)
         except Exception as e:
-            return {"status": "error", "message": f"Cannot open image: {e}", "reason": "corrupt_file"}
+            return {
+                "status": "error",
+                "message": f"Cannot open image: {e}",
+                "reason": "corrupt_file",
+            }
         original_w, original_h = original.size
 
         processed = preprocess_image(original)
 
         # Run OCR with confidence data
-        data = pytesseract.image_to_data(processed, lang=lang, output_type=pytesseract.Output.DICT)
+        data = pytesseract.image_to_data(
+            processed, lang=lang, output_type=pytesseract.Output.DICT
+        )
 
         # Extract text and compute confidence
         text_parts = []
@@ -122,7 +131,9 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
                     pass
 
         full_text = " ".join(text_parts)
-        avg_confidence = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
+        avg_confidence = (
+            round(sum(confidences) / len(confidences), 1) if confidences else 0.0
+        )
 
         # Quality assessment (fixed logic: <30 poor, <50 fair, >=50 good)
         quality = "good"
@@ -154,7 +165,11 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(json.dumps({"status": "error", "message": "Usage: ocr_image.py <path> [lang]"}))
+        print(
+            json.dumps(
+                {"status": "error", "message": "Usage: ocr_image.py <path> [lang]"}
+            )
+        )
         sys.exit(1)
 
     lang = sys.argv[2] if len(sys.argv) > 2 else "eng"

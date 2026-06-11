@@ -38,7 +38,9 @@ GITHUB_API = "https://api.github.com"
 
 def get_github_token() -> str:
     """Get GitHub PAT from environment."""
-    token = os.environ.get("TRUESIGHT_DAO_AUTOPILOT", "") or os.environ.get("GITHUB_PAT", "")
+    token = os.environ.get("TRUESIGHT_DAO_AUTOPILOT", "") or os.environ.get(
+        "GITHUB_PAT", ""
+    )
     if not token:
         # Try reading from .env
         env_paths = [
@@ -61,7 +63,10 @@ def github_request(method: str, url: str, data: dict | None = None) -> dict:
 
     token = get_github_token()
     if not token:
-        return {"status": "error", "message": "GitHub token not found. Set TRUESIGHT_DAO_AUTOPILOT env var."}
+        return {
+            "status": "error",
+            "message": "GitHub token not found. Set TRUESIGHT_DAO_AUTOPILOT env var.",
+        }
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -83,9 +88,15 @@ def github_request(method: str, url: str, data: dict | None = None) -> dict:
             elif resp.status_code == 404:
                 return {"status": "not_found"}
             elif resp.status_code == 422:
-                return {"status": "error", "message": f"GitHub validation error: {resp.text[:500]}"}
+                return {
+                    "status": "error",
+                    "message": f"GitHub validation error: {resp.text[:500]}",
+                }
             else:
-                return {"status": "error", "message": f"GitHub API error {resp.status_code}: {resp.text[:500]}"}
+                return {
+                    "status": "error",
+                    "message": f"GitHub API error {resp.status_code}: {resp.text[:500]}",
+                }
     except Exception as e:
         return {"status": "error", "message": f"HTTP request failed: {e}"}
 
@@ -203,13 +214,21 @@ def append_to_transcript(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Append attachment content to session transcript")
+    parser = argparse.ArgumentParser(
+        description="Append attachment content to session transcript"
+    )
     parser.add_argument("--session-id", required=True, help="Session hash/ID")
     parser.add_argument("--content", required=True, help="Extracted text content")
     parser.add_argument("--filename", required=True, help="Original filename")
-    parser.add_argument("--type", required=True, choices=["PDF", "Image"], help="File type")
-    parser.add_argument("--ocr-text", default="", help="OCR extracted text (for images)")
-    parser.add_argument("--grok-description", default="", help="Grok vision description (for images)")
+    parser.add_argument(
+        "--type", required=True, choices=["PDF", "Image"], help="File type"
+    )
+    parser.add_argument(
+        "--ocr-text", default="", help="OCR extracted text (for images)"
+    )
+    parser.add_argument(
+        "--grok-description", default="", help="Grok vision description (for images)"
+    )
 
     args = parser.parse_args()
     result = append_to_transcript(
