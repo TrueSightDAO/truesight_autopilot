@@ -75,7 +75,6 @@ def _gov_name_for_key(public_key_b64: str) -> str | None:
     return None
 
 
-
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
 
