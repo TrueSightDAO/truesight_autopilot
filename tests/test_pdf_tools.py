@@ -10,7 +10,7 @@ import pytest
 
 reportlab = pytest.importorskip("reportlab")
 
-from app.tools import pdf_tools
+from app.tools import pdf_tools  # noqa: E402 — must follow the reportlab importorskip guard above
 
 
 def test_empty_content_returns_error():

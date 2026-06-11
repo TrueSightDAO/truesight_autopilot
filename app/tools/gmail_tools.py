@@ -409,7 +409,7 @@ def gmail_list_labels(account: str | None = None) -> str:
         resp = service.users().labels().list(userId="me").execute()
     except Exception as e:
         return _err(str(e))
-    labels = [{"id": l.get("id"), "name": l.get("name"), "type": l.get("type")} for l in resp.get("labels", [])]
+    labels = [{"id": lbl.get("id"), "name": lbl.get("name"), "type": lbl.get("type")} for lbl in resp.get("labels", [])]
     return json.dumps(
         {
             "status": "ok",

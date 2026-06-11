@@ -41,17 +41,6 @@ from .roles import (
     resolve_role,
     set_role_in_history,
 )
-
-
-def _gov_name_for_key(public_key_b64: str) -> str | None:
-    """Look up governor name from public key. Returns name or None."""
-    data = load_governors()
-    for g in data.get("governors", []):
-        if g.get("public_key") == public_key_b64:
-            return g.get("name")
-    return None
-
-
 from .aws_monitor import AWSMonitor
 from .daily_briefing import handle_daily_briefing
 from .edgar_logger import EdgarLogger as EdgarDirectClient
@@ -65,6 +54,15 @@ from .tools.fs_tools import list_directory, read_local_file
 from .tools.github_tools import read_repo_file
 from .tools.inventory_lookup import list_matching_qr_codes
 from .tools.qr_scanner import lookup_qr_batch, lookup_qr_code, scan_qr_batch, scan_qr_from_file
+
+
+def _gov_name_for_key(public_key_b64: str) -> str | None:
+    """Look up governor name from public key. Returns name or None."""
+    data = load_governors()
+    for g in data.get("governors", []):
+        if g.get("public_key") == public_key_b64:
+            return g.get("name")
+    return None
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
