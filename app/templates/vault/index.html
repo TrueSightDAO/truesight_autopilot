@@ -1,0 +1,269 @@
+{% extends "vault/base.html" %}
+{% block title %}Credential Vault{% endblock %}
+{% block content %}
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if not identity %}
+    <div class="card nudge-card">
+        <h2>🔐 Credential Vault</h2>
+        <p>This vault stores service credentials used by the TrueSight DAO Autopilot.<br>
+        Sign in with your DAO identity to manage credentials.</p>
+        <a href="/vault/login" class="btn btn-primary">Sign in</a>
+    </div>
+
+{% elif not identity.is_governor %}
+    <div class="card nudge-card">
+        <h2>🌱 Welcome, {{ identity.name }}</h2>
+        <p>The credential vault is restricted to DAO governors.<br>
+        As a verified contributor, you can help the DAO grow in other ways.</p>
+        <p style="font-size: 0.9rem;">
+            <strong>Want to contribute?</strong> Submit a contribution, refer a retail partner,
+            or participate in DAO governance. Every contribution strengthens the network.
+        </p>
+        <a href="https://truesight.me" class="btn btn-primary">Explore the DAO</a>
+    </div>
+
+{% else %}
+    <div id="flash" class="flash"></div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">Credentials</h2>
+        <button class="btn btn-primary" onclick="showAddModal()">+ Add credential</button>
+    </div>
+
+    <div class="card">
+        {% if credentials %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Purpose</th>
+                    <th>Version</th>
+                    <th>Created by</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cred in credentials %}
+                <tr>
+                    <td><strong>{{ cred.name }}</strong></td>
+                    <td>{{ cred.purpose[:60] }}{% if cred.purpose|length > 60 %}…{% endif %}</td>
+                    <td>v{{ cred.version }}</td>
+                    <td>{{ cred.created_by }}</td>
+                    <td>{{ cred.created_at[:10] }}</td>
+                    <td>
+                        <button class="btn btn-outline btn-sm" onclick="showRotateModal('{{ cred.name }}')">Rotate</button>
+                        <button class="btn btn-danger btn-sm" onclick="confirmDelete('{{ cred.name }}')">Delete</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <p>No credentials stored yet.</p>
+            <p style="font-size: 0.85rem;">Add your first credential to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Audit Log</h2>
+        <div id="audit-log">
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Vault Health</h2>
+        <div id="vault-health">
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
+        </div>
+    </div>
+
+    <!-- Add Modal -->
+    <div class="modal-overlay" id="add-modal">
+        <div class="modal">
+            <h3>Add Credential</h3>
+            <label for="add-name">Name</label>
+            <input type="text" id="add-name" placeholder="e.g. stripe_api_key" />
+            <label for="add-value">Value (secret)</label>
+            <textarea id="add-value" rows="3" placeholder="The credential value"></textarea>
+            <label for="add-purpose">Purpose</label>
+            <input type="text" id="add-purpose" placeholder="e.g. Stripe payment processing" />
+            <label for="add-scopes">Scopes (comma-separated)</label>
+            <input type="text" id="add-scopes" placeholder="e.g. read, write" />
+            <div id="add-error" class="error" style="display:none;"></div>
+            <button class="btn btn-primary" onclick="addCredential()">Add</button>
+            <button class="btn btn-outline" onclick="closeModal('add-modal')">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Rotate Modal -->
+    <div class="modal-overlay" id="rotate-modal">
+        <div class="modal">
+            <h3>Rotate Credential: <span id="rotate-name"></span></h3>
+            <label for="rotate-value">New value</label>
+            <textarea id="rotate-value" rows="3" placeholder="New secret value"></textarea>
+            <label for="rotate-purpose">New purpose (optional)</label>
+            <input type="text" id="rotate-purpose" placeholder="Leave blank to keep existing" />
+            <div id="rotate-error" class="error" style="display:none;"></div>
+            <button class="btn btn-primary" onclick="rotateCredential()">Rotate</button>
+            <button class="btn btn-outline" onclick="closeModal('rotate-modal')">Cancel</button>
+        </div>
+    </div>
+
+    <script>
+    let currentRotateName = '';
+
+    function flash(msg, type) {
+        const el = document.getElementById('flash');
+        el.textContent = msg;
+        el.className = 'flash show ' + (type || 'success');
+        setTimeout(() => el.className = 'flash', 3000);
+    }
+
+    function showAddModal() {
+        document.getElementById('add-modal').classList.add('active');
+        document.getElementById('add-error').style.display = 'none';
+    }
+
+    function showRotateModal(name) {
+        currentRotateName = name;
+        document.getElementById('rotate-name').textContent = name;
+        document.getElementById('rotate-modal').classList.add('active');
+        document.getElementById('rotate-error').style.display = 'none';
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('active');
+    }
+
+    async function addCredential() {
+        const name = document.getElementById('add-name').value.trim();
+        const value = document.getElementById('add-value').value.trim();
+        const purpose = document.getElementById('add-purpose').value.trim();
+        const scopes = document.getElementById('add-scopes').value.trim();
+        const errorEl = document.getElementById('add-error');
+
+        if (!name || !value) {
+            errorEl.textContent = 'Name and value are required.';
+            errorEl.style.display = 'block';
+            return;
+        }
+        errorEl.style.display = 'none';
+
+        try {
+            const resp = await fetch('/vault/api/credentials', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, value, purpose, scopes })
+            });
+            if (resp.ok) {
+                closeModal('add-modal');
+                flash('Credential "' + name + '" added.');
+                location.reload();
+            } else {
+                const data = await resp.json();
+                errorEl.textContent = data.detail || 'Failed to add credential.';
+                errorEl.style.display = 'block';
+            }
+        } catch (e) {
+            errorEl.textContent = 'Network error.';
+            errorEl.style.display = 'block';
+        }
+    }
+
+    async function rotateCredential() {
+        const value = document.getElementById('rotate-value').value.trim();
+        const purpose = document.getElementById('rotate-purpose').value.trim();
+        const errorEl = document.getElementById('rotate-error');
+
+        if (!value) {
+            errorEl.textContent = 'New value is required.';
+            errorEl.style.display = 'block';
+            return;
+        }
+        errorEl.style.display = 'none';
+
+        try {
+            const resp = await fetch('/vault/api/credentials/' + encodeURIComponent(currentRotateName) + '/rotate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value, purpose })
+            });
+            if (resp.ok) {
+                closeModal('rotate-modal');
+                flash('Credential "' + currentRotateName + '" rotated.');
+                location.reload();
+            } else {
+                const data = await resp.json();
+                errorEl.textContent = data.detail || 'Failed to rotate credential.';
+                errorEl.style.display = 'block';
+            }
+        } catch (e) {
+            errorEl.textContent = 'Network error.';
+            errorEl.style.display = 'block';
+        }
+    }
+
+    async function confirmDelete(name) {
+        if (!confirm('Delete credential "' + name + '"? This cannot be undone.')) return;
+        try {
+            const resp = await fetch('/vault/api/credentials/' + encodeURIComponent(name), {
+                method: 'DELETE'
+            });
+            if (resp.ok) {
+                flash('Credential "' + name + '" deleted.');
+                location.reload();
+            } else {
+                const data = await resp.json();
+                flash(data.detail || 'Failed to delete.', 'error');
+            }
+        } catch (e) {
+            flash('Network error.', 'error');
+        }
+    }
+
+    // Load audit log
+    fetch('/vault/api/audit-log')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            const el = document.getElementById('audit-log');
+            if (!data || !data.entries || data.entries.length === 0) {
+                el.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">No audit entries yet.</p>';
+                return;
+            }
+            let html = '<table><thead><tr><th>Action</th><th>Credential</th><th>Actor</th><th>Timestamp</th><th>Details</th></tr></thead><tbody>';
+            data.entries.slice(0, 50).forEach(e => {
+                html += '<tr><td>' + e.action + '</td><td>' + e.credential_name + '</td><td>' + e.actor + '</td><td>' + e.timestamp + '</td><td>' + (e.details || '') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        })
+        .catch(() => {
+            document.getElementById('audit-log').innerHTML = '<p style="color: var(--danger);">Failed to load audit log.</p>';
+        });
+
+    // Load vault health
+    fetch('/vault/api/health')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            const el = document.getElementById('vault-health');
+            if (!data) {
+                el.innerHTML = '<p style="color: var(--danger);">Could not reach vault.</p>';
+                return;
+            }
+            const status = data.initialized ? '✅ Initialized' : '⚠️ Not initialized';
+            el.innerHTML = '<p><strong>Status:</strong> ' + status + '</p><p><strong>Credentials:</strong> ' + data.credential_count + '</p>';
+        })
+        .catch(() => {
+            document.getElementById('vault-health').innerHTML = '<p style="color: var(--danger);">Failed to load vault health.</p>';
+        });
+    </script>
+{% endif %}
+{% endblock %}
