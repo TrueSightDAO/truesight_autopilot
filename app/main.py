@@ -132,6 +132,12 @@ _session_locks: dict[
     str, asyncio.Lock
 ] = {}  # session_key -> lock (one writer/executor per thread)
 
+# Per-session live-progress record — updated by _run_tool_round_loop so a
+# second message in the same thread can introspect what the running turn is
+# doing. Read-only from outside the turn (lock-bypassing for progress queries).
+# Cleared when the turn ends (success or error).
+_live_progress: dict[str, dict] = {}
+
 
 def _session_lock(session_id: str) -> asyncio.Lock:
     """Per-session async lock. session_id is ``tg:<chat>:<thread>`` for Telegram,
@@ -145,6 +151,41 @@ def _session_lock(session_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _session_locks[session_id] = lock
     return lock
+
+
+def _render_progress(session_id: str) -> str | None:
+    """Return a one/two-line templated snapshot of the running turn for
+    *session_id*, or None if nothing is running.
+
+    Fields: instruction excerpt, round, elapsed seconds, current tool + arg,
+    done-so-far list, queued_behind count. Instant — no LLM, no lock."""
+    rec = _live_progress.get(session_id)
+    if not rec:
+        return None
+    parts = []
+    # Instruction excerpt
+    instr = (rec.get("instruction") or "")[:80]
+    if instr:
+        parts.append(f"\"{instr}...\"")
+    # Round + elapsed
+    rnd = rec.get("round", 0)
+    elapsed = time.time() - rec.get("started_at", time.time())
+    parts.append(f"round {rnd}, {elapsed:.0f}s")
+    # Current tool + arg
+    ct = rec.get("current_tool")
+    ca = rec.get("current_arg", "")
+    if ct:
+        arg_snippet = (str(ca) or "")[:60]
+        parts.append("running `" + ct + "`" + (f" ({arg_snippet})" if arg_snippet else ""))
+    # Done so far
+    done = rec.get("done", [])
+    if done:
+        parts.append(f"done: {len(done)} step(s)")
+    # Queue depth
+    qd = rec.get("queued_behind", 0)
+    if qd:
+        parts.append(f"{qd} queued behind")
+    return " — ".join(parts)
 
 
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
@@ -1977,6 +2018,18 @@ async def _run_tool_round_loop(
     state["wanted_more_rounds"] = False
     state.setdefault("tool_trace", [])  # [{name, result}] for the per-turn report
 
+    # Populate live-progress record
+    _live_progress[session_id] = {
+        "instruction": (history[-1]["content"] if history and history[-1].get("role") == "user" else "")[:200],
+        "started_at": time.time(),
+        "round": 0,
+        "elapsed": 0.0,
+        "current_tool": None,
+        "current_arg": None,
+        "done": [],
+        "queued_behind": len(_message_queues.get(session_id, [])),
+    }
+
     log_prefix = "QUEUE " if queue_msg_id else ""
     raw_label_prefix = "queue-" if queue_msg_id else ""
 
@@ -1988,6 +2041,8 @@ async def _run_tool_round_loop(
 
     while round_num < MAX_TOOL_ROUNDS:
         round_num += 1
+        _live_progress[session_id]["round"] = round_num
+        _live_progress[session_id]["elapsed"] = time.time() - _live_progress[session_id]["started_at"]
 
         if _cancel_flags.get(session_id):
             logger.info(
@@ -2001,6 +2056,7 @@ async def _run_tool_round_loop(
             )
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
+            _live_progress.pop(session_id, None)
             return
 
         # Mid-round interjection — only meaningful for the initial turn.
@@ -2038,6 +2094,7 @@ async def _run_tool_round_loop(
             )
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
+            _live_progress.pop(session_id, None)
             return
         _log_raw_llm(
             session_id,
@@ -2113,6 +2170,10 @@ async def _run_tool_round_loop(
                 )
 
                 yield _sse_event("tool", {"tool": func_name, "status": "calling"})
+                # Update live progress
+                _live_progress[session_id]["current_tool"] = func_name
+                _live_progress[session_id]["current_arg"] = str(func_args)[:200]
+
                 tool_task = asyncio.create_task(
                     _run_tool(func_name, func_args, history, session_id, governor_name)
                 )
@@ -2145,8 +2206,13 @@ async def _run_tool_round_loop(
                     )
                     state["cancelled"] = True
                     state["assistant_text"] = assistant_text
+                    _live_progress.pop(session_id, None)
                     return
                 yield _sse_event("tool", {"tool": func_name, "status": "done"})
+                # Update live progress: mark tool done
+                _live_progress[session_id]["current_tool"] = None
+                _live_progress[session_id]["current_arg"] = None
+                _live_progress[session_id]["done"].append(f"{func_name}")
                 logger.info(
                     "[%d] %sTOOL RESULT: %s result=%.300s",
                     req_id,
@@ -2168,6 +2234,9 @@ async def _run_tool_round_loop(
         else:
             assistant_text = client.extract_text(completion)
             break  # no more tool calls — exit loop
+
+    # Clear live progress — turn ended (success or error)
+    _live_progress.pop(session_id, None)
 
     if not assistant_text:
         logger.info(
