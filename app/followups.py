@@ -41,7 +41,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,7 +57,9 @@ _FOLLOWUPS_MD = _CONTEXT_DIR / "OPEN_FOLLOWUPS.md"
 
 # Sidecar directory — same parent as SESSION_LOG_DIR for deploy survivability.
 # Fall back to a local path if the env var is unset.
-_SESSION_LOG_DIR = Path(os.environ.get("AUTOPILOT_SESSION_LOG_DIR", "/opt/truesight_autopilot/sessions"))
+_SESSION_LOG_DIR = Path(
+    os.environ.get("AUTOPILOT_SESSION_LOG_DIR", "/opt/truesight_autopilot/sessions")
+)
 _FOLLOWUPS_DIR = _SESSION_LOG_DIR.parent / "followups"
 _STATE_PATH = _FOLLOWUPS_DIR / "state.json"
 
@@ -69,6 +70,7 @@ _STATE_PATH = _FOLLOWUPS_DIR / "state.json"
 @dataclass
 class Followup:
     """A single follow-up parsed from OPEN_FOLLOWUPS.md."""
+
     id: str
     chat_id: str
     thread_id: str
@@ -87,6 +89,7 @@ class Followup:
 @dataclass
 class FollowupState:
     """Mutable scheduling state for a single follow-up."""
+
     last_checked: str | None = None
     next_check: str | None = None
     attempts: int = 0
@@ -106,10 +109,14 @@ _FOLLOWUP_BLOCK_RE = re.compile(
 )
 
 # Matches a single key: value line inside the block body
-_KEY_VALUE_RE = re.compile(r"^(?P<key>[a-zA-Z_][a-zA-Z_0-9]*):\s*(?P<value>.*)$", re.MULTILINE)
+_KEY_VALUE_RE = re.compile(
+    r"^(?P<key>[a-zA-Z_][a-zA-Z_0-9]*):\s*(?P<value>.*)$", re.MULTILINE
+)
 
 # Matches nested dict lines (indented key: value)
-_NESTED_KEY_RE = re.compile(r"^\s+(?P<key>[a-zA-Z_][a-zA-Z_0-9]*):\s*(?P<value>.*)$", re.MULTILINE)
+_NESTED_KEY_RE = re.compile(
+    r"^\s+(?P<key>[a-zA-Z_][a-zA-Z_0-9]*):\s*(?P<value>.*)$", re.MULTILINE
+)
 
 
 # ── Parsing ──────────────────────────────────────────────────────────────────
@@ -140,7 +147,9 @@ def _parse_block_body(body: str) -> dict:
         # Check for nested key under a section
         nested_match = _NESTED_KEY_RE.match(line)
         if nested_match and current_section:
-            current_nested[nested_match.group("key")] = nested_match.group("value").strip()
+            current_nested[nested_match.group("key")] = nested_match.group(
+                "value"
+            ).strip()
             continue
 
         # Blank line — end any open section
@@ -158,7 +167,9 @@ def _parse_block_body(body: str) -> dict:
     return result
 
 
-def _block_to_followup(block_text: str, body: str, line_start: int, line_end: int) -> Followup | str:
+def _block_to_followup(
+    block_text: str, body: str, line_start: int, line_end: int
+) -> Followup | str:
     """Convert a parsed block into a Followup dataclass.
     Returns the Followup on success, or an error string on failure."""
     parsed = _parse_block_body(body)
@@ -375,7 +386,10 @@ def set_status(followup_id: str, new_status: str) -> tuple[bool, str]:
     Valid statuses: 'open', 'resolved', 'aborted'.
     """
     if new_status not in ("open", "resolved", "aborted"):
-        return False, f"Invalid status: '{new_status}'. Must be 'open', 'resolved', or 'aborted'."
+        return (
+            False,
+            f"Invalid status: '{new_status}'. Must be 'open', 'resolved', or 'aborted'.",
+        )
 
     followup, state = get(followup_id)
     if followup is None:

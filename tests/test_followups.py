@@ -6,7 +6,6 @@ All tests use in-memory strings or temp paths.
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -137,8 +136,16 @@ def test_parse_extracts_all_fields():
     assert f.thread_id == "10"
     assert f.title == "Chase Matheus for the Nota Fiscal (AGL-XX)"
     assert f.created_at == "2026-06-11"
-    assert f.condition == {"kind": "gmail_reply", "from": "matheus@example.com", "subject_contains": "Nota Fiscal"}
-    assert f.schedule == {"check": "daily", "escalate_after_days": "2", "on_escalate": "ping_thread"}
+    assert f.condition == {
+        "kind": "gmail_reply",
+        "from": "matheus@example.com",
+        "subject_contains": "Nota Fiscal",
+    }
+    assert f.schedule == {
+        "check": "daily",
+        "escalate_after_days": "2",
+        "on_escalate": "ping_thread",
+    }
     assert f.status == "open"
 
 
@@ -267,7 +274,7 @@ def test_state_atomic_write():
     fu._STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Write initial valid state
     fu.save_state({"a": fu.FollowupState(status="open")})
-    initial_content = fu._STATE_PATH.read_text()
+    fu._STATE_PATH.read_text()  # noqa: F841 — intentional: simulates crash before replace
 
     # Simulate a crash: write tmp but don't replace
     tmp_path = fu._STATE_PATH.with_name(f"state.json.{os.getpid()}.tmp")
