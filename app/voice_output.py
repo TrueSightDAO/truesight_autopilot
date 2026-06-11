@@ -8,11 +8,11 @@ Designated voices per language:
   - Mandarin (Chinese): zh-CN-XiaoxiaoNeural (Xiaoxiao) — Warm, Natural
   - Portuguese (Brazilian): pt-BR-FranciscaNeural (Francisca) — Friendly, Positive
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 import uuid
@@ -23,8 +23,8 @@ logger = logging.getLogger("autopilot.voice_output")
 # ── Language → voice mapping ───────────────────────────────────────────────
 
 VOICE_MAP: dict[str, str] = {
-    "en": "en-US-AriaNeural",       # English — Positive, Confident
-    "zh": "zh-CN-XiaoxiaoNeural",   # Mandarin — Warm, Natural
+    "en": "en-US-AriaNeural",  # English — Positive, Confident
+    "zh": "zh-CN-XiaoxiaoNeural",  # Mandarin — Warm, Natural
     "pt": "pt-BR-FranciscaNeural",  # Portuguese — Friendly, Positive
 }
 
@@ -76,6 +76,7 @@ def detect_language(text: str) -> str:
 
 # ── Synthesis ──────────────────────────────────────────────────────────────
 
+
 def _cleanup_old_files() -> None:
     """Remove voice response files older than _CLEANUP_MAX_AGE."""
     now = time.time()
@@ -119,7 +120,9 @@ def synthesize_voice(text: str, language: str = "en") -> str | None:
         if output_path.exists() and output_path.stat().st_size > 0:
             logger.info(
                 "Synthesized voice response: lang=%s voice=%s size=%d bytes",
-                language, voice, output_path.stat().st_size,
+                language,
+                voice,
+                output_path.stat().st_size,
             )
             _cleanup_old_files()
             return str(output_path)

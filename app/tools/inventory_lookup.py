@@ -3,6 +3,7 @@
 Provides list_matching_qr_codes(prefix) to search previously looked-up
 QR codes from the local JSON cache.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,13 +66,15 @@ def list_matching_qr_codes(prefix: str) -> dict[str, Any]:
     matches = []
     for code, record in cache.items():
         if code.startswith(prefix):
-            matches.append({
-                "qr_code": code,
-                "status": record.get("status", ""),
-                "manager": record.get("manager_name", ""),
-                "owner": record.get("owner_name", ""),
-                "currency": record.get("currency", ""),
-            })
+            matches.append(
+                {
+                    "qr_code": code,
+                    "status": record.get("status", ""),
+                    "manager": record.get("manager_name", ""),
+                    "owner": record.get("owner_name", ""),
+                    "currency": record.get("currency", ""),
+                }
+            )
 
     return {
         "status": "success",
@@ -84,6 +87,7 @@ def list_matching_qr_codes(prefix: str) -> dict[str, Any]:
 # ── capability manifest entry ─────────────────────────────────────────────
 
 import json as _json  # noqa: E402
+
 from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(

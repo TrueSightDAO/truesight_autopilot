@@ -4,6 +4,7 @@ The per-session async lock must serialize turns for the SAME session (so two
 same-thread requests can't interleave their transcript writes — the race that
 bricked threads 3 and 780) while letting DIFFERENT sessions run concurrently.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,8 +45,8 @@ def test_lock_identity():
         a1 = m._session_lock("tg:1:1")
         a2 = m._session_lock("tg:1:1")
         b = m._session_lock("tg:1:2")
-        assert a1 is a2          # same session → same lock
-        assert a1 is not b       # different session → different lock
+        assert a1 is a2  # same session → same lock
+        assert a1 is not b  # different session → different lock
 
     asyncio.run(_main())
 
@@ -100,11 +101,13 @@ def test_lock_prevents_dangling_tool_calls():
 
     async def turn(call_id):
         async with m._session_lock("tg:race:1"):
-            session.append({
-                "role": "assistant", "content": "",
-                "tool_calls": [{"id": call_id, "type": "function",
-                                "function": {"name": "f", "arguments": "{}"}}],
-            })
+            session.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                }
+            )
             await asyncio.sleep(0.01)  # tool-execution window where the race struck
             session.append({"role": "tool", "tool_call_id": call_id, "content": "ok"})
 

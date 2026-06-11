@@ -10,6 +10,7 @@ asks for a single-line numeric answer. Asserts:
 This is the cheapest end-to-end signal that the chat path is alive,
 that tool dispatch works, and that the configured LLM provider responds.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +24,6 @@ from _autopilot_client import (
     require_running_autopilot,
     stream_chat,
 )
-
 
 PROMPT = (
     "Use the `read_repo_file` tool to fetch repo=truesight_autopilot path=README.md "
@@ -44,7 +44,7 @@ async def run() -> int:
         nonlocal seen_tool
         if t == "tool" and data.get("tool") == "read_repo_file" and data.get("status") == "calling":
             seen_tool = True
-            print(f"  → tool: read_repo_file calling", flush=True)
+            print("  → tool: read_repo_file calling", flush=True)
         elif t == "heartbeat":
             print(f"  → heartbeat phase={data.get('phase')} elapsed={data.get('elapsed_s')}s", flush=True)
 

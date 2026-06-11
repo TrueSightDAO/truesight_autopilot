@@ -2,10 +2,10 @@
 
 Provider keys MUST stay in sync with PROVIDERS.md §6.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Type
 
 from .base import LLMProvider
 
@@ -19,8 +19,8 @@ def _ensure_providers() -> None:
     """Lazy-import provider classes so registration happens once."""
     if _PROVIDERS:
         return
-    from .deepseek import DeepSeekProvider as _D
     from .bigmodel import BigModelProvider as _B
+    from .deepseek import DeepSeekProvider as _D
     from .litellm_provider import LiteLLMProvider as _L
 
     _PROVIDERS["deepseek"] = _D
@@ -41,9 +41,7 @@ def get_provider(name: str | None = None) -> LLMProvider:
     key = (key or "deepseek").strip().lower()
 
     if key not in _PROVIDERS:
-        raise ValueError(
-            f"Unknown LLM provider '{key}'. Known: {list(_PROVIDERS.keys())}"
-        )
+        raise ValueError(f"Unknown LLM provider '{key}'. Known: {list(_PROVIDERS.keys())}")
 
     if key not in _INSTANCES:
         try:
@@ -53,9 +51,7 @@ def get_provider(name: str | None = None) -> LLMProvider:
         except Exception as e:
             if key == "deepseek":
                 raise  # no fallback from the fallback
-            logger.warning(
-                "Failed to initialize %s provider: %s. Falling back to DeepSeek.", key, e
-            )
+            logger.warning("Failed to initialize %s provider: %s. Falling back to DeepSeek.", key, e)
             return get_provider("deepseek")
 
     return _INSTANCES[key]

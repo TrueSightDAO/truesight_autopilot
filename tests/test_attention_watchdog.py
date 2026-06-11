@@ -1,8 +1,9 @@
 """Unit tests for the attention-watchdog ask heuristics (pure functions)."""
+
 from app.attention_watchdog import chat_deep_link, classify_text, should_track
 
-
 # ── classify_text ───────────────────────────────────────────────────────────
+
 
 def test_question_mark_is_ask():
     ask, dated = classify_text("Are we still on for the serving?")
@@ -47,55 +48,75 @@ def test_empty_text_not_tracked():
 
 # ── should_track gate ───────────────────────────────────────────────────────
 
+
 def test_dm_with_ask_tracks():
     track, dated = should_track(
-        is_private=True, mentioned=False, sender_is_bot=False,
-        is_broadcast=False, text="Can you confirm June 12?",
+        is_private=True,
+        mentioned=False,
+        sender_is_bot=False,
+        is_broadcast=False,
+        text="Can you confirm June 12?",
     )
     assert track and dated
 
 
 def test_group_without_mention_ignored():
     track, _ = should_track(
-        is_private=False, mentioned=False, sender_is_bot=False,
-        is_broadcast=False, text="Can anyone confirm June 12?",
+        is_private=False,
+        mentioned=False,
+        sender_is_bot=False,
+        is_broadcast=False,
+        text="Can anyone confirm June 12?",
     )
     assert not track
 
 
 def test_group_with_mention_tracks():
     track, _ = should_track(
-        is_private=False, mentioned=True, sender_is_bot=False,
-        is_broadcast=False, text="can you make the 12th?",
+        is_private=False,
+        mentioned=True,
+        sender_is_bot=False,
+        is_broadcast=False,
+        text="can you make the 12th?",
     )
     assert track
 
 
 def test_bot_sender_ignored():
     track, _ = should_track(
-        is_private=True, mentioned=True, sender_is_bot=True,
-        is_broadcast=False, text="Will you confirm by Friday?",
+        is_private=True,
+        mentioned=True,
+        sender_is_bot=True,
+        is_broadcast=False,
+        text="Will you confirm by Friday?",
     )
     assert not track
 
 
 def test_broadcast_channel_ignored():
     track, _ = should_track(
-        is_private=False, mentioned=True, sender_is_bot=False,
-        is_broadcast=True, text="RSVP by June 12?",
+        is_private=False,
+        mentioned=True,
+        sender_is_bot=False,
+        is_broadcast=True,
+        text="RSVP by June 12?",
     )
     assert not track
 
 
 def test_dm_smalltalk_ignored():
     track, _ = should_track(
-        is_private=True, mentioned=False, sender_is_bot=False,
-        is_broadcast=False, text="thanks again, that was lovely",
+        is_private=True,
+        mentioned=False,
+        sender_is_bot=False,
+        is_broadcast=False,
+        text="thanks again, that was lovely",
     )
     assert not track
 
 
 # ── deep links ──────────────────────────────────────────────────────────────
+
 
 def test_supergroup_deep_link():
     assert chat_deep_link(-1001234567890, 42, None) == "https://t.me/c/1234567890/42"

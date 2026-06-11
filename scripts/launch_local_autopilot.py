@@ -14,13 +14,13 @@ http://127.0.0.1:8011, so the default port matches.
 To stop:
     pkill -f 'uvicorn.*<port>'
 """
+
 from __future__ import annotations
 
 import argparse
 import os
 import sys
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PORT = 8011
@@ -52,7 +52,9 @@ def main() -> None:
 
     venv_python = REPO_ROOT / ".venv" / "bin" / "python"
     if not venv_python.exists():
-        sys.stderr.write(f"FATAL: {venv_python} not found. Run `python -m venv .venv && pip install -r requirements.txt` first.\n")
+        sys.stderr.write(
+            f"FATAL: {venv_python} not found. Run `python -m venv .venv && pip install -r requirements.txt` first.\n"
+        )
         sys.exit(1)
 
     daemonize(args.log)

@@ -40,6 +40,7 @@ JSON result over /chat or via the LLM tool dispatcher without dying mid-
 request. The child subprocess is short-lived (subprocess.run blocks until
 it exits), so we never have orphan workers.
 """
+
 from __future__ import annotations
 
 import json
@@ -132,9 +133,7 @@ def _is_local() -> bool:
     local_hostname = socket.gethostname()
     if local_hostname == settings.ec2_host:
         return True
-    if os.path.isdir(settings.ec2_remote_dir):
-        return True
-    return False
+    return bool(os.path.isdir(settings.ec2_remote_dir))
 
 
 def _run_local(command: str, cwd: str | None = None, timeout: int = 60) -> str:
@@ -142,10 +141,15 @@ def _run_local(command: str, cwd: str | None = None, timeout: int = 60) -> str:
     logger.info("Running local: %s (cwd=%s)", command, cwd)
     try:
         result = subprocess.run(
-            command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+            command,
+            shell=True,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        raise DeployError(f"Local command timed out after {timeout}s: {command}")
+        raise DeployError(f"Local command timed out after {timeout}s: {command}") from None
     if result.returncode != 0:
         msg = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
         raise DeployError(f"Local command failed (exit={result.returncode}): {command}\n{msg}")
@@ -172,10 +176,15 @@ def _capture_forensic_evidence() -> dict:
       disk           : `df -h /` (full disk masquerades as many other failures)
       uptime         : `uptime` (recent reboot indicates external pressure)
     """
+
     def _safe(cmd: str, *, timeout: int = 5) -> str:
         try:
             r = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
             return (r.stdout + r.stderr).strip() or "(no output)"
         except subprocess.TimeoutExpired:
@@ -201,6 +210,7 @@ def _write_deploy_marker(commit: str, elapsed: float) -> None:
     """
     import json as _json
     from datetime import datetime, timezone
+
     marker = "/tmp/.autopilot_deployed"
     try:
         data = {
@@ -235,7 +245,8 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     logger.info("Step 2: pip install")
     _run_local(
         "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
-        cwd=remote_dir, timeout=120,
+        cwd=remote_dir,
+        timeout=120,
     )
     steps.append({"step": "pip_install", "status": "ok"})
 
@@ -246,9 +257,16 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     elapsed = round(time.time() - start, 1)
     _write_deploy_marker(commit, elapsed)
     subprocess.Popen(
-        [_ELEVATE, "systemctl", "restart", "truesight-autopilot",
-         "truesight-autopilot-telegram", "truesight-autopilot-watchdog"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        [
+            _ELEVATE,
+            "systemctl",
+            "restart",
+            "truesight-autopilot",
+            "truesight-autopilot-telegram",
+            "truesight-autopilot-watchdog",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     steps.append({"step": "restart_service", "status": "ok"})
 
@@ -265,18 +283,21 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
         f"{_ELEVATE} ln -sf /etc/nginx/sites-available/sophia /etc/nginx/sites-enabled/ && "
         f"{_ELEVATE} nginx -t && {_ELEVATE} systemctl reload nginx"
         "'",
-        cwd=remote_dir, timeout=30,
+        cwd=remote_dir,
+        timeout=30,
     )
     _run_local(
         "bash -c 'if ! command -v certbot; then "
         f"{_ELEVATE} snap install --classic certbot && "
         f"{_ELEVATE} ln -sf /snap/bin/certbot /usr/bin/certbot; "
         "else echo certbot already installed; fi'",
-        cwd=remote_dir, timeout=60,
+        cwd=remote_dir,
+        timeout=60,
     )
     _run_local(
         f"bash -c '{_ELEVATE} certbot --nginx -d sophia.truesight.me --non-interactive --agree-tos -m garyjob@gmail.com || true'",
-        cwd=remote_dir, timeout=30,
+        cwd=remote_dir,
+        timeout=30,
     )
     steps.append({"step": "nginx_certbot", "status": "ok"})
 
@@ -319,18 +340,26 @@ def deploy_autopilot() -> str:
                 return _post_pull_steps(remote_dir, start, steps)
             except DeployError as e:
                 elapsed = round(time.time() - start, 1)
-                return json.dumps({
-                    "status": "error", "message": str(e),
-                    "steps": steps, "elapsed_seconds": elapsed,
-                    "forensic": _capture_forensic_evidence(),
-                })
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": str(e),
+                        "steps": steps,
+                        "elapsed_seconds": elapsed,
+                        "forensic": _capture_forensic_evidence(),
+                    }
+                )
             except Exception as e:
                 elapsed = round(time.time() - start, 1)
-                return json.dumps({
-                    "status": "error", "message": f"Unexpected error: {e}",
-                    "steps": steps, "elapsed_seconds": elapsed,
-                    "forensic": _capture_forensic_evidence(),
-                })
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": f"Unexpected error: {e}",
+                        "steps": steps,
+                        "elapsed_seconds": elapsed,
+                        "forensic": _capture_forensic_evidence(),
+                    }
+                )
 
         # Phase one: hard-reset to origin/main (NOT git pull), then re-exec
         # a fresh Python interpreter so the just-pulled deploy.py is the one
@@ -349,7 +378,8 @@ def deploy_autopilot() -> str:
             logger.info("Step 1: git fetch + reset --hard origin/main + clean")
             _run_local(
                 "git fetch origin main && git reset --hard origin/main && git clean -fd",
-                cwd=remote_dir, timeout=30,
+                cwd=remote_dir,
+                timeout=30,
             )
             # Don't append git_pull to steps here — the subprocess will, so
             # the returned JSON has the full step list in execution order.
@@ -360,13 +390,15 @@ def deploy_autopilot() -> str:
             # parent was launched (uvicorn module, direct script, REPL).
             child = subprocess.run(
                 [
-                    sys.executable, "-c",
-                    "import sys; "
-                    "from app.tools.deploy import deploy_autopilot; "
-                    "sys.stdout.write(deploy_autopilot())"
+                    sys.executable,
+                    "-c",
+                    "import sys; from app.tools.deploy import deploy_autopilot; sys.stdout.write(deploy_autopilot())",
                 ],
-                cwd=remote_dir, env=child_env,
-                capture_output=True, text=True, timeout=300,
+                cwd=remote_dir,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
             if child.returncode != 0:
                 elapsed = round(time.time() - start, 1)
@@ -379,43 +411,51 @@ def deploy_autopilot() -> str:
                 #   cgroup cascade  → SIGTERM, no dmesg evidence
                 #   real crash      → positive exit code + traceback in stderr
                 forensic = _capture_forensic_evidence()
-                return json.dumps({
-                    "status": "error",
-                    "message": (
-                        f"Phase-two subprocess failed (exit={child.returncode}). "
-                        f"stderr={child.stderr.strip()[:500]}"
-                    ),
-                    "steps": [{"step": "git_pull", "status": "ok"}],
-                    "elapsed_seconds": elapsed,
-                    "forensic": forensic,
-                })
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": (
+                            f"Phase-two subprocess failed (exit={child.returncode}). "
+                            f"stderr={child.stderr.strip()[:500]}"
+                        ),
+                        "steps": [{"step": "git_pull", "status": "ok"}],
+                        "elapsed_seconds": elapsed,
+                        "forensic": forensic,
+                    }
+                )
             # Subprocess emitted the full JSON result — pass it through.
-            return child.stdout.strip() or json.dumps({
-                "status": "error",
-                "message": "Phase-two subprocess returned no output",
-                "steps": [{"step": "git_pull", "status": "ok"}],
-                "elapsed_seconds": round(time.time() - start, 1),
-            })
+            return child.stdout.strip() or json.dumps(
+                {
+                    "status": "error",
+                    "message": "Phase-two subprocess returned no output",
+                    "steps": [{"step": "git_pull", "status": "ok"}],
+                    "elapsed_seconds": round(time.time() - start, 1),
+                }
+            )
 
         except DeployError as e:
             elapsed = round(time.time() - start, 1)
-            return json.dumps({
-                "status": "error",
-                "message": str(e),
-                "steps": steps,
-                "elapsed_seconds": elapsed,
-                "forensic": _capture_forensic_evidence(),
-            })
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": str(e),
+                    "steps": steps,
+                    "elapsed_seconds": elapsed,
+                    "forensic": _capture_forensic_evidence(),
+                }
+            )
 
         except Exception as e:
             elapsed = round(time.time() - start, 1)
-            return json.dumps({
-                "status": "error",
-                "message": f"Unexpected error: {e}",
-                "steps": steps,
-                "elapsed_seconds": elapsed,
-                "forensic": _capture_forensic_evidence(),
-            })
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"Unexpected error: {e}",
+                    "steps": steps,
+                    "elapsed_seconds": elapsed,
+                    "forensic": _capture_forensic_evidence(),
+                }
+            )
 
     # ── Remote (SSH) path ─────────────────────────────────────────────────
     try:

@@ -18,6 +18,7 @@ House style applied here:
 Markdown subset: ``#``/``##``/``###`` headings, paragraphs, ``-``/``*`` bullets,
 ``**bold**`` / ``*italic*``, and pipe tables (``| a | b |`` + ``|---|---|``).
 """
+
 from __future__ import annotations
 
 import base64
@@ -34,14 +35,14 @@ _MAX_BYTES_RETURN = 256 * 1024  # cap on base64 returned to the model
 _HARD_PAGE_LIMIT = 200  # safety net for runaway loops
 
 # ── Brand palette (Saffron Monk) — see PDF_STYLE_CONVENTION.md ──────────────
-_SAFFRON = "#C98A2D"   # primary accent / header band
-_CLAY = "#8A5A1D"      # secondary accent / links
+_SAFFRON = "#C98A2D"  # primary accent / header band
+_CLAY = "#8A5A1D"  # secondary accent / links
 _CACAO_DARK = "#3D2B1F"  # titles / strong headings
-_CACAO_MID = "#5A4632"   # subheads
-_BODY = "#222222"      # body text
-_MUTED = "#888888"     # captions / footer
-_RULE = "#DDDDDD"      # table header fill / separators
-_ZEBRA = "#FBF7EF"     # light cream zebra row
+_CACAO_MID = "#5A4632"  # subheads
+_BODY = "#222222"  # body text
+_MUTED = "#888888"  # captions / footer
+_RULE = "#DDDDDD"  # table header fill / separators
+_ZEBRA = "#FBF7EF"  # light cream zebra row
 _WHITE = "#FFFFFF"
 
 _FONT = "Helvetica"
@@ -49,8 +50,8 @@ _FONT_BOLD = "Helvetica-Bold"
 _FONT_ITALIC = "Helvetica-Oblique"
 _FONT_MONO = "Courier"
 
-_PAGE_MARGIN = 60      # L/R/bottom margin (pt)
-_BAND_HEIGHT = 42      # saffron header band height (pt)
+_PAGE_MARGIN = 60  # L/R/bottom margin (pt)
+_BAND_HEIGHT = 42  # saffron header band height (pt)
 
 # Lightweight inline markdown — only **bold** and *italic*. Order matters:
 # bold first so the *…* regex doesn't eat the ** markers.
@@ -72,26 +73,44 @@ def _apply_inline_markdown(text: str) -> str:
 
 def _brand_styles():
     """Build the house-style ParagraphStyle set."""
-    from reportlab.lib.styles import ParagraphStyle  # type: ignore
     from reportlab.lib.colors import HexColor  # type: ignore
+    from reportlab.lib.styles import ParagraphStyle  # type: ignore
 
     def style(name, **kw):
         kw.setdefault("fontName", _FONT)
         return ParagraphStyle(name, **kw)
 
     return {
-        "h1": style("h1", fontName=_FONT_BOLD, fontSize=15, leading=19,
-                    textColor=HexColor(_CACAO_DARK), spaceBefore=14, spaceAfter=6),
-        "h2": style("h2", fontName=_FONT_BOLD, fontSize=12.5, leading=16,
-                    textColor=HexColor(_CACAO_DARK), spaceBefore=12, spaceAfter=5),
-        "h3": style("h3", fontName=_FONT_BOLD, fontSize=11, leading=14,
-                    textColor=HexColor(_CACAO_MID), spaceBefore=10, spaceAfter=4),
-        "body": style("body", fontSize=10, leading=14.5,
-                      textColor=HexColor(_BODY), spaceAfter=4),
-        "bullet": style("bullet", fontSize=10, leading=14.5,
-                        textColor=HexColor(_BODY), spaceAfter=3, leftIndent=14),
-        "th": style("th", fontName=_FONT_BOLD, fontSize=9, leading=12,
-                    textColor=HexColor(_CACAO_DARK)),
+        "h1": style(
+            "h1",
+            fontName=_FONT_BOLD,
+            fontSize=15,
+            leading=19,
+            textColor=HexColor(_CACAO_DARK),
+            spaceBefore=14,
+            spaceAfter=6,
+        ),
+        "h2": style(
+            "h2",
+            fontName=_FONT_BOLD,
+            fontSize=12.5,
+            leading=16,
+            textColor=HexColor(_CACAO_DARK),
+            spaceBefore=12,
+            spaceAfter=5,
+        ),
+        "h3": style(
+            "h3",
+            fontName=_FONT_BOLD,
+            fontSize=11,
+            leading=14,
+            textColor=HexColor(_CACAO_MID),
+            spaceBefore=10,
+            spaceAfter=4,
+        ),
+        "body": style("body", fontSize=10, leading=14.5, textColor=HexColor(_BODY), spaceAfter=4),
+        "bullet": style("bullet", fontSize=10, leading=14.5, textColor=HexColor(_BODY), spaceAfter=3, leftIndent=14),
+        "th": style("th", fontName=_FONT_BOLD, fontSize=9, leading=12, textColor=HexColor(_CACAO_DARK)),
         "td": style("td", fontSize=9, leading=12, textColor=HexColor(_BODY)),
     }
 
@@ -107,8 +126,8 @@ def _split_row(line: str) -> list:
 
 
 def _build_table(header, rows, styles, content_width):
-    from reportlab.platypus import Table, TableStyle, Paragraph  # type: ignore
     from reportlab.lib.colors import HexColor  # type: ignore
+    from reportlab.platypus import Paragraph, Table, TableStyle  # type: ignore
 
     ncols = max(len(header), *(len(r) for r in rows)) if rows else len(header)
     ncols = max(ncols, 1)
@@ -125,16 +144,20 @@ def _build_table(header, rows, styles, content_width):
 
     col_w = content_width / ncols
     t = Table(data, colWidths=[col_w] * ncols, repeatRows=1)
-    t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), HexColor(_RULE)),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [HexColor(_WHITE), HexColor(_ZEBRA)]),
-        ("GRID", (0, 0), (-1, -1), 0.5, HexColor(_RULE)),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    t.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), HexColor(_RULE)),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [HexColor(_WHITE), HexColor(_ZEBRA)]),
+                ("GRID", (0, 0), (-1, -1), 0.5, HexColor(_RULE)),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
     return t
 
 
@@ -199,7 +222,7 @@ def _page_furniture(title: str):
         canvas.setFillColor(HexColor(_MUTED))
         canvas.setFont(_FONT, 8)
         canvas.drawString(_PAGE_MARGIN, 28, "TrueSight DAO")
-        canvas.drawRightString(w - _PAGE_MARGIN, 28, "Page %d" % canvas.getPageNumber())
+        canvas.drawRightString(w - _PAGE_MARGIN, 28, f"Page {canvas.getPageNumber()}")
 
     return draw
 
@@ -241,7 +264,7 @@ def generate_pdf(
             author="TrueSight DAO Autopilot",
             leftMargin=_PAGE_MARGIN,
             rightMargin=_PAGE_MARGIN,
-            topMargin=_BAND_HEIGHT + 24,   # clear the saffron band
+            topMargin=_BAND_HEIGHT + 24,  # clear the saffron band
             bottomMargin=48,
         )
         flowables = _markdown_to_flowables(content, styles, content_width)
@@ -262,20 +285,25 @@ def generate_pdf(
 
     encoded = base64.b64encode(pdf_bytes).decode("ascii")
     truncated = len(encoded) > _MAX_BYTES_RETURN
-    returned_b64 = encoded[: _MAX_BYTES_RETURN] if truncated else encoded
+    returned_b64 = encoded[:_MAX_BYTES_RETURN] if truncated else encoded
 
     logger.info(
         "generate_pdf ok: title=%s bytes=%d truncated=%s path=%s",
-        (title or "")[:60], len(pdf_bytes), truncated, output_path,
+        (title or "")[:60],
+        len(pdf_bytes),
+        truncated,
+        output_path,
     )
-    return json.dumps({
-        "status": "ok",
-        "title": title or "",
-        "byte_count": len(pdf_bytes),
-        "pdf_base64": returned_b64,
-        "truncated": truncated,
-        "output_path": output_path,
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "title": title or "",
+            "byte_count": len(pdf_bytes),
+            "pdf_base64": returned_b64,
+            "truncated": truncated,
+            "output_path": output_path,
+        }
+    )
 
 
 # ── capability manifest entry ─────────────────────────────────────────────
@@ -288,9 +316,18 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "content": {"type": "string", "description": "Markdown-lite source: # / ## / ### headings, blank-line paragraphs, '- '/'* ' bullets, **bold**, *italic*, and pipe tables (| a | b | then |---|---|)."},
-            "title": {"type": "string", "description": "Document title — shown on the saffron header band on every page."},
-            "output_path": {"type": "string", "description": "Optional local path to write the full PDF to (default: auto-generated /tmp file)."},
+            "content": {
+                "type": "string",
+                "description": "Markdown-lite source: # / ## / ### headings, blank-line paragraphs, '- '/'* ' bullets, **bold**, *italic*, and pipe tables (| a | b | then |---|---|).",
+            },
+            "title": {
+                "type": "string",
+                "description": "Document title — shown on the saffron header band on every page.",
+            },
+            "output_path": {
+                "type": "string",
+                "description": "Optional local path to write the full PDF to (default: auto-generated /tmp file).",
+            },
         },
         "required": ["content"],
     },

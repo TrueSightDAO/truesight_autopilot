@@ -1,9 +1,9 @@
 """Tests for the gas_deploy_project autopilot tool (subprocess mocked)."""
+
 from __future__ import annotations
 
 import json
 import subprocess
-from unittest.mock import patch
 
 import pytest
 
@@ -45,7 +45,7 @@ def test_dry_run_command_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = json.loads(gdp.gas_deploy_project("1Dj3-fake"))
     assert out["status"] == "ok"
-    assert "--push" not in captured["cmd"]      # dry-run by default
+    assert "--push" not in captured["cmd"]  # dry-run by default
     assert out["push"] is False
     assert out["with_hooks"] is False
     assert "1Dj3-fake" in captured["cmd"]
@@ -161,6 +161,7 @@ def test_output_truncation(monkeypatch, tmp_path):
 def test_tool_spec_in_registry():
     """Regression: the tool is auto-discovered by the capability manifest."""
     from app.tool_registry import discover_tools
+
     names = {s.name for s in discover_tools()}
     assert "gas_deploy_project" in names
 
@@ -168,5 +169,6 @@ def test_tool_spec_in_registry():
 def test_tool_gated_on_infrastructure_role():
     """Regression: SRE role has access (it's a deploy tool)."""
     from app.roles import ROLES, get_tool_schemas_for_role
+
     infra_names = {t["function"]["name"] for t in get_tool_schemas_for_role(ROLES["infrastructure"])}
     assert "gas_deploy_project" in infra_names

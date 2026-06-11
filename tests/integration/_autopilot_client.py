@@ -5,6 +5,7 @@ SSE consumer used by every test in this directory. Lives outside of the
 autopilot codebase itself so the test surface mirrors what an external
 client (DApp, dao_client CLI, third-party script) would do.
 """
+
 from __future__ import annotations
 
 import base64
@@ -13,13 +14,13 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-
 
 DEFAULT_AUTOPILOT_URL = os.environ.get("AUTOPILOT_URL", "http://127.0.0.1:8011")
 DEFAULT_DAO_CLIENT_ENV = os.environ.get(

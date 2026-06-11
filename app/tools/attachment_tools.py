@@ -6,6 +6,7 @@ results to the session transcript.
 These wrap the CLI scripts in scripts/ so the agent can call them
 directly as tools.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("autopilot.tools.attachment_tools")
 
@@ -29,7 +29,9 @@ def _run_script(script_name: str, *args: str) -> dict:
     try:
         result = subprocess.run(
             [sys.executable, str(script_path), *args],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode != 0:
             return {"status": "error", "message": f"Script exited {result.returncode}: {result.stderr[:500]}"}
@@ -60,7 +62,9 @@ def extract_pdf_text(path: str) -> str:
 
     # If the PDF is likely scanned (image-only), add OCR suggestion
     if isinstance(result, dict) and result.get("suggest_ocr"):
-        result["ocr_suggestion"] = "This PDF appears to be scanned (image-only). Try running ocr_image on the file for text extraction."
+        result["ocr_suggestion"] = (
+            "This PDF appears to be scanned (image-only). Try running ocr_image on the file for text extraction."
+        )
 
     return json.dumps(result, indent=2)
 
@@ -109,12 +113,18 @@ def append_to_transcript(
 
     result = _run_script(
         "append_to_transcript.py",
-        "--session-id", session_id,
-        "--content", content,
-        "--filename", filename,
-        "--type", file_type,
-        "--ocr-text", ocr_text,
-        "--grok-description", grok_description,
+        "--session-id",
+        session_id,
+        "--content",
+        content,
+        "--filename",
+        filename,
+        "--type",
+        file_type,
+        "--ocr-text",
+        ocr_text,
+        "--grok-description",
+        grok_description,
     )
     return json.dumps(result, indent=2)
 
@@ -158,7 +168,11 @@ TOOL_SPECS = [
                 "filename": {"type": "string", "description": "Original filename of the attachment."},
                 "file_type": {"type": "string", "enum": ["PDF", "Image"], "description": "Type of file: PDF or Image."},
                 "ocr_text": {"type": "string", "description": "OCR-extracted text (for images only).", "default": ""},
-                "grok_description": {"type": "string", "description": "Grok vision description (for images only).", "default": ""},
+                "grok_description": {
+                    "type": "string",
+                    "description": "Grok vision description (for images only).",
+                    "default": "",
+                },
             },
             "required": ["session_id", "content", "filename", "file_type"],
         },

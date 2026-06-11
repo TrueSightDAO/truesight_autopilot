@@ -6,6 +6,7 @@ the process lifetime. Guards against Whisper's silence-hallucination (it emits
 \"Obrigado por assistir\" / \"Thanks for watching\" on near-silent audio) via the
 per-segment no_speech_prob threshold.
 """
+
 from __future__ import annotations
 
 import logging
@@ -13,14 +14,15 @@ import logging
 logger = logging.getLogger("autopilot.voice")
 
 _MODEL = None
-_MODEL_SIZE = "base"          # base/int8 is fast + light; plenty for dictation
-_NO_SPEECH_PROB_MAX = 0.8     # drop segments Whisper isn't sure contain speech
+_MODEL_SIZE = "base"  # base/int8 is fast + light; plenty for dictation
+_NO_SPEECH_PROB_MAX = 0.8  # drop segments Whisper isn't sure contain speech
 
 
 def _get_model():
     global _MODEL
     if _MODEL is None:
         from faster_whisper import WhisperModel
+
         logger.info("loading faster-whisper model: %s", _MODEL_SIZE)
         _MODEL = WhisperModel(_MODEL_SIZE, device="cpu", compute_type="int8")
     return _MODEL

@@ -10,6 +10,7 @@ directly via `python scripts/smoke_tools.py`.
 Designed to be cheap (<5s, no network beyond GitHub read) so it can run
 on every PR via GitHub Actions.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -52,13 +53,16 @@ CALL_TESTS: list[tuple[str, str, callable, dict]] = []
 def _build_call_tests():
     """Lazily build call tests so import failures above are caught first."""
     import os as _os
+
     from app.tools import fs_tools, github_tools  # noqa: F401
 
     has_gh_token = bool(_os.getenv("TRUESIGHT_DAO_AUTOPILOT") or _os.getenv("GITHUB_TOKEN"))
 
     def fs_list_repo_root() -> dict:
         out = fs_tools.list_directory(str(REPO_ROOT))
-        assert "files" in out or "entries" in out or "items" in out, f"list_directory unexpected shape: {list(out.keys())}"
+        assert "files" in out or "entries" in out or "items" in out, (
+            f"list_directory unexpected shape: {list(out.keys())}"
+        )
         # tolerate any of the common naming conventions
         entries = out.get("files") or out.get("entries") or out.get("items") or []
         names = {e.get("name") for e in entries if isinstance(e, dict)}
@@ -77,7 +81,12 @@ def _build_call_tests():
     ]
     if has_gh_token:
         tests.append(
-            ("app.tools.github_tools.read_repo_file(agentic_ai_context, README.md)", "github_tools", gh_read_known_file, {})
+            (
+                "app.tools.github_tools.read_repo_file(agentic_ai_context, README.md)",
+                "github_tools",
+                gh_read_known_file,
+                {},
+            )
         )
     return tests
 
@@ -95,7 +104,7 @@ def _check_llm_schemas() -> dict:
         try:
             json.dumps(s)
         except TypeError as e:
-            raise AssertionError(f"schema not JSON-serializable: {s.get('function', {}).get('name', '?')} — {e}")
+            raise AssertionError(f"schema not JSON-serializable: {s.get('function', {}).get('name', '?')} — {e}") from e
         name = s.get("function", {}).get("name")
         assert name, f"schema missing function.name: {s}"
         assert name not in seen_names, f"duplicate schema name: {name}"
@@ -128,7 +137,7 @@ def main() -> int:
 
     # 2. Call tests (guarded — if the lazy build itself fails, that's a failure)
     try:
-        for label, mod_short, fn, _kwargs in _build_call_tests():
+        for label, _mod_short, fn, _kwargs in _build_call_tests():
             try:
                 result = fn()
                 passes.append(f"call: {label} — {result}")

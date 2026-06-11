@@ -3,6 +3,7 @@
 Runs against a local autopilot (localhost:8001) with Playwright
 controlling a local dapp frontend (localhost:8082 or any static server).
 """
+
 import base64
 import json
 import os
@@ -12,10 +13,10 @@ from pathlib import Path
 
 import pytest
 import requests
+from PIL import Image
+from playwright.sync_api import Browser, Page
 from truesight_dao_client import generate_keypair
 from truesight_dao_client.edgar_client import load_private_key
-from PIL import Image
-from playwright.sync_api import Browser, Page, sync_playwright
 
 API_BASE = os.environ.get("CHAT_API_URL", "http://localhost:8001")
 DAPP_URL = os.environ.get("DAPP_URL", "http://127.0.0.1:8082")
@@ -151,6 +152,7 @@ class TestBackendUpload:
 
         img = _ensure_test_image()
         import shutil
+
         heic_path = Path("/tmp/test_upload.heic")
         shutil.copy(img, heic_path)
 
@@ -185,11 +187,14 @@ def governor_page(browser: Browser) -> Page:
     page.goto(DAPP_URL, wait_until="load")
 
     pub, priv = _ensure_signature_keys()
-    page.evaluate("""(args) => {
+    page.evaluate(
+        """(args) => {
         localStorage.setItem('publicKey', args[0]);
         localStorage.setItem('privateKey', args[1]);
         localStorage.setItem('governorChatApiUrl', args[2]);
-    }""", [pub, priv, API_BASE])
+    }""",
+        [pub, priv, API_BASE],
+    )
 
     page.goto("about:blank", wait_until="domcontentloaded")
     page.goto(DAPP_URL, wait_until="domcontentloaded")

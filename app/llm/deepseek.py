@@ -4,6 +4,7 @@ DeepSeek-chat sometimes emits tool calls as XML in the content field
 instead of in the standard tool_calls array. This provider handles both
 variants transparently.
 """
+
 from __future__ import annotations
 
 import json
@@ -88,8 +89,8 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 
         # Normalize DSML prefixes to standard XML tags for unified parsing
         normalized = text
-        normalized = _re.sub(r'<\|\|DSML\|\|', '<', normalized)
-        normalized = _re.sub(r'</\|\|DSML\|\|', '</', normalized)
+        normalized = _re.sub(r"<\|\|DSML\|\|", "<", normalized)
+        normalized = _re.sub(r"</\|\|DSML\|\|", "</", normalized)
 
         # Pattern: <invoke name="func_name">...params...</invoke>
         invoke_pattern = _re.compile(
@@ -104,7 +105,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 
         body = text  # fallback
         wrapper_match = _re.search(
-            r'<(?:function_calls|tool_calls)>\s*(.*?)\s*</(?:function_calls|tool_calls)>',
+            r"<(?:function_calls|tool_calls)>\s*(.*?)\s*</(?:function_calls|tool_calls)>",
             normalized,
             _re.DOTALL,
         )
@@ -123,14 +124,16 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 val = pm.group(2).strip()
                 if val:
                     args[key] = val
-            calls.append({
-                "id": f"call_xml_{idx:02d}",
-                "type": "function",
-                "function": {
-                    "name": func_name,
-                    "arguments": json.dumps(args),
-                },
-            })
+            calls.append(
+                {
+                    "id": f"call_xml_{idx:02d}",
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "arguments": json.dumps(args),
+                    },
+                }
+            )
         return calls
 
     def _strip_provider_artifacts(self, content: str) -> str:
@@ -138,15 +141,15 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         text = content
         # Strip both standard XML and DSML-prefixed tool call wrappers
         text = _re.sub(
-            r'<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>',
-            '',
+            r"<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>",
+            "",
             text,
             flags=_re.DOTALL,
         )
         # Strip DSML invoke blocks not wrapped in a parent tag
         text = _re.sub(
             r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>',
-            '',
+            "",
             text,
             flags=_re.DOTALL,
         )
@@ -155,7 +158,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         # any wrapper tag, leaking raw XML into the chat response.
         text = _re.sub(
             r'<invoke\s+name="[^"]+"\s*>.*?</invoke>',
-            '',
+            "",
             text,
             flags=_re.DOTALL,
         )

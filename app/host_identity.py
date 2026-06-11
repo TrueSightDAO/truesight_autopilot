@@ -8,6 +8,7 @@ Detected once via **IMDSv2** with a fast local-machine fallback (a single
 ~1.5 s timeout when not on EC2), then cached for the process lifetime. Uses
 only the stdlib so it is import-safe everywhere (tests, Gary's Mac, CI).
 """
+
 from __future__ import annotations
 
 import functools

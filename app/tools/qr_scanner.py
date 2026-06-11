@@ -6,6 +6,7 @@ QR records via the dao_client GAS backend.
 
 Decodes: QRCODE, EAN13, EAN8, UPC-A, UPC-E, CODE128, CODE39, ITF, etc.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,6 +33,7 @@ _MAX_DIMENSION_FULL = 2000  # If larger than this, resize to 50% for faster deco
 
 # ──────────────────────── Barcode / QR Decoding ─────────────────────
 
+
 def _decode_pyzbar(image_path: str) -> list[dict[str, str]]:
     """Primary decoder: pyzbar (wraps libzbar). Returns list of {type, data}.
 
@@ -39,6 +41,7 @@ def _decode_pyzbar(image_path: str) -> list[dict[str, str]]:
     large photos where the barcode might be small relative to the image.
     """
     from pyzbar.pyzbar import decode as zbar_decode
+
     img = Image.open(image_path)
     w, h = img.size
 
@@ -78,11 +81,23 @@ def _decode_pyzbar(image_path: str) -> list[dict[str, str]]:
 def _decode_zbarimg(image_path: str) -> list[dict[str, str]]:
     """Fallback: shell out to zbarimg CLI. Supports all types."""
     result = subprocess.run(
-        ["zbarimg", "--quiet", "-Sdisable", "-Sqr.enable",
-         "-Sean13.enable", "-Sean8.enable", "-Supca.enable", "-Supce.enable",
-         "-Scode128.enable", "-Scode39.enable",
-         "--raw", image_path],
-        capture_output=True, text=False, timeout=15,
+        [
+            "zbarimg",
+            "--quiet",
+            "-Sdisable",
+            "-Sqr.enable",
+            "-Sean13.enable",
+            "-Sean8.enable",
+            "-Supca.enable",
+            "-Supce.enable",
+            "-Scode128.enable",
+            "-Scode39.enable",
+            "--raw",
+            image_path,
+        ],
+        capture_output=True,
+        text=False,
+        timeout=15,
         env={**os.environ, "ZBAR_QUIET": "1"},
     )
     if result.returncode != 0:
@@ -101,7 +116,9 @@ def _decode_zbarimg(image_path: str) -> list[dict[str, str]]:
     try:
         typed_result = subprocess.run(
             ["zbarimg", "--quiet", image_path],
-            capture_output=True, text=False, timeout=15,
+            capture_output=True,
+            text=False,
+            timeout=15,
             env={**os.environ, "ZBAR_QUIET": "1"},
         )
         if typed_result.returncode == 0:
@@ -166,7 +183,7 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
         image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
         if Path(decode_path).suffix.lower() in image_exts:
             try:
-                from app.grok_client import grok_analyze_images, GROK_MODEL
+                from app.grok_client import GROK_MODEL, grok_analyze_images
 
                 grok_result = grok_analyze_images(
                     [decode_path],
@@ -249,12 +266,14 @@ def scan_qr_batch(file_paths: list[str]) -> dict[str, Any]:
     # Build deduplicated unique codes
     unique_codes: list[dict] = []
     for data, files in code_to_files.items():
-        unique_codes.append({
-            "data": data,
-            "type": code_to_types.get(data, "unknown"),
-            "found_in_files": files,
-            "occurrence_count": len(files),
-        })
+        unique_codes.append(
+            {
+                "data": data,
+                "type": code_to_types.get(data, "unknown"),
+                "found_in_files": files,
+                "occurrence_count": len(files),
+            }
+        )
 
     return {
         "status": "success" if not errors else "partial",
@@ -278,7 +297,9 @@ def _convert_heic_to_jpg(heic_path: str) -> str | None:
     try:
         subprocess.run(
             ["sips", "-s", "format", "jpeg", str(p), "--out", str(jpg_path)],
-            capture_output=True, timeout=30, check=True,
+            capture_output=True,
+            timeout=30,
+            check=True,
         )
         return str(jpg_path)
     except Exception as e:
@@ -287,6 +308,7 @@ def _convert_heic_to_jpg(heic_path: str) -> str | None:
 
 
 # ──────────────────────────── QR Lookup ────────────────────────────
+
 
 def lookup_qr_code(qr_code: str) -> dict[str, Any]:
     """Look up a single QR code's DAO record via the GAS web app (read-only).
@@ -299,6 +321,7 @@ def lookup_qr_code(qr_code: str) -> dict[str, Any]:
     """
     try:
         from truesight_dao_client.modules.lookup_qr_code import lookup
+
         data = lookup(qr_code)
         if data.get("status") == "success":
             _cache_qr_result(qr_code, data)
@@ -325,16 +348,24 @@ def _lookup_qr_via_cli(qr_code: str) -> dict[str, Any]:
     dao_client_dir = workspace_root / "dao_client"
 
     cmd = [
-        sys.executable, "-m", "truesight_dao_client.modules.lookup_qr_code",
-        "--qr", qr_code, "--json",
+        sys.executable,
+        "-m",
+        "truesight_dao_client.modules.lookup_qr_code",
+        "--qr",
+        qr_code,
+        "--json",
     ]
     env = {**os.environ}
     env["PYTHONPATH"] = str(dao_client_dir)
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
-            env=env, cwd=str(dao_client_dir),
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            cwd=str(dao_client_dir),
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
@@ -376,6 +407,7 @@ def lookup_qr_batch(qr_codes: list[str]) -> dict[str, Any]:
 # ── capability manifest entries ───────────────────────────────────────────
 
 import json as _json  # noqa: E402
+
 from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPECS = [
@@ -394,7 +426,13 @@ TOOL_SPECS = [
         description="Batch-scan multiple image files for QR codes.",
         parameters={
             "type": "object",
-            "properties": {"file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of full paths to image files."}},
+            "properties": {
+                "file_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of full paths to image files.",
+                }
+            },
             "required": ["file_paths"],
         },
         handler=lambda args, ctx: _json.dumps(scan_qr_batch(args.get("file_paths", [])), indent=2),
@@ -414,7 +452,13 @@ TOOL_SPECS = [
         description="Look up multiple QR codes at once.",
         parameters={
             "type": "object",
-            "properties": {"qr_codes": {"type": "array", "items": {"type": "string"}, "description": "List of QR code identifiers."}},
+            "properties": {
+                "qr_codes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of QR code identifiers.",
+                }
+            },
             "required": ["qr_codes"],
         },
         handler=lambda args, ctx: _json.dumps(lookup_qr_batch(args.get("qr_codes", [])), indent=2),

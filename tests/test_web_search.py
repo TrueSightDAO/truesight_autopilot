@@ -1,4 +1,5 @@
 """Unit tests for the Tavily-backed web_search / web_extract tools (httpx mocked)."""
+
 from __future__ import annotations
 
 import json
@@ -27,13 +28,17 @@ def _mock_post(monkeypatch, body: dict, status: int = 200, capture: dict | None 
 
 def test_web_search_success(monkeypatch):
     capture: dict = {}
-    _mock_post(monkeypatch, {
-        "answer": "A synthesized answer.",
-        "results": [
-            {"title": "Result One", "url": "https://example.com/1", "content": "snippet one", "score": 0.9},
-            {"title": "Result Two", "url": "https://example.com/2", "content": "snippet two", "score": 0.8},
-        ],
-    }, capture=capture)
+    _mock_post(
+        monkeypatch,
+        {
+            "answer": "A synthesized answer.",
+            "results": [
+                {"title": "Result One", "url": "https://example.com/1", "content": "snippet one", "score": 0.9},
+                {"title": "Result Two", "url": "https://example.com/2", "content": "snippet two", "score": 0.8},
+            ],
+        },
+        capture=capture,
+    )
 
     out = json.loads(ws.web_search("ceremonial cacao", max_results=2))
     assert out["status"] == "ok"
@@ -76,10 +81,14 @@ def test_web_search_http_error(monkeypatch):
 
 def test_web_extract_success(monkeypatch):
     capture: dict = {}
-    _mock_post(monkeypatch, {
-        "results": [{"url": "https://example.com/1", "raw_content": "full page text"}],
-        "failed_results": [],
-    }, capture=capture)
+    _mock_post(
+        monkeypatch,
+        {
+            "results": [{"url": "https://example.com/1", "raw_content": "full page text"}],
+            "failed_results": [],
+        },
+        capture=capture,
+    )
 
     out = json.loads(ws.web_extract("https://example.com/1"))
     assert out["status"] == "ok"

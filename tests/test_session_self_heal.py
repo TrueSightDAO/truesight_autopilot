@@ -6,6 +6,7 @@ incident where Telegram topics 'Stream of consciousness' (thread 780) and
 'Digital Infrastructure' (thread 3) 400-ed on every reply because a raced write
 left an assistant `tool_calls` message with no following `tool` results.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,8 +29,7 @@ def _assistant(call_ids):
         "role": "assistant",
         "content": "",
         "tool_calls": [
-            {"id": cid, "type": "function", "function": {"name": "do_thing", "arguments": "{}"}}
-            for cid in call_ids
+            {"id": cid, "type": "function", "function": {"name": "do_thing", "arguments": "{}"}} for cid in call_ids
         ],
     }
 
@@ -56,6 +56,7 @@ def _dangling_indices(history):
 
 
 # ── Pass 2: heal orphan tool_calls (the bug that actually bricked prod) ────────
+
 
 def test_heals_single_orphan_tool_call():
     history = [
@@ -95,6 +96,7 @@ def test_heals_trailing_orphan_tool_call():
 
 # ── Pass 1: orphan tool messages (pre-existing behavior, must still hold) ──────
 
+
 def test_drops_orphan_tool_message():
     history = [
         {"role": "user", "content": "hi"},
@@ -119,6 +121,7 @@ def test_wellformed_history_untouched():
 
 
 # ── 0c: atomic write + 0b: healing on load ────────────────────────────────────
+
 
 def test_log_session_atomic_and_load_heals(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "SESSION_LOG_DIR", tmp_path)

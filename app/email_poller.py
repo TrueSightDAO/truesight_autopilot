@@ -1,4 +1,5 @@
 """Poll Gmail for actionable emails: GitHub failures, GAS errors, alerts."""
+
 from __future__ import annotations
 
 import base64
@@ -13,29 +14,21 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from .config import settings
-from .github_client import GitHubClient
-from .llm_client import LLMClient, LLMError
 from .fix_agent import FixAgent
+from .github_client import GitHubClient
+from .llm_client import LLMClient
 
 logger = logging.getLogger("autopilot.email")
 
 # Tier 1: fast rule-based classification
-GITHUB_FAILURE_SUBJECTS = re.compile(
-    r"(workflow run failed|action required|scheduled workflow failed)", re.IGNORECASE
-)
-GAS_ERROR_SUBJECTS = re.compile(
-    r"(google apps script|script has failed|execution error)", re.IGNORECASE
-)
-SECURITY_ALERT_SUBJECTS = re.compile(
-    r"(security alert|dependabot|vulnerability)", re.IGNORECASE
-)
+GITHUB_FAILURE_SUBJECTS = re.compile(r"(workflow run failed|action required|scheduled workflow failed)", re.IGNORECASE)
+GAS_ERROR_SUBJECTS = re.compile(r"(google apps script|script has failed|execution error)", re.IGNORECASE)
+SECURITY_ALERT_SUBJECTS = re.compile(r"(security alert|dependabot|vulnerability)", re.IGNORECASE)
 # Bugsnag-emitted error notifications (sender + subject signature). Bugsnag
 # sends from support@bugsnag.com or notifications@bugsnag.com with subjects
 # like "[Bugsnag] Error in <Project> - <Message>" or "New error in <Project>".
 BUGSNAG_SENDER = re.compile(r"@bugsnag\.com", re.IGNORECASE)
-BUGSNAG_SUBJECTS = re.compile(
-    r"(\[bugsnag\]|new error|error in|reopened|spike in errors)", re.IGNORECASE
-)
+BUGSNAG_SUBJECTS = re.compile(r"(\[bugsnag\]|new error|error in|reopened|spike in errors)", re.IGNORECASE)
 
 
 class EmailPoller:
@@ -62,6 +55,7 @@ class EmailPoller:
     async def run_loop(self, interval_seconds: int = 300):
         """Poll Gmail every 5 minutes."""
         import asyncio
+
         if self.gmail is None:
             logger.warning("Email polling skipped — Gmail not configured")
             while True:
@@ -77,9 +71,7 @@ class EmailPoller:
         """Process unread actionable emails. Returns count processed."""
         if self.gmail is None:
             return 0
-        results = self.gmail.users().messages().list(
-            userId="me", q="is:unread", maxResults=20
-        ).execute()
+        results = self.gmail.users().messages().list(userId="me", q="is:unread", maxResults=20).execute()
         messages = results.get("messages", [])
         processed = 0
 
@@ -186,8 +178,7 @@ class EmailPoller:
             ).execute()
             logger.info("Applied Gmail label %r to message %s", label_name, msg_id)
         except Exception as e:
-            logger.warning("Could not apply Gmail label %r to message %s: %s",
-                           label_name, msg_id, e)
+            logger.warning("Could not apply Gmail label %r to message %s: %s", label_name, msg_id, e)
 
     def _get_or_create_label(self, name: str) -> str | None:
         """Return Gmail label ID for `name`, creating it if missing."""
@@ -196,14 +187,19 @@ class EmailPoller:
             for lbl in existing.get("labels", []):
                 if lbl.get("name") == name:
                     return lbl.get("id")
-            created = self.gmail.users().labels().create(
-                userId="me",
-                body={
-                    "name": name,
-                    "labelListVisibility": "labelShow",
-                    "messageListVisibility": "show",
-                },
-            ).execute()
+            created = (
+                self.gmail.users()
+                .labels()
+                .create(
+                    userId="me",
+                    body={
+                        "name": name,
+                        "labelListVisibility": "labelShow",
+                        "messageListVisibility": "show",
+                    },
+                )
+                .execute()
+            )
             return created.get("id")
         except Exception as e:
             logger.warning("get_or_create label %r failed: %s", name, e)
@@ -318,7 +314,10 @@ class EmailPoller:
 
         logger.info(
             "Bugsnag error: project=%s error_class=%s error_id=%s subject=%r",
-            project, error_class, error_id, subject[:140],
+            project,
+            error_class,
+            error_id,
+            subject[:140],
         )
 
         # Dedup short-circuit
@@ -328,7 +327,9 @@ class EmailPoller:
                 prior = triaged[error_id]
                 logger.info(
                     "Bugsnag error_id=%s already triaged %s -> %s; skipping",
-                    error_id, prior.get("triaged_at_utc"), prior.get("pr_url"),
+                    error_id,
+                    prior.get("triaged_at_utc"),
+                    prior.get("pr_url"),
                 )
                 return None
 
@@ -354,7 +355,8 @@ class EmailPoller:
         if settings.dry_run:
             logger.info(
                 "DRY_RUN set — would have run FixAgent on repo=%s for %s",
-                repo, error_class,
+                repo,
+                error_class,
             )
             return None
 

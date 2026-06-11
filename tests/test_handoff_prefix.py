@@ -1,5 +1,6 @@
 """Tests for the handoff thread -> plan resolver used to make a bare 'go for it'
 in a Telegram topic resolve to the right plan (SOPHIA_HANDOFFS.md registry)."""
+
 from app.telegram_adapter import _parse_handoff_plan
 
 REGISTRY = """\

@@ -7,6 +7,7 @@ and returns the extracted content from the transcript repo.
 Transcript repo: TrueSightDAO/truesight_autopilot_transcript
 Path pattern: sessions/YYYY-MM-DD/<hash>/transcript.md
 """
+
 from __future__ import annotations
 
 import base64
@@ -14,8 +15,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("autopilot.tools.transcript_search")
 
@@ -90,10 +90,7 @@ def _list_session_hashes(date_path: str) -> list[str]:
     result = _github_request("GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{date_path}")
     if not isinstance(result, list):
         return []
-    return [
-        item["name"] for item in result
-        if item["type"] == "dir"
-    ]
+    return [item["name"] for item in result if item["type"] == "dir"]
 
 
 def _read_transcript(date_path: str, session_hash: str) -> str | None:
@@ -161,7 +158,9 @@ def search_transcript(query: str, max_days_back: int = 30) -> str:
 
     date_dirs = _list_session_dirs(max_days)
     if not date_dirs:
-        return json.dumps({"status": "ok", "matches": [], "message": "No session transcripts found in the last {max_days} days."})
+        return json.dumps(
+            {"status": "ok", "matches": [], "message": "No session transcripts found in the last {max_days} days."}
+        )
 
     matches: list[dict] = []
     transcripts_checked = 0
@@ -184,26 +183,33 @@ def search_transcript(query: str, max_days_back: int = 30) -> str:
                 text_lower = text.lower()
 
                 if query_lower in filename_lower or query_lower in text_lower:
-                    matches.append({
-                        "session_date": date_path.replace("sessions/", ""),
-                        "session_hash": session_hash,
-                        "filename": att.get("filename", ""),
-                        "extracted_text_preview": text[:2000] + ("..." if len(text) > 2000 else ""),
-                        "full_text_length": len(text),
-                    })
+                    matches.append(
+                        {
+                            "session_date": date_path.replace("sessions/", ""),
+                            "session_hash": session_hash,
+                            "filename": att.get("filename", ""),
+                            "extracted_text_preview": text[:2000] + ("..." if len(text) > 2000 else ""),
+                            "full_text_length": len(text),
+                        }
+                    )
 
         if transcripts_checked >= _MAX_TRANSCRIPTS:
             break
 
-    return json.dumps({
-        "status": "ok",
-        "query": query,
-        "max_days_back": max_days,
-        "transcripts_checked": transcripts_checked,
-        "matches": matches,
-        "match_count": len(matches),
-        "message": f"Found {len(matches)} matching attachment(s) across {transcripts_checked} transcript(s)." if matches else f"No attachments matching '{query}' found in the last {max_days} days.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "status": "ok",
+            "query": query,
+            "max_days_back": max_days,
+            "transcripts_checked": transcripts_checked,
+            "matches": matches,
+            "match_count": len(matches),
+            "message": f"Found {len(matches)} matching attachment(s) across {transcripts_checked} transcript(s)."
+            if matches
+            else f"No attachments matching '{query}' found in the last {max_days} days.",
+        },
+        indent=2,
+    )
 
 
 # ── capability manifest entry ───────────────────────────────────────────
@@ -216,8 +222,15 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search term to look for in attachment filenames and extracted text (e.g. 'cacao pricing', 'PDF from last week', 'invoice')."},
-            "max_days_back": {"type": "integer", "description": "How many days back to search (default 30, max 90).", "default": 30},
+            "query": {
+                "type": "string",
+                "description": "Search term to look for in attachment filenames and extracted text (e.g. 'cacao pricing', 'PDF from last week', 'invoice').",
+            },
+            "max_days_back": {
+                "type": "integer",
+                "description": "How many days back to search (default 30, max 90).",
+                "default": 30,
+            },
         },
         "required": ["query"],
     },

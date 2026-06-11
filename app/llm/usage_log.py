@@ -6,12 +6,12 @@ Two write paths:
 
 Gated behind LLM_USAGE_LOG_ENABLED env var (default: off).
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any

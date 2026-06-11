@@ -10,6 +10,7 @@ Usage:
     source .venv/bin/activate
     python tests/e2e_governor_chat.py
 """
+
 from __future__ import annotations
 
 import base64
@@ -21,9 +22,9 @@ import uuid
 from typing import Any
 
 import requests
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.backends import default_backend
 
 AUTOPILOT_URL = os.environ.get("AUTOPILOT_URL", "http://localhost:8001")
 TEST_IMAGE = "/tmp/test_0885.jpg"
@@ -58,9 +59,7 @@ class AutopilotClient:
             "nonce": str(uuid.uuid4()),
         }
         payload_str = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
-        sig = base64.b64encode(
-            self.priv_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())
-        ).decode()
+        sig = base64.b64encode(self.priv_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())).decode()
         return obj, sig, payload_str
 
     def chat(self, message: str) -> requests.Response:
@@ -128,6 +127,7 @@ def stream_to_end(resp: requests.Response) -> dict[str, Any]:
 
 # ──────────────────────────── Test Cases ────────────────────────────
 
+
 def assert_true(condition: bool, name: str) -> bool:
     if condition:
         print(f"  {GREEN}PASS{RESET} {name}")
@@ -157,7 +157,9 @@ def test_qr_lookup_and_correction(client: AutopilotClient) -> bool:
     data = stream_to_end(resp)
     ok = True
     ok &= assert_true("lookup_qr_code" in data["tools"], "lookup_qr_code tool called")
-    ok &= assert_true("MINTED" in data["response"] or "2024OSCAR_20260330_22" in data["response"], "QR code found in ledger")
+    ok &= assert_true(
+        "MINTED" in data["response"] or "2024OSCAR_20260330_22" in data["response"], "QR code found in ledger"
+    )
     return ok
 
 
@@ -171,7 +173,7 @@ def test_submission_approval_gate(client: AutopilotClient) -> bool:
     # (We check the response text for evidence of proposal/waiting)
     ok &= assert_true(
         "submit_contribution" not in data["tools"] or "pending_approval" in data["response"].lower(),
-        "Either didn't call submit_contribution, or it returned pending_approval"
+        "Either didn't call submit_contribution, or it returned pending_approval",
     )
     return ok
 
@@ -187,7 +189,7 @@ def test_duplicate_guard(client: AutopilotClient) -> bool:
     if "submit_contribution" in tools_called:
         ok &= assert_true(
             "duplicate" in data["response"].lower() or "already" in data["response"].lower(),
-            "submit_contribution returned duplicate status"
+            "submit_contribution returned duplicate status",
         )
     else:
         ok &= assert_true(True, "submit_contribution not called — LLM detected duplicate")
@@ -201,7 +203,7 @@ def test_xml_no_leaks(client: AutopilotClient) -> bool:
     data = stream_to_end(resp)
     ok = assert_true(
         "<function_calls>" not in data["response"] and "<invoke" not in data["response"],
-        "No XML tool-call syntax in response"
+        "No XML tool-call syntax in response",
     )
     return ok
 
@@ -222,6 +224,7 @@ def test_session_persistence(client: AutopilotClient) -> bool:
 
 
 # ──────────────────────────── Main ────────────────────────────
+
 
 def main() -> int:
     if not os.path.exists(TEST_IMAGE):

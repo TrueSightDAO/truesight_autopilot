@@ -1,6 +1,7 @@
 """Mid-task acknowledgment: a message sent while a topic is busy must be
 acknowledged + queued, not silently blocked. Different/idle topics: no ack.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,7 +18,9 @@ except Exception as exc:  # noqa: BLE001
 
 def test_ack_sent_when_topic_busy(monkeypatch):
     sent: list[tuple] = []
-    monkeypatch.setattr(ta, "send_message", lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id)))
+    monkeypatch.setattr(
+        ta, "send_message", lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id))
+    )
 
     lock = ta._thread_dispatch_lock(-100, 5)
     lock.acquire()  # simulate an in-flight turn
@@ -34,7 +37,9 @@ def test_ack_sent_when_topic_busy(monkeypatch):
 
 def test_no_ack_when_topic_idle(monkeypatch):
     sent: list[tuple] = []
-    monkeypatch.setattr(ta, "send_message", lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id)))
+    monkeypatch.setattr(
+        ta, "send_message", lambda chat_id, text, thread_id=None: sent.append((chat_id, text, thread_id))
+    )
 
     lock = ta._thread_dispatch_lock(-100, 6)  # not held
     ta._ack_queued_if_busy(-100, 6, lock)

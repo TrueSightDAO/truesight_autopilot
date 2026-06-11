@@ -1,39 +1,46 @@
 """FastAPI application for truesight_autopilot (merged governor chat + autopilot)."""
+
 from __future__ import annotations
 
 import asyncio
 import base64
 import json
 import logging
+import mimetypes
 import os
 import re
+import subprocess
 import time
-from typing import Any
-
-from .roles import (
-    RESET_CONTEXT_THRESHOLD, ROLE_SELECTION_MESSAGE, archive_old_history,
-    build_role_menu, find_pending_role, find_role_in_history, get_default_role,
-    get_system_prompt_for_role, get_tool_schemas_for_role,
-    pending_role_tag, reset_context_prompt, resolve_role, set_role_in_history,
-)
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, List
-
-import mimetypes
-import subprocess
-import tempfile
-import uuid
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
-from .context import get_system_prompt, refresh_system_prompt, get_context_file, refresh_context_repos
-from .governor_registry import refresh_cache as refresh_governor_cache, load_governors
+from .context import get_context_file, refresh_context_repos, refresh_system_prompt
+from .governor_registry import load_governors
+from .governor_registry import refresh_cache as refresh_governor_cache
+from .roles import (
+    RESET_CONTEXT_THRESHOLD,
+    ROLE_SELECTION_MESSAGE,
+    archive_old_history,
+    build_role_menu,
+    find_pending_role,
+    find_role_in_history,
+    get_default_role,
+    get_system_prompt_for_role,
+    get_tool_schemas_for_role,
+    pending_role_tag,
+    reset_context_prompt,
+    resolve_role,
+    set_role_in_history,
+)
 
 
 def _gov_name_for_key(public_key_b64: str) -> str | None:
@@ -43,19 +50,21 @@ def _gov_name_for_key(public_key_b64: str) -> str | None:
         if g.get("public_key") == public_key_b64:
             return g.get("name")
     return None
-from .llm_client import LLMClient, LLMError, get_tool_schemas
-from .tools.github_tools import read_repo_file
-from .tools.qr_scanner import scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
-from .tools.dao_identity import register_identity
-from .tools.inventory_lookup import list_matching_qr_codes
-from .tools.fs_tools import list_directory, read_local_file
-from .grok_client import grok_analyze_images, GROK_MODEL
+
+
+from .aws_monitor import AWSMonitor
 from .daily_briefing import handle_daily_briefing
+from .edgar_logger import EdgarLogger as EdgarDirectClient
+from .email_poller import EmailPoller
 from .fix_agent import FixAgent
 from .github_client import GitHubClient
-from .email_poller import EmailPoller
-from .aws_monitor import AWSMonitor
-from .edgar_logger import EdgarLogger as EdgarDirectClient
+from .grok_client import GROK_MODEL, grok_analyze_images
+from .llm_client import LLMClient, LLMError
+from .tools.dao_identity import register_identity
+from .tools.fs_tools import list_directory, read_local_file
+from .tools.github_tools import read_repo_file
+from .tools.inventory_lookup import list_matching_qr_codes
+from .tools.qr_scanner import lookup_qr_batch, lookup_qr_code, scan_qr_batch, scan_qr_from_file
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
@@ -75,6 +84,7 @@ def _init_bugsnag():
     try:
         import bugsnag
         from bugsnag.handlers import BugsnagHandler
+
         bugsnag.configure(
             api_key=api_key,
             project_root="/opt/truesight_autopilot",
@@ -118,6 +128,8 @@ def _session_lock(session_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _session_locks[session_id] = lock
     return lock
+
+
 UPLOAD_DIR = Path("/tmp/autopilot_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_LOG_DIR = settings.session_log_dir
@@ -140,6 +152,7 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
         return _sessions[session_key]
 
     import hashlib
+
     sid_hash = hashlib.md5(session_key.encode()).hexdigest()[:12]
     log_path = SESSION_LOG_DIR / f"{sid_hash}.json"
     if log_path.exists():
@@ -149,11 +162,20 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
             # Clean legacy XML leaks from old sessions (DeepSeek DSML tool calls)
             for m in messages:
                 content = m.get("content", "")
-                if isinstance(content, str) and ("<function_calls>" in content or "<invoke " in content or "<||DSML||" in content):
+                if isinstance(content, str) and (
+                    "<function_calls>" in content or "<invoke " in content or "<||DSML||" in content
+                ):
                     c = content
-                    c = re.sub(r'<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>', '', c, flags=re.DOTALL)
-                    c = re.sub(r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>', '', c, flags=re.DOTALL)
-                    c = re.sub(r'<invoke\s+name="[^"]+"\s*>.*?</invoke>', '', c, flags=re.DOTALL)
+                    c = re.sub(
+                        r"<(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>.*?</(?:function_calls|(?:\|\|DSML\|\|)?tool_calls)>",
+                        "",
+                        c,
+                        flags=re.DOTALL,
+                    )
+                    c = re.sub(
+                        r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>', "", c, flags=re.DOTALL
+                    )
+                    c = re.sub(r'<invoke\s+name="[^"]+"\s*>.*?</invoke>', "", c, flags=re.DOTALL)
                     m["content"] = c.strip()
             # Heal BOTH tool-protocol corruption directions (orphan tool messages
             # AND orphan tool_calls) so a transcript raced by a prior process never
@@ -187,12 +209,14 @@ def _check_deploy_marker() -> None:
         elapsed = data.get("elapsed_seconds", 0)
         logger.info(
             "Deploy marker found: commit=%s elapsed=%.1fs — sending notification",
-            commit, elapsed,
+            commit,
+            elapsed,
         )
         # Import and call the Telegram notification function.
         # This is safe to call even if the Telegram adapter is not running —
         # it sends directly via the Bot API using the shared settings.
         from .telegram_adapter import send_deploy_notification
+
         send_deploy_notification(commit, elapsed)
     except Exception as e:
         logger.warning("Failed to process deploy marker: %s", e)
@@ -227,7 +251,10 @@ def _install_signal_loggers():
             try:
                 logger.warning(
                     "LIFECYCLE: received %s (signum=%d) — pid=%d ppid=%d",
-                    _sig_name, signum, os.getpid(), os.getppid(),
+                    _sig_name,
+                    signum,
+                    os.getpid(),
+                    os.getppid(),
                 )
             except Exception:
                 pass
@@ -557,6 +584,7 @@ async def oracle_advisory(
     # CORS preflight — return 204 with CORS headers (no body)
     if request.method == "OPTIONS":
         from fastapi.responses import Response
+
         return Response(status_code=204, headers=_CORS_HEADERS)
 
     # Rate limit: 1 req per 10s per IP
@@ -568,6 +596,7 @@ async def oracle_advisory(
     snapshot_text = ""
     try:
         import httpx
+
         resp = httpx.get(snapshot_url, timeout=15.0)
         if resp.status_code == 200:
             snapshot_text = resp.text
@@ -604,8 +633,7 @@ async def oracle_advisory(
     )
     if related_number:
         system_prompt += (
-            f"- **Related Hexagram**: {related_number} — {related_name}\n"
-            f"- **Related Judgment**: {related_judgment}\n"
+            f"- **Related Hexagram**: {related_number} — {related_name}\n- **Related Judgment**: {related_judgment}\n"
         )
     if changing_lines:
         system_prompt += f"- **Changing Lines**: {changing_lines}\n"
@@ -614,10 +642,7 @@ async def oracle_advisory(
     if timestamp_utc:
         system_prompt += f"- **Reading Timestamp (UTC)**: {timestamp_utc}\n"
 
-    system_prompt += (
-        "\nNow produce your oracle advisory for the DAO. "
-        "Be concise, grounded, and actionable."
-    )
+    system_prompt += "\nNow produce your oracle advisory for the DAO. Be concise, grounded, and actionable."
 
     # 3. Call DeepSeek via LLMClient
     client = LLMClient()
@@ -638,12 +663,15 @@ async def oracle_advisory(
 
     # 4. Return JSON in the same shape as the GAS bridge
     from datetime import datetime, timezone
-    return _cors_json_response({
-        "ok": True,
-        "advice": advice,
-        "model": model_used,
-        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    })
+
+    return _cors_json_response(
+        {
+            "ok": True,
+            "advice": advice,
+            "model": model_used,
+            "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    )
 
 
 # ── Daily Briefing (Morning Oracle Standup) ──────────────────────────────
@@ -674,6 +702,7 @@ async def daily_briefing(request: Request):
     # CORS preflight
     if request.method == "OPTIONS":
         from fastapi.responses import Response
+
         return Response(status_code=204, headers=_CORS_HEADERS)
 
     public_key = request.headers.get("X-Public-Key", "")
@@ -708,6 +737,7 @@ async def serve_upload(filename: str):
 
 # ───────────────────────────── Governor Chat ─────────────────────────────
 
+
 @app.get("/session")
 async def get_session(request: Request, limit: int = 30) -> JSONResponse:
     """Return the current conversation history so the frontend can restore it on refresh.
@@ -732,7 +762,7 @@ async def get_session(request: Request, limit: int = 30) -> JSONResponse:
         if len(content) > 2000:
             content = content[:2000] + "\n...(truncated)"
         # Strip legacy XML tool-call syntax if it leaked through
-        content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
+        content = re.sub(r"<function_calls>.*?</function_calls>", "", content, flags=re.DOTALL).strip()
         if not content:
             continue
         if role in ("user", "assistant") and "GOVERNOR_IDENTITY:" not in content:
@@ -762,6 +792,7 @@ async def list_sessions(request: Request) -> JSONResponse:
     if not public_key:
         raise HTTPException(status_code=400, detail="X-Public-Key header required")
     import hashlib
+
     idx_file = SESSION_LOG_DIR / f"{hashlib.md5(public_key.encode()).hexdigest()[:12]}_sessions.json"
     if not idx_file.exists():
         return JSONResponse({"sessions": []})
@@ -864,7 +895,9 @@ async def auth_challenge(request: Request) -> JSONResponse:
 
 
 def _sse_event(event_type: str, data: object) -> str:
-    return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
+    return (
+        f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
+    )
 
 
 async def _sse_single_response(text: str):
@@ -921,82 +954,140 @@ def _strip_dsml(text: str) -> tuple[str, bool]:
 # Source: truesight_dao_client/modules/{report_inventory_movement,report_sales,...}.py
 _CANONICAL_LABELS: dict[str, list[str]] = {
     "INVENTORY MOVEMENT": [
-        "Manager Name", "Recipient Name", "Inventory Item", "QR Code",
-        "Quantity", "Latitude", "Longitude", "Attached Filename",
-        "Destination Inventory File Location", "Submission Source",
+        "Manager Name",
+        "Recipient Name",
+        "Inventory Item",
+        "QR Code",
+        "Quantity",
+        "Latitude",
+        "Longitude",
+        "Attached Filename",
+        "Destination Inventory File Location",
+        "Submission Source",
     ],
     "SALES EVENT": [
-        "Item", "Sales price", "Sold by", "Cash proceeds collected by",
-        "Owner email", "Stripe Session ID", "Shipping Provider",
-        "Tracking number", "Attached Filename", "Submission Source",
+        "Item",
+        "Sales price",
+        "Sold by",
+        "Cash proceeds collected by",
+        "Owner email",
+        "Stripe Session ID",
+        "Shipping Provider",
+        "Tracking number",
+        "Attached Filename",
+        "Submission Source",
     ],
     "CONTRIBUTION EVENT": [
-        "Type", "Amount", "Description", "Contributor(s)", "TDG Issued",
+        "Type",
+        "Amount",
+        "Description",
+        "Contributor(s)",
+        "TDG Issued",
     ],
     "QR CODE EVENT": [
-        "Attached Filename", "Submission Source",
+        "Attached Filename",
+        "Submission Source",
     ],
     "QR CODE UPDATE EVENT": [],
     "CAPITAL INJECTION EVENT": [
-        "Ledger", "Ledger URL", "Amount", "Description",
+        "Ledger",
+        "Ledger URL",
+        "Amount",
+        "Description",
     ],
     "TREE PLANTING EVENT": [
-        "Number of trees planted", "Species", "Location", "Attached Filename", "Submission Source",
+        "Number of trees planted",
+        "Species",
+        "Location",
+        "Attached Filename",
+        "Submission Source",
     ],
     "DAO Inventory Expense Event": [
-        "DAO Member Name", "Target Ledger", "Latitude", "Longitude",
-        "Inventory Type", "Inventory Quantity", "Description",
-        "Attached Filename", "Destination Inventory File Location",
+        "DAO Member Name",
+        "Target Ledger",
+        "Latitude",
+        "Longitude",
+        "Inventory Type",
+        "Inventory Quantity",
+        "Description",
+        "Attached Filename",
+        "Destination Inventory File Location",
     ],
 }
 
 # Map of LLM-invented field names → canonical labels (case-insensitive matching)
 _FIELD_ALIASES: dict[str, str] = {
     # Inventory Movement
-    "manager_name": "Manager Name", "manager": "Manager Name",
-    "manager (from)": "Manager Name", "from": "Manager Name",
-    "sender": "Manager Name", "source": "Manager Name",
-    "recipient_name": "Recipient Name", "recipient": "Recipient Name",
-    "recipient (to)": "Recipient Name", "to": "Recipient Name",
-    "receiver": "Recipient Name", "destination_name": "Recipient Name",
-    "inventory_item": "Inventory Item", "item": "Inventory Item",
-    "product": "Inventory Item", "item_name": "Inventory Item",
-    "qr_code": "QR Code", "qr": "QR Code", "code": "QR Code",
-    "quantity": "Quantity", "qty": "Quantity", "count": "Quantity",
+    "manager_name": "Manager Name",
+    "manager": "Manager Name",
+    "manager (from)": "Manager Name",
+    "from": "Manager Name",
+    "sender": "Manager Name",
+    "source": "Manager Name",
+    "recipient_name": "Recipient Name",
+    "recipient": "Recipient Name",
+    "recipient (to)": "Recipient Name",
+    "to": "Recipient Name",
+    "receiver": "Recipient Name",
+    "destination_name": "Recipient Name",
+    "inventory_item": "Inventory Item",
+    "item": "Inventory Item",
+    "product": "Inventory Item",
+    "item_name": "Inventory Item",
+    "qr_code": "QR Code",
+    "qr": "QR Code",
+    "code": "QR Code",
+    "quantity": "Quantity",
+    "qty": "Quantity",
+    "count": "Quantity",
     "amount": "Quantity",
     "destination_inventory_file_location": "Destination Inventory File Location",
     "destination": "Destination Inventory File Location",
     "ledger": "Destination Inventory File Location",
     "ledger_name": "Destination Inventory File Location",
     "location": "Destination Inventory File Location",
-    "attached_filename": "Attached Filename", "filename": "Attached Filename",
+    "attached_filename": "Attached Filename",
+    "filename": "Attached Filename",
     "attachment": "Attached Filename",
     # Sales
-    "sales_price": "Sales price", "price": "Sales price",
+    "sales_price": "Sales price",
+    "price": "Sales price",
     "sold_by": "Sold by",
     "cash_proceeds_collected_by": "Cash proceeds collected by",
-    "owner_email": "Owner email", "email": "Owner email",
-    "stripe_session_id": "Stripe Session ID", "stripe": "Stripe Session ID",
+    "owner_email": "Owner email",
+    "email": "Owner email",
+    "stripe_session_id": "Stripe Session ID",
+    "stripe": "Stripe Session ID",
     "shipping_provider": "Shipping Provider",
-    "tracking_number": "Tracking number", "tracking": "Tracking number",
+    "tracking_number": "Tracking number",
+    "tracking": "Tracking number",
     # Contribution
-    "contributor": "Contributor(s)", "contributors": "Contributor(s)",
+    "contributor": "Contributor(s)",
+    "contributors": "Contributor(s)",
     "contributor(s)": "Contributor(s)",
-    "tdg_issued": "TDG Issued", "tdgs": "TDG Issued",
+    "tdg_issued": "TDG Issued",
+    "tdgs": "TDG Issued",
     # General
     "submission_source": "Submission Source",
 }
 
 # Descriptive-only fields that should be dropped (not canonical labels)
 _NON_CANONICAL_KEYS = {
-    "type", "description", "notes", "status", "summary",
-    "details", "comment", "remarks", "tags",
+    "type",
+    "description",
+    "notes",
+    "status",
+    "summary",
+    "details",
+    "comment",
+    "remarks",
+    "tags",
 }
 
 
 def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
     """Coerce LLM-generated attribute keys to canonical dao_client labels.
-    
+
     Steps:
     1. Map alias names to canonical labels
     2. Drop non-canonical descriptive keys
@@ -1036,15 +1127,23 @@ def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
     return missing
 
 
-async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None = None, session_id: str | None = None, governor_name: str | None = None) -> str:
+async def _run_tool(
+    func_name: str,
+    func_args: dict,
+    history: list[dict] | None = None,
+    session_id: str | None = None,
+    governor_name: str | None = None,
+) -> str:
     # First try the capability-manifest registry. Tools whose TOOL_SPEC carries
     # a handler (the ~30 simple wrappers + the new google/gmail/aws/pdf tools)
     # dispatch here and we never reach the legacy if-branches below.
     # Orchestration tools (submit_contribution, create_dao_submission, open_fix_pr)
     # have handler=None in their spec and fall through to the inline branches.
     from .tool_registry import dispatch as _registry_dispatch
+
     _registry_result = _registry_dispatch(
-        func_name, func_args or {},
+        func_name,
+        func_args or {},
         {"history": history or [], "session_id": session_id, "governor_name": governor_name},
     )
     if _registry_result is not None:
@@ -1068,9 +1167,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         if result.get("type") == "file":
             return result["content"]
         if result.get("type") == "directory":
-            return "Directory listing:\n" + "\n".join(
-                f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
-            )
+            return "Directory listing:\n" + "\n".join(f"- {e['name']} ({e['type']})" for e in result.get("entries", []))
         return f"Error: {result.get('error', 'unknown')}"
     if func_name == "submit_contribution":
         # DUPLICATE GUARD: check DAO ledger (ground truth) before submitting
@@ -1083,10 +1180,12 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         # Validate required fields
         missing = _validate_required_fields(event_name, attributes)
         if missing:
-            return json.dumps({
-                "status": "invalid",
-                "message": f"Missing required fields for {event_name}: {', '.join(missing)}. Canonical labels are: {', '.join(_CANONICAL_LABELS.get(event_name, ['(any)']))}",
-            })
+            return json.dumps(
+                {
+                    "status": "invalid",
+                    "message": f"Missing required fields for {event_name}: {', '.join(missing)}. Canonical labels are: {', '.join(_CANONICAL_LABELS.get(event_name, ['(any)']))}",
+                }
+            )
 
         qr = attributes.get("QR Code", "")
         recipient = attributes.get("Recipient Name", "")
@@ -1095,8 +1194,14 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         if qr and history:
             for msg in history:
                 content = str(msg.get("content", ""))
-                if msg.get("role") == "tool" and qr in content and ("submitted successfully" in content.lower() or "duplicate" in content.lower()):
-                    return json.dumps({"status": "duplicate", "message": f"QR code {qr} was already submitted. Skipping."})
+                if (
+                    msg.get("role") == "tool"
+                    and qr in content
+                    and ("submitted successfully" in content.lower() or "duplicate" in content.lower())
+                ):
+                    return json.dumps(
+                        {"status": "duplicate", "message": f"QR code {qr} was already submitted. Skipping."}
+                    )
 
         # 2. Check DAO ledger (ground truth)
         if qr:
@@ -1106,17 +1211,21 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
                     current_status = ledger_state.get("qr_status", "").upper()
                     current_manager = ledger_state.get("manager_name", "")
                     if current_status not in ("MINTED", ""):
-                        return json.dumps({
-                            "status": "duplicate",
-                            "message": f"QR code {qr} has status '{current_status}' (manager: {current_manager}) — already processed. Ground truth from DAO ledger.",
-                            "ledger_state": ledger_state,
-                        })
+                        return json.dumps(
+                            {
+                                "status": "duplicate",
+                                "message": f"QR code {qr} has status '{current_status}' (manager: {current_manager}) — already processed. Ground truth from DAO ledger.",
+                                "ledger_state": ledger_state,
+                            }
+                        )
                     if recipient and current_manager and recipient.lower() == current_manager.lower():
-                        return json.dumps({
-                            "status": "duplicate",
-                            "message": f"QR code {qr} is already managed by {current_manager} (recipient is also {recipient}). Nothing to move.",
-                            "ledger_state": ledger_state,
-                        })
+                        return json.dumps(
+                            {
+                                "status": "duplicate",
+                                "message": f"QR code {qr} is already managed by {current_manager} (recipient is also {recipient}). Nothing to move.",
+                                "ledger_state": ledger_state,
+                            }
+                        )
             except Exception:
                 pass
 
@@ -1128,7 +1237,20 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
                     content = str(msg.get("content", "")).lower()
                     clean_content = content.replace("[governor_identity:", "").split("\n## instructions\n")[0]
                     if qr and qr.lower() in clean_content:
-                        if any(kw in clean_content for kw in ["approved", "approve", "go ahead", "yes", "confirm", "proceed", "execute", "do it", "submit it"]):
+                        if any(
+                            kw in clean_content
+                            for kw in [
+                                "approved",
+                                "approve",
+                                "go ahead",
+                                "yes",
+                                "confirm",
+                                "proceed",
+                                "execute",
+                                "do it",
+                                "submit it",
+                            ]
+                        ):
                             approved = True
                         elif any(kw in clean_content for kw in ["reject", "cancel", "no", "stop", "don't"]):
                             return json.dumps({"status": "cancelled", "message": "Submission cancelled by user."})
@@ -1141,13 +1263,19 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             qty = attributes.get("Quantity", "1")
             ledger = attributes.get("Destination Inventory File Location", "")
             summary = f"Move {qty}x {item} from {manager} to {recipient}" if item else f"Submit {event_name} for {qr}"
-            command = f"truesight-dao-report-inventory-movement"
-            if manager: command += f' --manager-name "{manager}"'
-            if recipient: command += f' --recipient-name "{recipient}"'
-            if item: command += f' --inventory-item "{item}"'
-            if qr: command += f' --qr-code "{qr}"'
-            if qty: command += f' --quantity "{qty}"'
-            if ledger: command += f' --destination-inventory-file-location "{ledger}"'
+            command = "truesight-dao-report-inventory-movement"
+            if manager:
+                command += f' --manager-name "{manager}"'
+            if recipient:
+                command += f' --recipient-name "{recipient}"'
+            if item:
+                command += f' --inventory-item "{item}"'
+            if qr:
+                command += f' --qr-code "{qr}"'
+            if qty:
+                command += f' --quantity "{qty}"'
+            if ledger:
+                command += f' --destination-inventory-file-location "{ledger}"'
 
             proposal = {
                 "status": "pending_approval",
@@ -1158,19 +1286,20 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
                     "command": command,
                     "tool_args": {"event_name": event_name, "attributes": attributes},
                 },
-                "message": f"⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel."
+                "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
             }
 
             # Persist pending approval to server + GitHub for durability
-            if qr:
-                pub_key = session_key.split(":")[0] if hasattr(session_key, 'split') else ""
-                if pub_key:
-                    _add_pending(pub_key, {
+            if qr and governor_name:
+                _add_pending(
+                    governor_name,
+                    {
                         "title": f"{event_name}: {qr}" if qr else event_name,
                         "qr_code": qr,
                         "summary": summary,
                         "action": "submit_contribution",
-                    })
+                    },
+                )
 
             return json.dumps(proposal)
 
@@ -1178,6 +1307,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         # Add agentic traceability: who approved this, with proof of their authenticated session
         if governor_name and event_name == "INVENTORY MOVEMENT":
             import hashlib
+
             key_seed = (session_id or "").split(":")[0]
             fingerprint = hashlib.sha256(key_seed.encode()).hexdigest()[:8]
             today = time.strftime("%Y-%m-%d", time.gmtime())
@@ -1190,6 +1320,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         return "Contribution submitted successfully." if ok else "Failed to submit contribution."
     if func_name == "open_fix_pr":
         from .fix_agent import repo_class_block
+
         repo_name = func_args.get("repo", "")
         issue = func_args.get("issue_description", "")
         allowed = settings.allowed_repos
@@ -1204,6 +1335,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
             return "Fix agent failed to produce a PR."
         # Extract PR number from URL like https://github.com/TrueSightDAO/dapp/pull/218
         import re as _re
+
         m = _re.search(r"/pull/(\d+)$", pr_url)
         pr_number = int(m.group(1)) if m else 0
         # Build a merge_pr proposal so the frontend renders an Approve/Reject card
@@ -1220,12 +1352,15 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         if session_id:
             pub_key = session_id.split(":")[0]
             if pub_key:
-                _add_pending(pub_key, {
-                    "title": f"Merge PR #{pr_number} on {repo_name}",
-                    "qr_code": "",
-                    "summary": issue[:200],
-                    "action": "merge_pr",
-                })
+                _add_pending(
+                    pub_key,
+                    {
+                        "title": f"Merge PR #{pr_number} on {repo_name}",
+                        "qr_code": "",
+                        "summary": issue[:200],
+                        "action": "merge_pr",
+                    },
+                )
         return f"PR opened: {pr_url}\n\n```json\n{json.dumps(proposal)}\n```"
     if func_name == "merge_pr":
         repo_name = func_args.get("repo", "")
@@ -1280,6 +1415,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         return json.dumps(prs, indent=2)
     if func_name == "read_oracle_logs":
         from .tools.read_oracle_logs import read_oracle_logs as _read_logs
+
         date = func_args.get("date", "latest")
         return _read_logs(date)
     if func_name == "create_dao_submission":
@@ -1307,21 +1443,38 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         }
         if attachment_path and os.path.isfile(attachment_path):
             from .tools.dao_submission import submit_ai_agent_contribution as _submit_ai
+
             result = _submit_ai(
-                title=title, body=body, pr_urls=pr_urls,
-                contributors=contributors, amount=amount, tdg_issued=tdg_issued,
+                title=title,
+                body=body,
+                pr_urls=pr_urls,
+                contributors=contributors,
+                amount=amount,
+                tdg_issued=tdg_issued,
                 attached_file_path=attachment_path,
                 attached_filename=attachment_filename or None,
             )
-            return json.dumps({"status": "success" if result.get("status") == "success" else "error",
-                               "message": "Contribution with attachment submitted" if result.get("status") == "success" else f"Submission failed: {result.get('stderr', '')}"})
+            return json.dumps(
+                {
+                    "status": "success" if result.get("status") == "success" else "error",
+                    "message": "Contribution with attachment submitted"
+                    if result.get("status") == "success"
+                    else f"Submission failed: {result.get('stderr', '')}",
+                }
+            )
         else:
             attrs["Attached Filename"] = "N/A"
             attrs["Destination Contribution File Location"] = "N/A"
             ok = edgar.submit_contribution("CONTRIBUTION EVENT", attrs, description=title)
-            return json.dumps({"status": "success" if ok else "error", "message": "Contribution submitted" if ok else "Submission failed"})
+            return json.dumps(
+                {
+                    "status": "success" if ok else "error",
+                    "message": "Contribution submitted" if ok else "Submission failed",
+                }
+            )
     if func_name == "upload_file_to_github":
         from .tools.upload_file_to_github import upload_file_to_github as _upload
+
         result = _upload(
             repo=func_args.get("repo", ""),
             path=func_args.get("path", ""),
@@ -1331,10 +1484,18 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
         if result.get("status") == "success":
             blob_url = f"https://github.com/TrueSightDAO/{func_args.get('repo', '')}/blob/{func_args.get('branch', 'main')}/{func_args.get('path', '')}"
-            return json.dumps({"status": "success", "blob_url": blob_url, "commit_sha": result.get("commit_sha", ""), "message": result.get("message", "")})
+            return json.dumps(
+                {
+                    "status": "success",
+                    "blob_url": blob_url,
+                    "commit_sha": result.get("commit_sha", ""),
+                    "message": result.get("message", ""),
+                }
+            )
         return json.dumps(result)
     if func_name == "deploy_autopilot":
         from .tools.deploy import deploy_autopilot as _deploy
+
         return _deploy()
     if func_name == "list_directory":
         dir_path = func_args.get("dir_path", "")
@@ -1346,6 +1507,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         return json.dumps(result, indent=2)
     if func_name == "web_search":
         from .tools.web_search import web_search as _web_search
+
         return _web_search(
             query=func_args.get("query", ""),
             max_results=func_args.get("max_results", 5),
@@ -1354,9 +1516,11 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "web_extract":
         from .tools.web_search import web_extract as _web_extract
+
         return _web_extract(urls=func_args.get("urls", []))
     if func_name == "read_google_sheet":
         from .tools.google_sheets import read_google_sheet as _read_google_sheet
+
         return _read_google_sheet(
             spreadsheet_id=func_args.get("spreadsheet_id", ""),
             range_a1=func_args.get("range_a1", ""),
@@ -1364,12 +1528,14 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "read_google_doc":
         from .tools.google_docs import read_google_doc as _read_google_doc
+
         return _read_google_doc(
             document_id=func_args.get("document_id", ""),
             service_account_name=func_args.get("service_account_name"),
         )
     if func_name == "read_drive_file":
         from .tools.google_drive import read_drive_file as _read_drive_file
+
         return _read_drive_file(
             file_id=func_args.get("file_id", ""),
             mime_type=func_args.get("mime_type"),
@@ -1377,6 +1543,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "list_drive_folder":
         from .tools.google_drive import list_drive_folder as _list_drive_folder
+
         return _list_drive_folder(
             folder_id=func_args.get("folder_id", ""),
             page_size=func_args.get("page_size", 50),
@@ -1384,6 +1551,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "http_fetch":
         from .tools.http_fetch import http_fetch as _http_fetch
+
         return _http_fetch(
             url=func_args.get("url", ""),
             method=func_args.get("method", "GET"),
@@ -1393,6 +1561,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "aws_query":
         from .tools.aws_tools import aws_query as _aws_query
+
         return _aws_query(
             account=func_args.get("account", ""),
             service=func_args.get("service", ""),
@@ -1402,6 +1571,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "generate_pdf":
         from .tools.pdf_tools import generate_pdf as _generate_pdf
+
         return _generate_pdf(
             content=func_args.get("content", ""),
             title=func_args.get("title"),
@@ -1409,6 +1579,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "gmail_search":
         from .tools.gmail_tools import gmail_search as _gmail_search
+
         return _gmail_search(
             query=func_args.get("query", ""),
             account=func_args.get("account"),
@@ -1416,12 +1587,14 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "gmail_read_message":
         from .tools.gmail_tools import gmail_read_message as _gmail_read_message
+
         return _gmail_read_message(
             message_id=func_args.get("message_id", ""),
             account=func_args.get("account"),
         )
     if func_name == "gmail_send":
         from .tools.gmail_tools import gmail_send as _gmail_send
+
         return _gmail_send(
             to=func_args.get("to", ""),
             subject=func_args.get("subject", ""),
@@ -1433,6 +1606,7 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "gmail_create_draft":
         from .tools.gmail_tools import gmail_create_draft as _gmail_create_draft
+
         return _gmail_create_draft(
             to=func_args.get("to", ""),
             subject=func_args.get("subject", ""),
@@ -1444,9 +1618,11 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
         )
     if func_name == "gmail_list_labels":
         from .tools.gmail_tools import gmail_list_labels as _gmail_list_labels
+
         return _gmail_list_labels(account=func_args.get("account"))
     if func_name == "gmail_apply_label":
         from .tools.gmail_tools import gmail_apply_label as _gmail_apply_label
+
         return _gmail_apply_label(
             message_id=func_args.get("message_id", ""),
             add_labels=func_args.get("add_labels") or [],
@@ -1462,10 +1638,21 @@ async def _run_tool(func_name: str, func_args: dict, history: list[dict] | None 
 # the governor sees exactly what each turn accomplished before the next begins.
 # See agentic_ai_context/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR3, invariant 7).
 _SIDE_EFFECT_TOOLS = {
-    "open_fix_pr", "merge_pr", "deploy_autopilot", "submit_contribution",
-    "create_dao_submission", "upload_file_to_github", "register_identity",
-    "ssh_run", "run_command", "deploy_gas_project", "gas_deploy_project",
-    "create_branch", "commit_and_push", "open_pr", "append_to_transcript",
+    "open_fix_pr",
+    "merge_pr",
+    "deploy_autopilot",
+    "submit_contribution",
+    "create_dao_submission",
+    "upload_file_to_github",
+    "register_identity",
+    "ssh_run",
+    "run_command",
+    "deploy_gas_project",
+    "gas_deploy_project",
+    "create_branch",
+    "commit_and_push",
+    "open_pr",
+    "append_to_transcript",
 }
 
 
@@ -1571,7 +1758,13 @@ async def _run_tool_round_loop(
 
         chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
         try:
-            async for hb in _heartbeat_until_done(chat_task, phase="llm", session_id=session_id, round=round_num, **({"queue_msg_id": queue_msg_id} if queue_msg_id else {})):
+            async for hb in _heartbeat_until_done(
+                chat_task,
+                phase="llm",
+                session_id=session_id,
+                round=round_num,
+                **({"queue_msg_id": queue_msg_id} if queue_msg_id else {}),
+            ):
                 yield hb
             completion = await chat_task
         except asyncio.CancelledError:
@@ -1580,12 +1773,21 @@ async def _run_tool_round_loop(
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
             return
-        _log_raw_llm(session_id, f"llm-{raw_label_prefix}round-{round_num}", completion["choices"][0] if "choices" in completion else completion)
+        _log_raw_llm(
+            session_id,
+            f"llm-{raw_label_prefix}round-{round_num}",
+            completion["choices"][0] if "choices" in completion else completion,
+        )
         assistant_message = completion["choices"][0].get("message", {})
         tool_calls = client.extract_tool_calls(completion)
-        logger.info("[%d] %sLLM RESP round=%d tools=%d tokens=%s", req_id, log_prefix, round_num,
-                     len(tool_calls),
-                     completion.get("usage", {}).get("total_tokens", "?"))
+        logger.info(
+            "[%d] %sLLM RESP round=%d tools=%d tokens=%s",
+            req_id,
+            log_prefix,
+            round_num,
+            len(tool_calls),
+            completion.get("usage", {}).get("total_tokens", "?"),
+        )
 
         tool_calls = assistant_message.get("tool_calls", [])
 
@@ -1593,16 +1795,21 @@ async def _run_tool_round_loop(
             thought = assistant_message.get("content", "") or "Thinking..."
             yield _sse_event("token", thought)
 
-            history.append({
-                "role": "assistant",
-                "content": assistant_message.get("content", ""),
-                "reasoning_content": assistant_message.get("reasoning_content", ""),
-                "tool_calls": [
-                    {"id": tc["id"], "type": tc["type"],
-                     "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
-                    for tc in tool_calls
-                ],
-            })
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_message.get("content", ""),
+                    "reasoning_content": assistant_message.get("reasoning_content", ""),
+                    "tool_calls": [
+                        {
+                            "id": tc["id"],
+                            "type": tc["type"],
+                            "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]},
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+            )
 
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
@@ -1611,11 +1818,13 @@ async def _run_tool_round_loop(
                     func_args = json.loads(raw_args)
                 except json.JSONDecodeError:
                     logger.warning("[%d] %sTOOL ARGS INVALID for %s: %s", req_id, log_prefix, func_name, raw_args[:200])
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": json.dumps({"error": "invalid_arguments", "raw": raw_args[:500]}),
-                    })
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": json.dumps({"error": "invalid_arguments", "raw": raw_args[:500]}),
+                        }
+                    )
                     continue
                 tool_call_id = tc["id"]
                 logger.info("[%d] %sTOOL CALL: %s args=%.200s", req_id, log_prefix, func_name, json.dumps(func_args))
@@ -1623,12 +1832,20 @@ async def _run_tool_round_loop(
                 yield _sse_event("tool", {"tool": func_name, "status": "calling"})
                 tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
                 try:
-                    async for hb in _heartbeat_until_done(tool_task, phase="tool", session_id=session_id, tool=func_name, **({"queue_msg_id": queue_msg_id} if queue_msg_id else {})):
+                    async for hb in _heartbeat_until_done(
+                        tool_task,
+                        phase="tool",
+                        session_id=session_id,
+                        tool=func_name,
+                        **({"queue_msg_id": queue_msg_id} if queue_msg_id else {}),
+                    ):
                         yield hb
                     result_text = await tool_task
                 except asyncio.CancelledError:
                     logger.info("[%d] %sTool %s cancelled by user", req_id, log_prefix, func_name)
-                    yield _sse_event("cancelled", _emit({"phase": "tool", "tool": func_name, "reason": "user_requested"}))
+                    yield _sse_event(
+                        "cancelled", _emit({"phase": "tool", "tool": func_name, "reason": "user_requested"})
+                    )
                     state["cancelled"] = True
                     state["assistant_text"] = assistant_text
                     return
@@ -1636,11 +1853,13 @@ async def _run_tool_round_loop(
                 logger.info("[%d] %sTOOL RESULT: %s result=%.300s", req_id, log_prefix, func_name, result_text[:300])
 
                 state["tool_trace"].append({"name": func_name, "result": result_text})
-                history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result_text,
-                })
+                history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    }
+                )
         else:
             assistant_text = client.extract_text(completion)
             break  # no more tool calls — exit loop
@@ -1660,14 +1879,26 @@ async def _run_tool_round_loop(
     state["assistant_text"] = assistant_text
 
 
-async def _stream_chat(user_message: str, history: list[dict], session_id: str,
-                       attachment_info: dict | None = None, governor_name: str | None = None,
-                       do_not_publish: bool = False, role=None):
+async def _stream_chat(
+    user_message: str,
+    history: list[dict],
+    session_id: str,
+    attachment_info: dict | None = None,
+    governor_name: str | None = None,
+    do_not_publish: bool = False,
+    role=None,
+):
     system_prompt = get_system_prompt_for_role(role)
     client = LLMClient()
     tools = get_tool_schemas_for_role(role)
     req_id = int(time.time() * 1000) % 1000000
-    logger.info("[%d] CHAT REQ: session=%s msg=%.150s attach=%s", req_id, session_id[:16], user_message, attachment_info is not None)
+    logger.info(
+        "[%d] CHAT REQ: session=%s msg=%.150s attach=%s",
+        req_id,
+        session_id[:16],
+        user_message,
+        attachment_info is not None,
+    )
 
     # Trim history to avoid context overflow (max ~400K chars = ~100K tokens for messages)
     # Preserve role tags and other system messages at position 0
@@ -1688,9 +1919,14 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str,
     try:
         state: dict = {}
         async for ev in _run_tool_round_loop(
-            client=client, system_prompt=system_prompt, tools=tools,
-            history=history, session_id=session_id, governor_name=governor_name,
-            req_id=req_id, state=state,
+            client=client,
+            system_prompt=system_prompt,
+            tools=tools,
+            history=history,
+            session_id=session_id,
+            governor_name=governor_name,
+            req_id=req_id,
+            state=state,
         ):
             yield ev
         if state.get("cancelled"):
@@ -1719,7 +1955,9 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str,
                 proposal = embedded["proposal"]
             elif isinstance(embedded, dict) and "proposals" in embedded:
                 proposals = embedded["proposals"]
-            assistant_text = re.sub(r"```json\s*[\[\{][\s\S]*?[\]\}]\s*```", "", assistant_text, flags=re.DOTALL).strip()
+            assistant_text = re.sub(
+                r"```json\s*[\[\{][\s\S]*?[\]\}]\s*```", "", assistant_text, flags=re.DOTALL
+            ).strip()
     except Exception:
         pass
 
@@ -1759,9 +1997,15 @@ async def _stream_chat(user_message: str, history: list[dict], session_id: str,
         try:
             q_state: dict = {}
             async for ev in _run_tool_round_loop(
-                client=client, system_prompt=system_prompt, tools=tools,
-                history=history, session_id=session_id, governor_name=governor_name,
-                req_id=req_id, state=q_state, queue_msg_id=next_msg["id"],
+                client=client,
+                system_prompt=system_prompt,
+                tools=tools,
+                history=history,
+                session_id=session_id,
+                governor_name=governor_name,
+                req_id=req_id,
+                state=q_state,
+                queue_msg_id=next_msg["id"],
             ):
                 yield ev
             if q_state.get("cancelled"):
@@ -1807,6 +2051,7 @@ def _log_session(session_id: str, history: list[dict]) -> None:
     _sessions[session_id] = history
     try:
         import hashlib
+
         sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
         log_path = SESSION_LOG_DIR / f"{sid_hash}.json"
         log_data = {
@@ -1822,7 +2067,15 @@ def _log_session(session_id: str, history: list[dict]) -> None:
         os.replace(tmp_path, log_path)
         # Ease-of-access: symlink/pointer to latest session
         latest = SESSION_LOG_DIR / "_latest.json"
-        latest.write_text(json.dumps({"session_hash": sid_hash, "updated_at": log_data["updated_at"], "message_count": log_data["message_count"]}))
+        latest.write_text(
+            json.dumps(
+                {
+                    "session_hash": sid_hash,
+                    "updated_at": log_data["updated_at"],
+                    "message_count": log_data["message_count"],
+                }
+            )
+        )
     except Exception:
         pass
 
@@ -1831,6 +2084,7 @@ def _log_raw_llm(session_id: str, label: str, payload: object) -> None:
     """Log raw LLM request/response for post-mortem debugging (XML leaks, QR misreads, etc)."""
     try:
         import hashlib
+
         sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
         debug_log = SESSION_LOG_DIR / f"{sid_hash}_debug.log"
         ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -1844,6 +2098,7 @@ def _log_raw_llm(session_id: str, label: str, payload: object) -> None:
 def _save_session_index(user_key: str, sid: str, name: str | None = None) -> None:
     """Update the session index file for a user. user_key should be a contributor name."""
     import hashlib
+
     idx_key = _gov_name_for_key(user_key) if len(user_key) > 50 else user_key
     idx_file = SESSION_LOG_DIR / f"{hashlib.md5((idx_key or user_key[:20]).encode()).hexdigest()[:12]}_sessions.json"
     data: dict[str, list] = {"sessions": []}
@@ -1864,12 +2119,15 @@ def _save_session_index(user_key: str, sid: str, name: str | None = None) -> Non
             found = True
             break
     if not found:
-        sessions.insert(0, {
-            "id": sid,
-            "name": name or f"New Session",
-            "created_at": now,
-            "updated_at": now,
-        })
+        sessions.insert(
+            0,
+            {
+                "id": sid,
+                "name": name or "New Session",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
     data["sessions"] = sessions[:50]  # keep max 50
     idx_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -1890,6 +2148,7 @@ def _auto_name_session(public_key: str, request: Request, history: list, user_me
 
 def _pending_file(public_key: str) -> Path:
     import hashlib
+
     h = hashlib.md5(public_key.encode()).hexdigest()[:12]
     return SESSION_LOG_DIR / f"pending_{h}.json"
 
@@ -1905,6 +2164,7 @@ def _load_pending(public_key: str) -> list[dict]:
     # 2. Fallback: load from GitHub (survives server restarts)
     try:
         import hashlib
+
         h = hashlib.md5(public_key.encode()).hexdigest()[:12]
         gh = GitHubClient()
         result = gh.read_file(_TRANSCRIPT_REPO, f"pending/{h}.json")
@@ -1926,13 +2186,15 @@ def _add_pending(public_key: str, proposal: dict) -> None:
     items = _load_pending(public_key)
     key = proposal.get("qr_code", "") or proposal.get("title", "")
     if key and not any(p.get("qr_code") == key or p.get("title") == key for p in items):
-        items.append({
-            "title": proposal.get("title", "Transaction"),
-            "qr_code": proposal.get("qr_code", ""),
-            "summary": proposal.get("summary", ""),
-            "action": proposal.get("action", "submit_contribution"),
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        })
+        items.append(
+            {
+                "title": proposal.get("title", "Transaction"),
+                "qr_code": proposal.get("qr_code", ""),
+                "summary": proposal.get("summary", ""),
+                "action": proposal.get("action", "submit_contribution"),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+        )
         _save_pending(public_key, items)
 
 
@@ -1945,7 +2207,7 @@ def _resolve_pending(public_key: str, key: str, resolution: str) -> None:
 _MERGE_PR_TITLE_RE = re.compile(r"^Merge PR #(\d+) on (\S+)")
 
 
-def _cleanup_resolved_pending(public_key: str, gh: "GitHubClient | None" = None) -> int:
+def _cleanup_resolved_pending(public_key: str, gh: GitHubClient | None = None) -> int:
     """Drop pending merge_pr entries whose PR is no longer open.
 
     Fixes a stale-entry class of bug: when a governor merges a PR directly
@@ -2036,7 +2298,9 @@ async def _pending_janitor_loop():
                             cleaned.append(item)
                         else:
                             removed += 1
-                            logger.info("Pending janitor: dropped '%s' from %s (PR is %s)", item.get("title"), pf.name, pr.state)
+                            logger.info(
+                                "Pending janitor: dropped '%s' from %s (PR is %s)", item.get("title"), pf.name, pr.state
+                            )
                     except Exception:
                         cleaned.append(item)
                 if removed:
@@ -2053,11 +2317,17 @@ async def _sync_pending_to_github(public_key: str, items: list[dict]) -> None:
     """Mirror pending approvals to GitHub for cross-server durability."""
     try:
         import hashlib
+
         h = hashlib.md5(public_key.encode()).hexdigest()[:12]
         gh = GitHubClient()
         content = json.dumps(items, indent=2)
-        gh.commit_file(_TRANSCRIPT_REPO, "main", f"pending/{h}.json", content,
-                       f"[autopilot] Update pending approvals ({len(items)} items)")
+        gh.commit_file(
+            _TRANSCRIPT_REPO,
+            "main",
+            f"pending/{h}.json",
+            content,
+            f"[autopilot] Update pending approvals ({len(items)} items)",
+        )
         logger.debug("Pending synced to GitHub: %d items", len(items))
     except Exception as e:
         logger.debug("Pending GitHub sync skipped: %s", e)
@@ -2071,7 +2341,12 @@ _REDACTION_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "[REDACTED:LLM_API_KEY]"),
     (re.compile(r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b"), "[REDACTED:GITHUB_TOKEN]"),
     (re.compile(r"xox[abprs]-[A-Za-z0-9-]{20,}"), "[REDACTED:SLACK_TOKEN]"),
-    (re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY[ -]*-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY[ -]*-----"), "[REDACTED:PRIVATE_KEY_BLOCK]"),
+    (
+        re.compile(
+            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY[ -]*-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY[ -]*-----"
+        ),
+        "[REDACTED:PRIVATE_KEY_BLOCK]",
+    ),
     # JWT-shaped tokens: 3 base64url segments separated by dots, each at least 8 chars
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), "[REDACTED:JWT]"),
     # env-style line: KEY_LIKE=secret-shaped-value (long, no spaces, base64-ish)
@@ -2093,7 +2368,9 @@ def _redact_secrets(text: str) -> tuple[str, list[str]]:
     return text, matched
 
 
-async def _publish_transcript(session_id: str, history: list[dict], governor_name: str | None = None, do_not_publish: bool = False) -> None:
+async def _publish_transcript(
+    session_id: str, history: list[dict], governor_name: str | None = None, do_not_publish: bool = False
+) -> None:
     """Publish conversation transcript + uploaded images to public GitHub repo
     for DAO transparency. Runs as background task, never blocks the response.
 
@@ -2105,6 +2382,7 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
         return
     try:
         import hashlib as _hlib
+
         sid_hash = _hlib.md5(session_id.encode()).hexdigest()[:12]
         today = time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -2132,18 +2410,19 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
                 lines.append(f"### 🧑 Governor\n\n{content}\n\n")
             elif role == "assistant":
                 # Strip XML tool-call syntax
-                content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL).strip()
+                content = re.sub(r"<function_calls>.*?</function_calls>", "", content, flags=re.DOTALL).strip()
                 if content:
                     content, hits = _redact_secrets(content)
                     all_redactions.update(hits)
                     lines.append(f"### 🤖 Autopilot\n\n{content}\n\n")
         if all_redactions:
-            logger.info("Transcript redacted %d categories before publish: %s", len(all_redactions), sorted(all_redactions))
+            logger.info(
+                "Transcript redacted %d categories before publish: %s", len(all_redactions), sorted(all_redactions)
+            )
 
         transcript = "\n".join(lines)
         path = f"sessions/{today}/{sid_hash}/transcript.md"
-        gh.commit_file(_TRANSCRIPT_REPO, "main", path, transcript,
-                       f"[autopilot] Session {sid_hash} — {today}")
+        gh.commit_file(_TRANSCRIPT_REPO, "main", path, transcript, f"[autopilot] Session {sid_hash} — {today}")
 
         # Publish uploaded images referenced in the conversation
         for msg in history:
@@ -2154,9 +2433,13 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
                     img_bytes = img_src.read_bytes()
                     img_path = f"sessions/{today}/{sid_hash}/images/{img_src.name}"
                     try:
-                        gh.commit_file(_TRANSCRIPT_REPO, "main", img_path,
-                                      base64.b64encode(img_bytes).decode(),
-                                      f"[autopilot] Image for session {sid_hash}")
+                        gh.commit_file(
+                            _TRANSCRIPT_REPO,
+                            "main",
+                            img_path,
+                            base64.b64encode(img_bytes).decode(),
+                            f"[autopilot] Image for session {sid_hash}",
+                        )
                     except Exception:
                         pass  # images are best-effort
 
@@ -2166,6 +2449,7 @@ async def _publish_transcript(session_id: str, history: list[dict], governor_nam
 
 
 # ───────────────────────────── Message Queue ─────────────────────────────
+
 
 @app.post("/chat/queue")
 async def queue_message(request: Request) -> JSONResponse:
@@ -2265,7 +2549,9 @@ async def cancel_active_chat(session_short: str, request: Request) -> JSONRespon
         raise HTTPException(status_code=400, detail="X-Public-Key header required")
     session_id = _session_key(public_key, request)
     if session_id[:16] != session_short:
-        raise HTTPException(status_code=400, detail=f"session_short does not match this caller's session ({session_id[:16]}...)")
+        raise HTTPException(
+            status_code=400, detail=f"session_short does not match this caller's session ({session_id[:16]}...)"
+        )
     if session_id not in _active_streams:
         return JSONResponse({"status": "no_active_stream", "session_id_short": session_short}, status_code=404)
     _cancel_flags[session_id] = True
@@ -2329,16 +2615,24 @@ async def chat(request: Request):
                 set_role_in_history(history, pending)
                 _log_session(session_id, history)
                 return StreamingResponse(
-                    _sse_single_response(f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"),
+                    _sse_single_response(
+                        f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
+                    ),
                     media_type="text/event-stream",
                 )
             # "keep" or anything else — keep history, set role
             # Remove pending tag, set real role
-            history = [m for m in history if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))]
+            history = [
+                m
+                for m in history
+                if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))
+            ]
             set_role_in_history(history, pending)
             _log_session(session_id, history)
             return StreamingResponse(
-                _sse_single_response(f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"),
+                _sse_single_response(
+                    f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
+                ),
                 media_type="text/event-stream",
             )
 
@@ -2362,7 +2656,9 @@ async def chat(request: Request):
             )
         # Still no role match — show menu again
         return StreamingResponse(
-            _sse_single_response(f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"),
+            _sse_single_response(
+                f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
+            ),
             media_type="text/event-stream",
         )
 
@@ -2386,7 +2682,9 @@ async def chat(request: Request):
         # executor per thread). Different sessions have different locks → parallel.
         async with _session_lock(session_id):
             try:
-                async for event in _stream_chat(user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish, role=role):
+                async for event in _stream_chat(
+                    user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish, role=role
+                ):
                     yield event
             finally:
                 _active_streams.pop(session_id, None)
@@ -2406,7 +2704,7 @@ async def chat(request: Request):
 @app.post("/chat/upload")
 async def chat_upload(
     request: Request,
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),  # noqa: B008
 ):
     """Accepts a chat message + one or more file attachments. Processes all
     images with pyzbar + Grok, then hands combined analysis to DeepSeek."""
@@ -2438,7 +2736,9 @@ async def chat_upload(
         content = await upload_file.read()
         dest.write_bytes(content)
 
-        mime_type = upload_file.content_type or mimetypes.guess_type(upload_file.filename)[0] or "application/octet-stream"
+        mime_type = (
+            upload_file.content_type or mimetypes.guess_type(upload_file.filename)[0] or "application/octet-stream"
+        )
         size_kb = round(len(content) / 1024, 1)
         converted = False
 
@@ -2447,7 +2747,9 @@ async def chat_upload(
                 jpg_dest = UPLOAD_DIR / f"{dest.stem}.jpg"
                 subprocess.run(
                     ["sips", "-s", "format", "jpeg", str(dest), "--out", str(jpg_dest)],
-                    capture_output=True, timeout=30, check=True,
+                    capture_output=True,
+                    timeout=30,
+                    check=True,
                 )
                 jpg_content = jpg_dest.read_bytes()
                 mime_type = "image/jpeg"
@@ -2460,14 +2762,16 @@ async def chat_upload(
             except Exception as e:
                 logger.warning("HEIC conversion failed for %s: %s", upload_file.filename, e)
 
-        processed_files.append({
-            "filename": upload_file.filename,
-            "dest": str(dest),
-            "mime_type": mime_type,
-            "size_kb": size_kb,
-            "converted": converted,
-            "img_url": f"/uploads/{safe_name}",
-        })
+        processed_files.append(
+            {
+                "filename": upload_file.filename,
+                "dest": str(dest),
+                "mime_type": mime_type,
+                "size_kb": size_kb,
+                "converted": converted,
+                "img_url": f"/uploads/{safe_name}",
+            }
+        )
 
     if not processed_files:
         raise HTTPException(status_code=400, detail="No valid files to process.")
@@ -2478,10 +2782,15 @@ async def chat_upload(
         all_grok: dict | None = None
         total = len(processed_files)
 
-        yield _sse_event("status", {"stage": "upload", "message": f"Processing {total} file{'s' if total > 1 else ''}..."})
+        yield _sse_event(
+            "status", {"stage": "upload", "message": f"Processing {total} file{'s' if total > 1 else ''}..."}
+        )
 
         # Pyzbar scan all files
-        yield _sse_event("status", {"stage": "pyzbar", "message": f"Scanning {total} image{'s' if total > 1 else ''} for barcodes..."})
+        yield _sse_event(
+            "status",
+            {"stage": "pyzbar", "message": f"Scanning {total} image{'s' if total > 1 else ''} for barcodes..."},
+        )
         jpg_paths: list[str] = []
         for pf in processed_files:
             if pf["mime_type"].startswith("image/"):
@@ -2494,7 +2803,13 @@ async def chat_upload(
 
         # Grok vision — send all images in one batch call
         if jpg_paths:
-            yield _sse_event("status", {"stage": "grok", "message": f"Analyzing {len(jpg_paths)} image{'s' if len(jpg_paths) > 1 else ''} with Grok..."})
+            yield _sse_event(
+                "status",
+                {
+                    "stage": "grok",
+                    "message": f"Analyzing {len(jpg_paths)} image{'s' if len(jpg_paths) > 1 else ''} with Grok...",
+                },
+            )
             try:
                 all_grok = await asyncio.wait_for(
                     asyncio.to_thread(grok_analyze_images, jpg_paths, "", GROK_MODEL, 0.2, 60.0),
@@ -2540,12 +2855,12 @@ async def chat_upload(
                 cp += f"Photo quality: {quality}\n"
             if qr_guesses := all_grok.get("qr_codes_guessed"):
                 for g in qr_guesses:
-                    conf_pct = int(g.get('confidence', 0) * 100)
+                    conf_pct = int(g.get("confidence", 0) * 100)
                     cp += f"Grok GUESSED QR: {g['data']} (confidence: {conf_pct}%)\n"
             if bc_guesses := all_grok.get("barcodes_guessed"):
                 for g in bc_guesses:
-                    conf_pct = int(g.get('confidence', 0) * 100)
-                    cp += f"Grok GUESSED barcode: {g.get('type','?')}: {g['data']} (confidence: {conf_pct}%)\n"
+                    conf_pct = int(g.get("confidence", 0) * 100)
+                    cp += f"Grok GUESSED barcode: {g.get('type', '?')}: {g['data']} (confidence: {conf_pct}%)\n"
             if notes := all_grok.get("notes"):
                 cp += f"Notes: {notes}\n"
             content_parts.append(cp)
@@ -2554,14 +2869,18 @@ async def chat_upload(
             "\n## INSTRUCTIONS\n"
             "For EACH Agroverse QR code found above, output a batch approval JSON array in this format:\n"
             "```json\n"
-            "[{\"action\": \"submit_contribution\", \"title\": \"Move QR 2024OSCAR_...\", \"qr_code\": \"2024OSCAR_...\", \"summary\": \"Ceremonial Cacao Kraft Pouch from Kirsten Ritschel to Gary Teh\"}]\n"
+            '[{"action": "submit_contribution", "title": "Move QR 2024OSCAR_...", "qr_code": "2024OSCAR_...", "summary": "Ceremonial Cacao Kraft Pouch from Kirsten Ritschel to Gary Teh"}]\n'
             "```\n"
             "Include ALL found QR codes. The user will click Accept on each one individually."
         )
 
         content_part = "\n".join(content_parts)
         filenames = ", ".join(pf["filename"] for pf in processed_files)
-        user_message = f"{user_message_text}\n\nAttached: {filenames}\n{content_part}" if user_message_text.strip() else f"Attached: {filenames}\n{content_part}"
+        user_message = (
+            f"{user_message_text}\n\nAttached: {filenames}\n{content_part}"
+            if user_message_text.strip()
+            else f"Attached: {filenames}\n{content_part}"
+        )
 
         history = _load_or_create_session(session_id)
         role = find_role_in_history(history)
@@ -2573,7 +2892,9 @@ async def chat_upload(
         _auto_name_session(public_key, request, history, user_message)
         _log_session(session_id, history)
 
-        async for event in _stream_chat(user_message, history, session_id, attachment_info=attachment_info, governor_name=gov_name, role=role):
+        async for event in _stream_chat(
+            user_message, history, session_id, attachment_info=attachment_info, governor_name=gov_name, role=role
+        ):
             yield event
 
     return StreamingResponse(
@@ -2588,6 +2909,7 @@ async def chat_upload(
 
 
 # ──────────────────── Non-streaming fallback chat ────────────────────
+
 
 @app.post("/chat-blocking")
 async def chat_blocking(request: Request) -> JSONResponse:
@@ -2643,11 +2965,21 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                 history = archive_old_history(history, pending)
                 set_role_in_history(history, pending)
                 _log_session(session_id, history)
-                return JSONResponse({"response": f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"})
-            history = [m for m in history if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))]
+                return JSONResponse(
+                    {"response": f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"}
+                )
+            history = [
+                m
+                for m in history
+                if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))
+            ]
             set_role_in_history(history, pending)
             _log_session(session_id, history)
-            return JSONResponse({"response": f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"})
+            return JSONResponse(
+                {
+                    "response": f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
+                }
+            )
 
         role = resolve_role(user_message)
         if role:
@@ -2659,7 +2991,11 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
             set_role_in_history(history, role)
             _log_session(session_id, history)
             return JSONResponse({"response": f"✅ Role set: {role.name}.\n\nWhat would you like me to work on?"})
-        return JSONResponse({"response": f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"})
+        return JSONResponse(
+            {
+                "response": f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
+            }
+        )
 
     gov_name = _gov_name_for_key(public_key)
     if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
@@ -2685,15 +3021,20 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
             if not tool_calls:
                 assistant_text = client.extract_text(completion)
                 break
-            history.append({
-                "role": "assistant",
-                "content": message.get("content", ""),
-                "tool_calls": [
-                    {"id": tc["id"], "type": tc["type"],
-                     "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
-                    for tc in tool_calls
-                ],
-            })
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": message.get("content", ""),
+                    "tool_calls": [
+                        {
+                            "id": tc["id"],
+                            "type": tc["type"],
+                            "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]},
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+            )
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
                 raw_args = tc["function"].get("arguments")
@@ -2707,19 +3048,24 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
 
         # Force a clean text-only answer if we exhausted the budget, came back
         # blank, or the model leaked a text-format tool call instead of executing it.
-        if (not assistant_text or not assistant_text.strip()
-                or "<tool_call>" in assistant_text
-                or assistant_text in ("(empty response)", "(no response)")):
+        if (
+            not assistant_text
+            or not assistant_text.strip()
+            or "<tool_call>" in assistant_text
+            or assistant_text in ("(empty response)", "(no response)")
+        ):
             logger.info("Forcing text-only completion (rounds exhausted / blank / leaked tool-call)")
             completion = client.chat(system_prompt, history, tools=None)
             assistant_text = client.extract_text(completion)
 
     except LLMError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Never return a blank response — Telegram (and other clients) reject empty text.
     if not assistant_text or not assistant_text.strip():
-        assistant_text = "(Autopilot produced an empty response — try rephrasing or breaking the request into smaller steps.)"
+        assistant_text = (
+            "(Autopilot produced an empty response — try rephrasing or breaking the request into smaller steps.)"
+        )
 
     proposal = None
     try:
@@ -2756,56 +3102,69 @@ async def list_governors(request: Request) -> JSONResponse:
     verify_jwt(request)
     data = load_governors()
     governors = data.get("governors", [])
-    return JSONResponse({
-        "count": len(governors),
-        "updated_at": data.get("updated_at", ""),
-        "source": data.get("source", ""),
-        "governors": [
-            {"name": g.get("name"), "email": g.get("email"), "status": g.get("status")}
-            for g in governors
-        ],
-    })
+    return JSONResponse(
+        {
+            "count": len(governors),
+            "updated_at": data.get("updated_at", ""),
+            "source": data.get("source", ""),
+            "governors": [
+                {"name": g.get("name"), "email": g.get("email"), "status": g.get("status")} for g in governors
+            ],
+        }
+    )
 
 
 @app.post("/governors/refresh")
 async def force_refresh_governors(request: Request) -> JSONResponse:
     verify_jwt(request)
     data = refresh_governor_cache()
-    return JSONResponse({
-        "status": "refreshed",
-        "count": len(data.get("governors", [])),
-        "updated_at": data.get("updated_at", ""),
-    })
+    return JSONResponse(
+        {
+            "status": "refreshed",
+            "count": len(data.get("governors", [])),
+            "updated_at": data.get("updated_at", ""),
+        }
+    )
 
 
 @app.post("/admin/deploy")
 async def admin_deploy(request: Request) -> JSONResponse:
     """Self-deploy: git pull + restart. Returns git result before restarting."""
     from .auth import verify_jwt
+
     verify_jwt(request)
-    import subprocess, os
+    import os
+    import subprocess
+
     repo_dir = "/opt/truesight_autopilot"
     try:
         result = subprocess.run(
             ["git", "pull", "origin", "main"],
-            capture_output=True, text=True, timeout=30, cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=repo_dir,
         )
         git_out = result.stdout + result.stderr
         # Fork restart so we can return before dying
         pid = os.fork()
         if pid == 0:
             import time
+
             time.sleep(1)
             subprocess.run(
                 ["systemctl", "restart", "truesight-autopilot"],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
             os._exit(0)
-        return JSONResponse({
-            "status": "restarting",
-            "git_output": git_out,
-            "message": "Service restarting in background. Check health after ~10s.",
-        })
+        return JSONResponse(
+            {
+                "status": "restarting",
+                "git_output": git_out,
+                "message": "Service restarting in background. Check health after ~10s.",
+            }
+        )
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
@@ -2820,7 +3179,14 @@ _SELF_HEAL_WINDOW = 3600  # seconds
 
 def _looks_base64(s: str) -> bool:
     """Quick heuristic: base64 strings have no spaces and are mostly alphanumeric with +/=/."""
-    return " " not in s[:100] and len(s) > 50 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n" for c in s[:200].replace("\n", ""))
+    return (
+        " " not in s[:100]
+        and len(s) > 50
+        and all(
+            c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n"
+            for c in s[:200].replace("\n", "")
+        )
+    )
 
 
 _RECOVERED_TOOL_RESULT = "[tool result lost to a concurrent-write race; session auto-recovered]"
@@ -2874,10 +3240,7 @@ def _sanitise_tool_messages(history: list[dict]) -> None:
                 j += 1
             missing = [cid for cid in ids if cid not in seen]
             if missing:
-                stubs = [
-                    {"role": "tool", "tool_call_id": cid, "content": _RECOVERED_TOOL_RESULT}
-                    for cid in missing
-                ]
+                stubs = [{"role": "tool", "tool_call_id": cid, "content": _RECOVERED_TOOL_RESULT} for cid in missing]
                 history[j:j] = stubs  # insert right after the existing contiguous tool run
                 logger.info("Healed %d orphaned tool_call(s) at assistant index %d", len(stubs), i)
                 i = j + len(stubs)
@@ -2927,7 +3290,9 @@ def _update_context_after_fix(repo: str, pr_url: str, summary: str) -> None:
         if result.get("type") == "file":
             content = result["content"]
         else:
-            content = "# Context Updates\n\nAutopilot logs significant changes here so other AIs can stay up to date.\n\n"
+            content = (
+                "# Context Updates\n\nAutopilot logs significant changes here so other AIs can stay up to date.\n\n"
+            )
 
         # Prepend new entry
         new_content = content.replace("# Context Updates\n\n", f"# Context Updates\n\n{entry}")
@@ -2939,19 +3304,27 @@ def _update_context_after_fix(repo: str, pr_url: str, summary: str) -> None:
         repo.create_git_ref(ref=f"refs/heads/{branch}", sha=base.commit.sha)
         try:
             existing = repo.get_contents("CONTEXT_UPDATES.md", ref=branch)
-            repo.update_file("CONTEXT_UPDATES.md", f"[autopilot] Context update: {repo} fix",
-                             new_content, existing.sha, branch=branch)
+            repo.update_file(
+                "CONTEXT_UPDATES.md",
+                f"[autopilot] Context update: {repo} fix",
+                new_content,
+                existing.sha,
+                branch=branch,
+            )
         except Exception:
-            repo.create_file("CONTEXT_UPDATES.md", f"[autopilot] Context update: {repo} fix",
-                             new_content, branch=branch)
+            repo.create_file(
+                "CONTEXT_UPDATES.md", f"[autopilot] Context update: {repo} fix", new_content, branch=branch
+            )
         pr = repo.create_pull(
             title=f"[autopilot] Context update: {repo} fix",
             body=f"## Context Update\n\n{summary}\n\nTriggered by: {pr_url}\n\nThis PR was automatically generated by truesight_autopilot.",
-            head=branch, base="main",
+            head=branch,
+            base="main",
         )
         logger.info("Context update PR opened: %s", pr.html_url)
     except Exception as e:
         logger.error("Failed to update context: %s", e)
+
 
 _AUTOPILOT_BRANCH_PREFIX = "autopilot/fix-"
 
@@ -3054,8 +3427,8 @@ async def generate_ssh_key():
     configures ~/.ssh/config for github.com, and returns the public key.
     The autopilot calls this via http_fetch to provision its own SSH key.
     """
-    import subprocess
     import os
+    import subprocess
     from pathlib import Path
 
     ssh_dir = Path.home() / ".ssh"
@@ -3065,8 +3438,20 @@ async def generate_ssh_key():
     if not key_path.exists():
         try:
             subprocess.run(
-                ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", "", "-C", f"truesight-autopilot-{os.uname().nodename}"],
-                capture_output=True, timeout=30, check=True,
+                [
+                    "ssh-keygen",
+                    "-t",
+                    "ed25519",
+                    "-f",
+                    str(key_path),
+                    "-N",
+                    "",
+                    "-C",
+                    f"truesight-autopilot-{os.uname().nodename}",
+                ],
+                capture_output=True,
+                timeout=30,
+                check=True,
             )
             key_path.chmod(0o600)
             (ssh_dir / "id_ed25519_truesight_autopilot.pub").chmod(0o644)
@@ -3085,12 +3470,14 @@ async def generate_ssh_key():
     config_path.chmod(0o600)
 
     pub_key = (ssh_dir / "id_ed25519_truesight_autopilot.pub").read_text().strip()
-    return JSONResponse({
-        "status": "success",
-        "public_key": pub_key,
-        "key_path": str(key_path),
-        "message": "SSH key is ready. Add this public key to GitHub (Settings > SSH keys) and to any EC2 instances (~/.ssh/authorized_keys) you want the autopilot to manage.",
-    })
+    return JSONResponse(
+        {
+            "status": "success",
+            "public_key": pub_key,
+            "key_path": str(key_path),
+            "message": "SSH key is ready. Add this public key to GitHub (Settings > SSH keys) and to any EC2 instances (~/.ssh/authorized_keys) you want the autopilot to manage.",
+        }
+    )
 
 
 @app.get("/metrics")
@@ -3108,6 +3495,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
 def main() -> None:
     import uvicorn
+
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 

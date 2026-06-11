@@ -1,8 +1,8 @@
 """Log autopilot actions as [CONTRIBUTION EVENT] to Edgar via dao_client library."""
+
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from .config import settings
 
@@ -19,6 +19,7 @@ class EdgarLogger:
     def _init_client(self) -> None:
         try:
             from truesight_dao_client.edgar_client import EdgarClient
+
             self._client = EdgarClient(
                 email=settings.email,
                 public_key_b64=settings.public_key,
@@ -29,9 +30,7 @@ class EdgarLogger:
             logger.warning("EdgarClient init failed: %s", e)
 
     def is_configured(self) -> bool:
-        return self._client is not None and all([
-            settings.email, settings.public_key, settings.private_key
-        ])
+        return self._client is not None and all([settings.email, settings.public_key, settings.private_key])
 
     def submit_contribution(
         self,

@@ -1,8 +1,9 @@
 """Tests for AUTOPILOT_DEFAULT_ROLE — operator opt-out for the
 new-topic role-selection prompt."""
+
 from __future__ import annotations
 
-from app.roles import ROLES, get_default_role
+from app.roles import get_default_role
 
 
 def test_default_general_out_of_box(monkeypatch):

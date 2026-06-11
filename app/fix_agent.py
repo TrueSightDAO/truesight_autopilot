@@ -7,6 +7,7 @@
 - Supports all TrueSightDAO repos — see ALLOWED_REPOS in config.py
 - Cost: ~$0.002 per fix loop (DeepSeek-V3)
 """
+
 from __future__ import annotations
 
 import json
@@ -19,10 +20,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .github_client import GitHubClient
-from .llm_client import LLMClient
 from .config import settings
 from .edgar_logger import EdgarLogger
+from .github_client import GitHubClient
+from .llm_client import LLMClient
 
 logger = logging.getLogger("autopilot.fix_agent")
 
@@ -87,7 +88,7 @@ class FixAgent:
     def run_simple(self, repo: str, issue_description: str) -> str | None:
         """Run a fix loop from a plain-text issue description.
         The LLM does its own diagnosis as part of the agentic loop.
-        
+
         DRY_RUN does NOT gate the fix agent — it always opens DRAFT PRs,
         never auto-merges, and has safety hooks for dangerous operations.
         DRY_RUN only gates background tasks (email poller, AWS monitor).
@@ -143,31 +144,39 @@ class FixAgent:
                 logger.info("Agent finished at step %d", step)
                 break
 
-            messages.append({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls,
+                }
+            )
 
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
                 try:
                     func_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
-                    messages.append({
-                        "role": "tool", "tool_call_id": tc["id"],
-                        "content": "Error: invalid JSON arguments",
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": "Error: invalid JSON arguments",
+                        }
+                    )
                     continue
 
                 args_str = json.dumps(func_args)
                 danger = _is_dangerous(args_str)
                 if danger:
                     logger.warning("Safety hook blocked %s: %s", func_name, danger)
-                    messages.append({
-                        "role": "tool", "tool_call_id": tc["id"],
-                        "content": f"BLOCKED by safety hook: {danger} detected in arguments",
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": f"BLOCKED by safety hook: {danger} detected in arguments",
+                        }
+                    )
                     continue
 
                 try:
@@ -176,9 +185,13 @@ class FixAgent:
                     result = f"Tool error: {e}"
                     logger.error("Tool %s failed: %s", func_name, e)
 
-                messages.append({
-                    "role": "tool", "tool_call_id": tc["id"], "content": result,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    }
+                )
 
                 if func_name in ("edit_file", "create_file", "delete_file") and "successfully" in result:
                     edits_made = True
@@ -252,11 +265,13 @@ class FixAgent:
                 break
 
             # Record assistant turn
-            messages.append({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls,
+                }
+            )
 
             # Execute each tool call with safety hooks
             for tc in tool_calls:
@@ -264,11 +279,13 @@ class FixAgent:
                 try:
                     func_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": "Error: invalid JSON arguments",
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": "Error: invalid JSON arguments",
+                        }
+                    )
                     continue
 
                 # Safety hook
@@ -276,11 +293,13 @@ class FixAgent:
                 danger = _is_dangerous(args_str)
                 if danger:
                     logger.warning("Safety hook blocked %s: %s", func_name, danger)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": f"BLOCKED by safety hook: {danger} detected in arguments",
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": f"BLOCKED by safety hook: {danger} detected in arguments",
+                        }
+                    )
                     continue
 
                 # Execute
@@ -290,11 +309,13 @@ class FixAgent:
                     result = f"Tool error: {e}"
                     logger.error("Tool %s failed: %s", func_name, e)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    }
+                )
 
                 if func_name == "edit_file" and "updated successfully" in result:
                     edits_made = True
@@ -508,9 +529,7 @@ class FixAgent:
 
     # ───────────────────────── Tool Execution ─────────────────────────
 
-    def _execute_tool(
-        self, repo: str, branch: str, func_name: str, args: dict[str, Any]
-    ) -> str:
+    def _execute_tool(self, repo: str, branch: str, func_name: str, args: dict[str, Any]) -> str:
         target_repo = args.get("repo", repo)
         if target_repo not in settings.allowed_repos:
             return f"Error: repo '{target_repo}' is not in ALLOWED_REPOS. Allowed: {', '.join(settings.allowed_repos)}"
@@ -520,9 +539,7 @@ class FixAgent:
         if func_name == "list_files":
             return self._tool_read_file(target_repo, args["path"], branch)
         if func_name == "edit_file":
-            return self._tool_edit_file(
-                target_repo, branch, args["path"], args["old_string"], args["new_string"]
-            )
+            return self._tool_edit_file(target_repo, branch, args["path"], args["old_string"], args["new_string"])
         if func_name == "create_file":
             return self._tool_create_file(target_repo, branch, args["path"], args["content"])
         if func_name == "delete_file":
@@ -542,9 +559,7 @@ class FixAgent:
             return f"Directory listing:\n{entries}"
         return f"Error: {result.get('error', 'unknown')}"
 
-    def _tool_edit_file(
-        self, repo: str, branch: str, path: str, old_string: str, new_string: str
-    ) -> str:
+    def _tool_edit_file(self, repo: str, branch: str, path: str, old_string: str, new_string: str) -> str:
         result = self.github.read_file(repo, path, ref=branch)
         if result.get("type") != "file":
             return f"Error reading file: {result.get('error', 'unknown')}"
@@ -554,7 +569,7 @@ class FixAgent:
             # Show context so the LLM can self-correct
             snippet = content[:2000] if len(content) > 2000 else content
             lines = snippet.split("\n")
-            numbered = "\n".join(f"{i+1:4d}: {line}" for i, line in enumerate(lines))
+            numbered = "\n".join(f"{i + 1:4d}: {line}" for i, line in enumerate(lines))
             return (
                 "Error: old_string not found. Copy the exact text from the file content below.\n"
                 f"The file has {len(content)} chars. Here are the first {len(lines)} lines:\n\n"
@@ -567,7 +582,10 @@ class FixAgent:
             return "Error: replacement did not change anything"
 
         ok = self.github.commit_file(
-            repo, branch, path, new_content,
+            repo,
+            branch,
+            path,
+            new_content,
             message=f"[autopilot] Fix {path}",
         )
         return "File updated successfully" if ok else "Failed to commit file"
@@ -589,7 +607,10 @@ class FixAgent:
 
     def _tool_create_file(self, repo: str, branch: str, path: str, content: str) -> str:
         ok = self.github.commit_file(
-            repo, branch, path, content,
+            repo,
+            branch,
+            path,
+            content,
             message=f"[autopilot] Create {path}",
         )
         return "File created successfully" if ok else "Failed to create file"

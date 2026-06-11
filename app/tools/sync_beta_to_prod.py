@@ -12,6 +12,7 @@ CNAME divergence between beta and prod has been disturbed), the tool reports
 the error verbatim. NEVER attempt a force sync; a force overwrite of prod's
 CNAME breaks the production domain binding. Escalate to the governor instead.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,8 +29,7 @@ def sync_beta_to_prod(prod_repo: str) -> dict[str, Any]:
         return {
             "status": "error",
             "message": (
-                f"'{prod_repo}' is not a known production repo. "
-                f"Known prod repos: {sorted(settings.prod_repos)}"
+                f"'{prod_repo}' is not a known production repo. Known prod repos: {sorted(settings.prod_repos)}"
             ),
         }
     if not settings.github_pat:

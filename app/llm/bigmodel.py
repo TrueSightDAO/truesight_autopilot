@@ -3,6 +3,7 @@
 OpenAI-compatible endpoint at https://open.bigmodel.cn/api/paas/v4.
 GLM-4.5+ models support native tool/function calling.
 """
+
 from __future__ import annotations
 
 import logging

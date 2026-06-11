@@ -1,4 +1,5 @@
 """Unit tests for ssh_run — registry gate, key check, dispatch shape."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -60,6 +61,7 @@ def test_nonzero_exit_reported(tmp_path, monkeypatch):
 
 def test_tool_spec_registered_and_sre_gated():
     from app.tool_registry import get_registry, reset_registry_for_tests
+
     reset_registry_for_tests()
     spec = get_registry().get("ssh_run")
     assert spec is not None

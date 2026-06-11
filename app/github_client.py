@@ -3,12 +3,13 @@
 IMPORTANT: This client uses the GitHub Content API exclusively.
 It does NOT clone repos. Repos like .github are large static assets
 that should never be pulled locally — always read/write via the API."""
+
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from github import Github, Auth
+from github import Auth, Github
 
 from .config import settings
 
@@ -58,10 +59,7 @@ class GitHubClient:
             if isinstance(content, list):
                 return {
                     "type": "directory",
-                    "entries": [
-                        {"name": item.name, "type": item.type, "path": item.path}
-                        for item in content
-                    ],
+                    "entries": [{"name": item.name, "type": item.type, "path": item.path} for item in content],
                 }
             decoded = content.decoded_content.decode("utf-8", errors="replace")
             return {
@@ -84,7 +82,7 @@ class GitHubClient:
             jobs = run.jobs()
             lines: list[str] = []
             for job in jobs:
-                logs_url = job.logs_url()
+                job.logs_url()
                 # logs_url is a redirect to a tarball; we'd need to download and parse
                 # For MVP, use the job name + conclusion as proxy
                 lines.append(f"Job: {job.name} — {job.conclusion}")
@@ -175,7 +173,10 @@ class GitHubClient:
             return False
 
     def delete_file(
-        self, repo_name: str, branch: str, path: str,
+        self,
+        repo_name: str,
+        branch: str,
+        path: str,
     ) -> bool:
         """Delete a file from a branch."""
         try:
@@ -234,8 +235,7 @@ class GitHubClient:
                 try:
                     repo.get_label(name)
                 except Exception:
-                    repo.create_label(name=name, color="f4a300",
-                                      description="Created by truesight_autopilot")
+                    repo.create_label(name=name, color="f4a300", description="Created by truesight_autopilot")
                 pr.add_to_labels(name)
             except Exception as e:
                 logger.warning("Could not apply label %r to PR #%d: %s", name, pr.number, e)
@@ -310,7 +310,10 @@ class GitHubClient:
             result = pr.merge(merge_method=merge_method)
             logger.info(
                 "Merged PR #%d on %s (method=%s, sha=%s)",
-                pr_number, repo_name, merge_method, result.sha,
+                pr_number,
+                repo_name,
+                merge_method,
+                result.sha,
             )
             return {
                 "sha": result.sha,
@@ -338,14 +341,16 @@ class GitHubClient:
             pulls = repo.get_pulls(state=state, sort="updated", direction="desc")
             result = []
             for pr in pulls[:limit]:
-                result.append({
-                    "number": pr.number,
-                    "title": pr.title,
-                    "state": pr.state,
-                    "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
-                    "url": pr.html_url,
-                    "created_at": pr.created_at.isoformat() if pr.created_at else None,
-                })
+                result.append(
+                    {
+                        "number": pr.number,
+                        "title": pr.title,
+                        "state": pr.state,
+                        "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                        "url": pr.html_url,
+                        "created_at": pr.created_at.isoformat() if pr.created_at else None,
+                    }
+                )
             return result
         except Exception as e:
             logger.error("Failed to list PRs on %s: %s", repo_name, e)

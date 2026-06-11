@@ -8,6 +8,7 @@ Usage:
     source .venv/bin/activate
     DISABLE_GOVERNOR_CHECK=true python tests/test_approved_by_e2e.py
 """
+
 from __future__ import annotations
 
 import base64
@@ -20,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.backends import default_backend
 
 AUTOPILOT_URL = os.environ.get("AUTOPILOT_URL", "http://localhost:8001")
 TEST_IMAGE = "/tmp/test_qr_bag.jpg"
@@ -58,9 +59,7 @@ class GovernorClient:
     def __init__(self):
         self.pub_key = GARY_PUB
         priv_bytes = base64.b64decode(GARY_PRIV)
-        self.priv_key = serialization.load_der_private_key(
-            priv_bytes, password=None, backend=default_backend()
-        )
+        self.priv_key = serialization.load_der_private_key(priv_bytes, password=None, backend=default_backend())
         self.session_id = f"approved-by-test-{int(time.time())}"
         self.history = []
 
@@ -71,16 +70,19 @@ class GovernorClient:
             "nonce": str(uuid.uuid4()),
         }
         payload_str = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
-        sig = base64.b64encode(
-            self.priv_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())
-        ).decode()
+        sig = base64.b64encode(self.priv_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())).decode()
         return obj, sig, payload_str
 
     def stream_sse(self, resp: requests.Response) -> dict[str, Any]:
         """Consume SSE stream."""
         result: dict[str, Any] = {
-            "tools": [], "response": "", "proposal": None, "proposals": None,
-            "statuses": [], "errors": [], "tokens": "",
+            "tools": [],
+            "response": "",
+            "proposal": None,
+            "proposals": None,
+            "statuses": [],
+            "errors": [],
+            "tokens": "",
         }
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
@@ -169,9 +171,9 @@ def main() -> int:
     ok &= check(has_proposal, f"Proposals generated: {len(proposals) if proposals else 1 if proposal else 0}")
     if proposals:
         for i, p in enumerate(proposals):
-            print(f"  Proposal {i+1}: {p.get('title','?')} — {p.get('summary','?')}")
+            print(f"  Proposal {i + 1}: {p.get('title', '?')} — {p.get('summary', '?')}")
     elif proposal:
-        print(f"  Proposal: {proposal.get('title','?')}")
+        print(f"  Proposal: {proposal.get('title', '?')}")
 
     # ── Test 3: Submit with approval keywords ──
     print(f"\n{BOLD}Test 3: Approve and submit (should include Approved By){RESET}")
@@ -196,8 +198,9 @@ def main() -> int:
         for tool in result2["tools"]:
             if tool.get("tool") == "submit_contribution":
                 print(f"  Tool result: {tool}")
-    ok &= check(has_approved_by or len(submit_tools) > 0,
-                "Submission executed (Approved By inclusion verified at code level)")
+    ok &= check(
+        has_approved_by or len(submit_tools) > 0, "Submission executed (Approved By inclusion verified at code level)"
+    )
 
     # ── Summary ──
     print(f"\n{BOLD}Results: {_pass}/{_pass + _fail} passed{RESET}")

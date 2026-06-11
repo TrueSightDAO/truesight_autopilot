@@ -1,4 +1,5 @@
 """Governor registry loader — reads dao_members.json from treasury-cache (GitHub raw)."""
+
 from __future__ import annotations
 
 import json
@@ -10,9 +11,7 @@ import httpx
 
 from .config import settings
 
-_DEFAULT_MEMBERS_URL = (
-    "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/dao_members.json"
-)
+_DEFAULT_MEMBERS_URL = "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/dao_members.json"
 _CACHE_TTL_SECONDS = int(os.getenv("GOVERNORS_CACHE_TTL", "300"))
 
 _cache: dict[str, any] = {
@@ -56,14 +55,16 @@ def _extract_governor_keys(members_data: dict) -> list[dict]:
         for key_entry in contributor.get("public_keys", []):
             if key_entry.get("status", "").upper() != "ACTIVE":
                 continue
-            governors.append({
-                "public_key": key_entry["public_key"],
-                "name": name,
-                "email": contributor.get("email", ""),
-                "status": "Governor",
-                "key_created_at": key_entry.get("created_at", ""),
-                "key_last_active_at": key_entry.get("last_active_at", ""),
-            })
+            governors.append(
+                {
+                    "public_key": key_entry["public_key"],
+                    "name": name,
+                    "email": contributor.get("email", ""),
+                    "status": "Governor",
+                    "key_created_at": key_entry.get("created_at", ""),
+                    "key_last_active_at": key_entry.get("last_active_at", ""),
+                }
+            )
     return governors
 
 
@@ -92,6 +93,7 @@ def load_governors(force_refresh: bool = False) -> dict:
         return data
     except Exception as exc:
         import logging
+
         logging.getLogger(__name__).warning("Failed to fetch remote dao_members.json: %s", exc)
 
     local_path = settings.static_governors_json

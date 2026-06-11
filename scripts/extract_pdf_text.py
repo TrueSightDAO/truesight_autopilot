@@ -10,6 +10,7 @@ Usage:
 Output:
     JSON with status, text content (per page), page count, and quality flags.
 """
+
 from __future__ import annotations
 
 import json
@@ -26,8 +27,9 @@ MAX_CHARS_PER_PAGE = 50_000
 
 def extract_with_pymupdf(path: str) -> dict:
     """Extract text using pymupdf (fitz)."""
-    import fitz  # pymupdf
     import time
+
+    import fitz  # pymupdf
 
     start = time.time()
     doc = fitz.open(path)
@@ -49,12 +51,14 @@ def extract_with_pymupdf(path: str) -> dict:
         if char_count > MAX_CHARS_PER_PAGE:
             text = text[:MAX_CHARS_PER_PAGE] + "\n...[TRUNCATED]"
 
-        pages.append({
-            "page": i + 1,
-            "char_count": char_count,
-            "text": text.strip(),
-            "is_scanned": is_scanned,
-        })
+        pages.append(
+            {
+                "page": i + 1,
+                "char_count": char_count,
+                "text": text.strip(),
+                "is_scanned": is_scanned,
+            }
+        )
 
     doc.close()
 
@@ -109,23 +113,30 @@ def extract_pdf_text(path: str) -> dict:
     # Try pymupdf first
     try:
         import fitz
+
         return extract_with_pymupdf(path)
     except ImportError:
         logger.warning("pymupdf not available, trying pdfminer...")
     except fitz.FileDataError as e:
         msg = str(e).lower()
         if "password" in msg or "encrypt" in msg:
-            return {"status": "error", "message": "PDF is password-protected. Cannot extract text without a password.", "reason": "password_protected"}
+            return {
+                "status": "error",
+                "message": "PDF is password-protected. Cannot extract text without a password.",
+                "reason": "password_protected",
+            }
         return {"status": "error", "message": f"PDF data error: {e}", "reason": "corrupt_file"}
     except Exception as e:
         logger.warning(f"pymupdf failed: {e}, trying pdfminer...")
 
     # Fallback to pdfminer
     try:
-        import pdfminer
         return extract_with_pdfminer(path)
     except ImportError:
-        return {"status": "error", "message": "Neither pymupdf nor pdfminer available. Install one: pip install pymupdf"}
+        return {
+            "status": "error",
+            "message": "Neither pymupdf nor pdfminer available. Install one: pip install pymupdf",
+        }
     except Exception as e:
         return {"status": "error", "message": f"pdfminer also failed: {e}"}
 

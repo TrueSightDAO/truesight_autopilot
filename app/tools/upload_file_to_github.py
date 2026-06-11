@@ -7,6 +7,7 @@ Two surfaces:
   local file (binary or text), base64-encodes, ships. The one-call workflow for
   attachments (e.g. a Telegram-uploaded JPG saved to /tmp).
 """
+
 from __future__ import annotations
 
 import base64
@@ -130,16 +131,24 @@ def upload_local_file_to_github(
 
     logger.info(
         "upload_local_file_to_github: %s (%d bytes) -> %s/%s",
-        local_path, size, repo, path,
+        local_path,
+        size,
+        repo,
+        path,
     )
     return upload_file_to_github(
-        repo=repo, path=path, message=message, branch=branch, content_base64=encoded,
+        repo=repo,
+        path=path,
+        message=message,
+        branch=branch,
+        content_base64=encoded,
     )
 
 
 # ── capability manifest entries ───────────────────────────────────────────
 
 import json as _json  # noqa: E402
+
 from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPECS = [
@@ -161,18 +170,24 @@ TOOL_SPECS = [
                 "content": {"type": "string", "description": "Plain-text content (auto base64-encoded)."},
                 "message": {"type": "string", "description": "Short one-line commit message (max 72 chars)."},
                 "branch": {"type": "string", "description": "Branch name. Default: main", "default": "main"},
-                "content_base64": {"type": "string", "description": "Pre-base64-encoded content for binary uploads (JPGs, PDFs). Takes precedence over `content` when both are provided."},
+                "content_base64": {
+                    "type": "string",
+                    "description": "Pre-base64-encoded content for binary uploads (JPGs, PDFs). Takes precedence over `content` when both are provided.",
+                },
             },
             "required": ["repo", "path", "message"],
         },
-        handler=lambda args, ctx: _json.dumps(upload_file_to_github(
-            repo=args.get("repo", ""),
-            path=args.get("path", ""),
-            content=args.get("content", ""),
-            message=args.get("message", ""),
-            branch=args.get("branch", "main"),
-            content_base64=args.get("content_base64"),
-        ), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            upload_file_to_github(
+                repo=args.get("repo", ""),
+                path=args.get("path", ""),
+                content=args.get("content", ""),
+                message=args.get("message", ""),
+                branch=args.get("branch", "main"),
+                content_base64=args.get("content_base64"),
+            ),
+            indent=2,
+        ),
     ),
     ToolSpec(
         name="upload_local_file_to_github",
@@ -187,18 +202,24 @@ TOOL_SPECS = [
             "properties": {
                 "local_path": {"type": "string", "description": "Absolute path to the file on the autopilot host."},
                 "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
-                "path": {"type": "string", "description": "Path inside the repo, e.g. 'docs/aws-reports/attachments/case-123.jpg'."},
+                "path": {
+                    "type": "string",
+                    "description": "Path inside the repo, e.g. 'docs/aws-reports/attachments/case-123.jpg'.",
+                },
                 "message": {"type": "string", "description": "Short one-line commit message."},
                 "branch": {"type": "string", "description": "Branch name. Default: main", "default": "main"},
             },
             "required": ["local_path", "repo", "path", "message"],
         },
-        handler=lambda args, ctx: _json.dumps(upload_local_file_to_github(
-            local_path=args.get("local_path", ""),
-            repo=args.get("repo", ""),
-            path=args.get("path", ""),
-            message=args.get("message", ""),
-            branch=args.get("branch", "main"),
-        ), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            upload_local_file_to_github(
+                local_path=args.get("local_path", ""),
+                repo=args.get("repo", ""),
+                path=args.get("path", ""),
+                message=args.get("message", ""),
+                branch=args.get("branch", "main"),
+            ),
+            indent=2,
+        ),
     ),
 ]
