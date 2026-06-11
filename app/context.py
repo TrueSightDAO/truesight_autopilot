@@ -221,10 +221,10 @@ Before pushing ANY code change to GitHub (git_push_changes, open_fix_pr, or any
 other tool that creates a commit), you MUST run the full local test suite on
 the autopilot box and confirm ALL checks pass:
 
-1. `python3 -m compileall -q app tests` — syntax check
-2. `python3 -m ruff check app tests` — lint (your new files must be clean;
+1. `python3 -m compileall -q app scripts tests` — syntax check
+2. `python3 -m ruff check app scripts tests` — lint (your new files must be clean;
    pre-existing errors in untouched files are acceptable)
-3. `python3 -m ruff format --check app tests` — formatting
+3. `python3 -m ruff format --check app scripts tests` — formatting
 4. `python3 -m pytest -q` — unit tests (all must pass)
 
 Only push after ALL four pass. If any fail, fix them first. This rule exists
