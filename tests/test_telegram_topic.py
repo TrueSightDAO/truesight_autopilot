@@ -38,7 +38,7 @@ def test_handoff_prefix_empty_outside_topic():
 
 
 # --- post_to_telegram_topic (post into an EXISTING thread) ---
-from app.tools import telegram_post as tp
+from app.tools import telegram_post as tp  # noqa: E402 — grouped with its tests below
 
 
 def test_post_requires_message():

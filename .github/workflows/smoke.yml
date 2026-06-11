@@ -58,6 +58,4 @@ jobs:
         run: |
           pip install -r requirements-dev.txt
           # Full unit suite gates CI — all tests are now hermetic.
-          python --version
-          pip list | grep -i pytest
           pytest -xvs

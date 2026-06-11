@@ -31,6 +31,9 @@ truesight-autopilot = "app.main:main"
 # Default `pytest` runs the hermetic UNIT suite. Integration + e2e are excluded
 # here because they need a running server / playwright (run them explicitly with
 # their own setup). Test deps live in requirements-dev.txt; CI runs them in smoke.yml.
+# pythonpath = repo root so `import app` resolves under a bare `pytest`
+# invocation (CI), not just `python -m pytest` (which adds CWD itself).
+pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "--ignore=tests/integration --ignore=tests/test_upload_e2e.py"
 
