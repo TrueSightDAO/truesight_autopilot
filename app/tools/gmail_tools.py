@@ -115,7 +115,12 @@ def gmail_search(query: str, account: str | None = None, max_results: int = 20) 
     if service is None:
         return err  # type: ignore[return-value]
     try:
-        resp = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+        resp = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=max_results)
+            .execute()
+        )
         message_stubs = resp.get("messages", []) or []
         out = []
         for stub in message_stubs:
@@ -135,7 +140,9 @@ def gmail_search(query: str, account: str | None = None, max_results: int = 20) 
             except Exception as e:
                 logger.warning("metadata fetch failed for %s: %s", mid, e)
                 continue
-            headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            headers = {
+                h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])
+            }
             out.append(
                 {
                     "id": mid,
@@ -148,7 +155,12 @@ def gmail_search(query: str, account: str | None = None, max_results: int = 20) 
                     "label_ids": msg.get("labelIds", []),
                 }
             )
-        logger.info("gmail_search ok: account=%s q=%.60s hits=%d", _resolve_account(account), query, len(out))
+        logger.info(
+            "gmail_search ok: account=%s q=%.60s hits=%d",
+            _resolve_account(account),
+            query,
+            len(out),
+        )
         return json.dumps(
             {
                 "status": "ok",
@@ -178,7 +190,9 @@ def _extract_plain_text(payload: dict) -> str:
     # Single-part: body sits on the payload itself.
     if payload.get("body", {}).get("data") and not payload.get("parts"):
         try:
-            return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
+            return base64.urlsafe_b64decode(payload["body"]["data"]).decode(
+                "utf-8", errors="replace"
+            )
         except Exception:
             return ""
     parts: list[dict] = []
@@ -187,14 +201,18 @@ def _extract_plain_text(payload: dict) -> str:
     for p in parts:
         if p.get("mimeType") == "text/plain" and p.get("body", {}).get("data"):
             try:
-                return base64.urlsafe_b64decode(p["body"]["data"]).decode("utf-8", errors="replace")
+                return base64.urlsafe_b64decode(p["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
             except Exception:
                 continue
     # Fallback to text/html stripped of tags (very crude — agent can re-parse).
     for p in parts:
         if p.get("mimeType") == "text/html" and p.get("body", {}).get("data"):
             try:
-                html = base64.urlsafe_b64decode(p["body"]["data"]).decode("utf-8", errors="replace")
+                html = base64.urlsafe_b64decode(p["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
                 import re
 
                 return re.sub(r"<[^>]+>", "", html)
@@ -203,7 +221,9 @@ def _extract_plain_text(payload: dict) -> str:
     return ""
 
 
-def gmail_read_message(message_id: str, account: str | None = None, format: str = "text") -> str:
+def gmail_read_message(
+    message_id: str, account: str | None = None, format: str = "text"
+) -> str:
     if not message_id:
         return _err("message_id is required")
     service, err = _build_service(account)
@@ -335,7 +355,11 @@ def gmail_send(
     except Exception as e:
         return _err(str(e), to=to, subject=subject)
     logger.info(
-        "gmail_send ok: account=%s to=%s subject=%.60s id=%s", _resolve_account(account), to, subject, sent.get("id")
+        "gmail_send ok: account=%s to=%s subject=%.60s id=%s",
+        _resolve_account(account),
+        to,
+        subject,
+        sent.get("id"),
     )
     return json.dumps(
         {
@@ -387,7 +411,11 @@ def gmail_create_draft(
         )
     except Exception as e:
         return _err(str(e), to=to, subject=subject)
-    logger.info("gmail_create_draft ok: account=%s draft_id=%s", _resolve_account(account), draft.get("id"))
+    logger.info(
+        "gmail_create_draft ok: account=%s draft_id=%s",
+        _resolve_account(account),
+        draft.get("id"),
+    )
     return json.dumps(
         {
             "status": "ok",
@@ -409,7 +437,10 @@ def gmail_list_labels(account: str | None = None) -> str:
         resp = service.users().labels().list(userId="me").execute()
     except Exception as e:
         return _err(str(e))
-    labels = [{"id": l.get("id"), "name": l.get("name"), "type": l.get("type")} for l in resp.get("labels", [])]
+    labels = [
+        {"id": l.get("id"), "name": l.get("name"), "type": l.get("type")}
+        for l in resp.get("labels", [])
+    ]
     return json.dumps(
         {
             "status": "ok",
@@ -472,8 +503,16 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Gmail search query."},
-                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
-                "max_results": {"type": "integer", "description": "Max messages (1-50).", "default": 20},
+                "account": {
+                    "type": "string",
+                    "description": "Mailbox label.",
+                    "enum": _ACCOUNT_ENUM,
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max messages (1-50).",
+                    "default": 20,
+                },
             },
             "required": ["query"],
         },
@@ -489,8 +528,15 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "message_id": {"type": "string", "description": "Gmail message ID (from gmail_search)."},
-                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "message_id": {
+                    "type": "string",
+                    "description": "Gmail message ID (from gmail_search).",
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Mailbox label.",
+                    "enum": _ACCOUNT_ENUM,
+                },
             },
             "required": ["message_id"],
         },
@@ -505,10 +551,17 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                "to": {
+                    "type": "string",
+                    "description": "Recipient address(es) — comma-separated.",
+                },
                 "subject": {"type": "string", "description": "Email subject."},
                 "body": {"type": "string", "description": "Plain-text email body."},
-                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "account": {
+                    "type": "string",
+                    "description": "Mailbox label.",
+                    "enum": _ACCOUNT_ENUM,
+                },
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
                 "attachment_path": {
@@ -534,10 +587,17 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient address(es) — comma-separated."},
+                "to": {
+                    "type": "string",
+                    "description": "Recipient address(es) — comma-separated.",
+                },
                 "subject": {"type": "string", "description": "Email subject."},
                 "body": {"type": "string", "description": "Plain-text email body."},
-                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "account": {
+                    "type": "string",
+                    "description": "Mailbox label.",
+                    "enum": _ACCOUNT_ENUM,
+                },
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
                 "attachment_path": {
@@ -563,7 +623,11 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "account": {
+                    "type": "string",
+                    "description": "Mailbox label.",
+                    "enum": _ACCOUNT_ENUM,
+                },
             },
         },
         handler=lambda args, ctx: gmail_list_labels(account=args.get("account")),
@@ -575,9 +639,21 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "message_id": {"type": "string", "description": "Gmail message ID."},
-                "add_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to add."},
-                "remove_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to remove."},
-                "account": {"type": "string", "description": "Mailbox label.", "enum": _ACCOUNT_ENUM},
+                "add_labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Label IDs to add.",
+                },
+                "remove_labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Label IDs to remove.",
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Mailbox label.",
+                    "enum": _ACCOUNT_ENUM,
+                },
             },
             "required": ["message_id"],
         },

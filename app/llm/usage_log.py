@@ -20,7 +20,11 @@ from .base import LLMUsage
 
 logger = logging.getLogger("autopilot.usage_log")
 
-_ENABLED = os.getenv("LLM_USAGE_LOG_ENABLED", "").strip().lower() in ("1", "true", "yes")
+_ENABLED = os.getenv("LLM_USAGE_LOG_ENABLED", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 SESSION_LOG_DIR = Path(os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions"))
 
 

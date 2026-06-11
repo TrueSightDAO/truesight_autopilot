@@ -125,7 +125,9 @@ def _decode_zbarimg(image_path: str) -> list[dict[str, str]]:
             # Parse typed output: "EAN-13:0860010660232"
             typed_codes: list[dict[str, str]] = []
             typed_seen: set[str] = set()
-            for line in typed_result.stdout.decode("utf-8", errors="replace").splitlines():
+            for line in typed_result.stdout.decode(
+                "utf-8", errors="replace"
+            ).splitlines():
                 line = line.strip()
                 if ":" in line and line not in typed_seen:
                     sym, data = line.split(":", 1)
@@ -149,7 +151,11 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
     """
     p = Path(file_path)
     if not p.exists():
-        return {"status": "error", "message": f"File not found: {file_path}", "file": file_path}
+        return {
+            "status": "error",
+            "message": f"File not found: {file_path}",
+            "file": file_path,
+        }
 
     # Auto-convert HEIC/HEIF to JPEG since pyzbar/PIL cannot read them directly
     decode_path = file_path
@@ -180,7 +186,18 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
 
     # Grok vision fallback: if no codes found and file is an image, try Grok
     if not codes:
-        image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
+        image_exts = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".bmp",
+            ".tiff",
+            ".tif",
+            ".heic",
+            ".heif",
+        }
         if Path(decode_path).suffix.lower() in image_exts:
             try:
                 from app.grok_client import GROK_MODEL, grok_analyze_images
@@ -279,7 +296,9 @@ def scan_qr_batch(file_paths: list[str]) -> dict[str, Any]:
         "status": "success" if not errors else "partial",
         "total_files": len(file_paths),
         "files_with_codes": sum(1 for r in results if r["status"] == "success"),
-        "files_without_codes": sum(1 for r in results if r["status"] == "no_code_found"),
+        "files_without_codes": sum(
+            1 for r in results if r["status"] == "no_code_found"
+        ),
         "files_with_errors": len(errors),
         "unique_codes": unique_codes,
         "total_unique_codes": len(unique_codes),
@@ -369,7 +388,11 @@ def _lookup_qr_via_cli(qr_code: str) -> dict[str, Any]:
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
-        return {"status": "error", "message": result.stderr or result.stdout, "qr_code": qr_code}
+        return {
+            "status": "error",
+            "message": result.stderr or result.stdout,
+            "qr_code": qr_code,
+        }
     except Exception as e:
         return {"status": "error", "message": str(e), "qr_code": qr_code}
 
@@ -416,10 +439,17 @@ TOOL_SPECS = [
         description="Scan a single image file for QR codes and return the decoded values.",
         parameters={
             "type": "object",
-            "properties": {"file_path": {"type": "string", "description": "Full path to the image file."}},
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the image file.",
+                }
+            },
             "required": ["file_path"],
         },
-        handler=lambda args, ctx: _json.dumps(scan_qr_from_file(args.get("file_path", "")), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            scan_qr_from_file(args.get("file_path", "")), indent=2
+        ),
     ),
     ToolSpec(
         name="scan_qr_batch",
@@ -435,17 +465,23 @@ TOOL_SPECS = [
             },
             "required": ["file_paths"],
         },
-        handler=lambda args, ctx: _json.dumps(scan_qr_batch(args.get("file_paths", [])), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            scan_qr_batch(args.get("file_paths", [])), indent=2
+        ),
     ),
     ToolSpec(
         name="lookup_qr_code",
         description="Look up a single Agroverse QR code in the DAO ledger (read-only).",
         parameters={
             "type": "object",
-            "properties": {"qr_code": {"type": "string", "description": "The QR code identifier."}},
+            "properties": {
+                "qr_code": {"type": "string", "description": "The QR code identifier."}
+            },
             "required": ["qr_code"],
         },
-        handler=lambda args, ctx: _json.dumps(lookup_qr_code(args.get("qr_code", "")), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            lookup_qr_code(args.get("qr_code", "")), indent=2
+        ),
     ),
     ToolSpec(
         name="lookup_qr_batch",
@@ -461,6 +497,8 @@ TOOL_SPECS = [
             },
             "required": ["qr_codes"],
         },
-        handler=lambda args, ctx: _json.dumps(lookup_qr_batch(args.get("qr_codes", [])), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            lookup_qr_batch(args.get("qr_codes", [])), indent=2
+        ),
     ),
 ]

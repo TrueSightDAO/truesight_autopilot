@@ -33,7 +33,9 @@ def _load_cache() -> dict[str, Any]:
 def _save_cache(cache: dict[str, Any]) -> None:
     """Save the QR cache to disk atomically."""
     try:
-        _QR_CACHE_PATH.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+        _QR_CACHE_PATH.write_text(
+            json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     except Exception as e:
         logger.warning("Failed to save QR cache: %s", e)
 
@@ -95,8 +97,12 @@ TOOL_SPEC = ToolSpec(
     description="Search previously looked-up QR codes by prefix.",
     parameters={
         "type": "object",
-        "properties": {"prefix": {"type": "string", "description": "QR code prefix to match."}},
+        "properties": {
+            "prefix": {"type": "string", "description": "QR code prefix to match."}
+        },
         "required": ["prefix"],
     },
-    handler=lambda args, ctx: _json.dumps(list_matching_qr_codes(args.get("prefix", "")), indent=2),
+    handler=lambda args, ctx: _json.dumps(
+        list_matching_qr_codes(args.get("prefix", "")), indent=2
+    ),
 )

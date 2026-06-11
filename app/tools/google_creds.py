@@ -85,7 +85,9 @@ def load_credentials(
         )
         return None
     try:
-        return service_account.Credentials.from_service_account_file(path, scopes=list(scopes or []))
+        return service_account.Credentials.from_service_account_file(
+            path, scopes=list(scopes or [])
+        )
     except Exception as e:
         logger.error("Failed to load Google credentials from %s: %s", path, e)
         return None

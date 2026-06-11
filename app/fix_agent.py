@@ -193,7 +193,10 @@ class FixAgent:
                     }
                 )
 
-                if func_name in ("edit_file", "create_file", "delete_file") and "successfully" in result:
+                if (
+                    func_name in ("edit_file", "create_file", "delete_file")
+                    and "successfully" in result
+                ):
                     edits_made = True
 
         if not edits_made:
@@ -529,7 +532,9 @@ class FixAgent:
 
     # ───────────────────────── Tool Execution ─────────────────────────
 
-    def _execute_tool(self, repo: str, branch: str, func_name: str, args: dict[str, Any]) -> str:
+    def _execute_tool(
+        self, repo: str, branch: str, func_name: str, args: dict[str, Any]
+    ) -> str:
         target_repo = args.get("repo", repo)
         if target_repo not in settings.allowed_repos:
             return f"Error: repo '{target_repo}' is not in ALLOWED_REPOS. Allowed: {', '.join(settings.allowed_repos)}"
@@ -539,9 +544,17 @@ class FixAgent:
         if func_name == "list_files":
             return self._tool_read_file(target_repo, args["path"], branch)
         if func_name == "edit_file":
-            return self._tool_edit_file(target_repo, branch, args["path"], args["old_string"], args["new_string"])
+            return self._tool_edit_file(
+                target_repo,
+                branch,
+                args["path"],
+                args["old_string"],
+                args["new_string"],
+            )
         if func_name == "create_file":
-            return self._tool_create_file(target_repo, branch, args["path"], args["content"])
+            return self._tool_create_file(
+                target_repo, branch, args["path"], args["content"]
+            )
         if func_name == "delete_file":
             return self._tool_delete_file(target_repo, branch, args["path"])
         if func_name == "grep_code":
@@ -555,11 +568,15 @@ class FixAgent:
         if result.get("type") == "file":
             return result["content"]
         if result.get("type") == "directory":
-            entries = "\n".join(f"- {e['name']} ({e['type']})" for e in result.get("entries", []))
+            entries = "\n".join(
+                f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
+            )
             return f"Directory listing:\n{entries}"
         return f"Error: {result.get('error', 'unknown')}"
 
-    def _tool_edit_file(self, repo: str, branch: str, path: str, old_string: str, new_string: str) -> str:
+    def _tool_edit_file(
+        self, repo: str, branch: str, path: str, old_string: str, new_string: str
+    ) -> str:
         result = self.github.read_file(repo, path, ref=branch)
         if result.get("type") != "file":
             return f"Error reading file: {result.get('error', 'unknown')}"

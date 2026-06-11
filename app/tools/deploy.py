@@ -109,7 +109,9 @@ def _ssh_client() -> paramiko.SSHClient:
             timeout=15,
         )
     except Exception as e:
-        raise DeployError(f"SSH connection failed to {host} (resolved={hostname}:{port}): {e}") from e
+        raise DeployError(
+            f"SSH connection failed to {host} (resolved={hostname}:{port}): {e}"
+        ) from e
     return client
 
 
@@ -149,10 +151,18 @@ def _run_local(command: str, cwd: str | None = None, timeout: int = 60) -> str:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        raise DeployError(f"Local command timed out after {timeout}s: {command}") from None
+        raise DeployError(
+            f"Local command timed out after {timeout}s: {command}"
+        ) from None
     if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-        raise DeployError(f"Local command failed (exit={result.returncode}): {command}\n{msg}")
+        msg = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"exit code {result.returncode}"
+        )
+        raise DeployError(
+            f"Local command failed (exit={result.returncode}): {command}\n{msg}"
+        )
     if result.stderr.strip():
         logger.warning("Local stderr: %s", result.stderr.strip()[:500])
     return result.stdout.strip()
@@ -333,7 +343,9 @@ def deploy_autopilot() -> str:
         # directly using whatever's on disk right now (i.e. what the parent
         # just pulled). Parent passes the env-var sentinel.
         if os.environ.get(_PHASE_ENV) == _PHASE_TWO:
-            logger.info("Re-entered as phase-two subprocess — skipping git pull, running post-pull steps")
+            logger.info(
+                "Re-entered as phase-two subprocess — skipping git pull, running post-pull steps"
+            )
             try:
                 # Parent already did git_pull; record it as ok for the steps array.
                 steps.append({"step": "git_pull", "status": "ok"})
@@ -384,7 +396,9 @@ def deploy_autopilot() -> str:
             # Don't append git_pull to steps here — the subprocess will, so
             # the returned JSON has the full step list in execution order.
 
-            logger.info("Re-exec'ing phase-two subprocess with freshly-pulled deploy.py")
+            logger.info(
+                "Re-exec'ing phase-two subprocess with freshly-pulled deploy.py"
+            )
             child_env = {**os.environ, _PHASE_ENV: _PHASE_TWO}
             # Use python -c rather than -m so we work regardless of how the
             # parent was launched (uvicorn module, direct script, REPL).

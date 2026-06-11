@@ -59,7 +59,9 @@ class GovernorClient:
     def __init__(self):
         self.pub_key = GARY_PUB
         priv_bytes = base64.b64decode(GARY_PRIV)
-        self.priv_key = serialization.load_der_private_key(priv_bytes, password=None, backend=default_backend())
+        self.priv_key = serialization.load_der_private_key(
+            priv_bytes, password=None, backend=default_backend()
+        )
         self.session_id = f"approved-by-test-{int(time.time())}"
         self.history = []
 
@@ -70,7 +72,11 @@ class GovernorClient:
             "nonce": str(uuid.uuid4()),
         }
         payload_str = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
-        sig = base64.b64encode(self.priv_key.sign(payload_str.encode(), padding.PKCS1v15(), hashes.SHA256())).decode()
+        sig = base64.b64encode(
+            self.priv_key.sign(
+                payload_str.encode(), padding.PKCS1v15(), hashes.SHA256()
+            )
+        ).decode()
         return obj, sig, payload_str
 
     def stream_sse(self, resp: requests.Response) -> dict[str, Any]:
@@ -153,25 +159,37 @@ def main() -> int:
 
     # ── Test 1: Upload image, verify QR detection ──
     print(f"\n{BOLD}Test 1: Upload QR image and verify analysis{RESET}")
-    result = client.upload(TEST_IMAGE, "Photo of ceremonial cacao bag with QR code from Kirsten")
+    result = client.upload(
+        TEST_IMAGE, "Photo of ceremonial cacao bag with QR code from Kirsten"
+    )
     ok = check(len(result["errors"]) == 0, "No SSE errors")
-    ok &= check(len(result["statuses"]) >= 1, f"Status events received: {result['statuses']}")
+    ok &= check(
+        len(result["statuses"]) >= 1, f"Status events received: {result['statuses']}"
+    )
     has_scan = any(
-        t.get("tool") in ("scan_qr_from_file", "scan_qr_batch", "lookup_qr_code", "lookup_qr_batch")
+        t.get("tool")
+        in ("scan_qr_from_file", "scan_qr_batch", "lookup_qr_code", "lookup_qr_batch")
         for t in result["tools"]
     )
     ok &= check(has_scan, "QR scan/lookup tool was called")
-    ok &= check(len(result["tokens"]) > 50, f"Response tokens: {len(result['tokens'])} chars")
+    ok &= check(
+        len(result["tokens"]) > 50, f"Response tokens: {len(result['tokens'])} chars"
+    )
 
     # ── Test 2: Check proposals are generated ──
     print(f"\n{BOLD}Test 2: Check for inventory movement proposals{RESET}")
     proposals = result.get("proposals", [])
     proposal = result.get("proposal")
     has_proposal = bool(proposals or proposal)
-    ok &= check(has_proposal, f"Proposals generated: {len(proposals) if proposals else 1 if proposal else 0}")
+    ok &= check(
+        has_proposal,
+        f"Proposals generated: {len(proposals) if proposals else 1 if proposal else 0}",
+    )
     if proposals:
         for i, p in enumerate(proposals):
-            print(f"  Proposal {i + 1}: {p.get('title', '?')} — {p.get('summary', '?')}")
+            print(
+                f"  Proposal {i + 1}: {p.get('title', '?')} — {p.get('summary', '?')}"
+            )
     elif proposal:
         print(f"  Proposal: {proposal.get('title', '?')}")
 
@@ -183,8 +201,12 @@ def main() -> int:
     ok &= check(len(result2["errors"]) == 0, "No SSE errors on approval")
 
     # Check for submit_contribution tool call
-    submit_tools = [t for t in result2["tools"] if t.get("tool") == "submit_contribution"]
-    ok &= check(len(submit_tools) >= 1, f"submit_contribution called: {len(submit_tools)} times")
+    submit_tools = [
+        t for t in result2["tools"] if t.get("tool") == "submit_contribution"
+    ]
+    ok &= check(
+        len(submit_tools) >= 1, f"submit_contribution called: {len(submit_tools)} times"
+    )
 
     # The crucial check: response should indicate submission included "Approved By"
     full_text = result2["tokens"] + result2["response"]
@@ -192,14 +214,17 @@ def main() -> int:
     print(f"  {YELLOW}{full_text[:500]}{RESET}")
 
     # Look for evidence of Approved By in tool result or response
-    has_approved_by = "Approved By" in full_text or "submitted successfully" in full_text.lower()
+    has_approved_by = (
+        "Approved By" in full_text or "submitted successfully" in full_text.lower()
+    )
     if not has_approved_by:
         # Check if any tool result mentions the submission
         for tool in result2["tools"]:
             if tool.get("tool") == "submit_contribution":
                 print(f"  Tool result: {tool}")
     ok &= check(
-        has_approved_by or len(submit_tools) > 0, "Submission executed (Approved By inclusion verified at code level)"
+        has_approved_by or len(submit_tools) > 0,
+        "Submission executed (Approved By inclusion verified at code level)",
     )
 
     # ── Summary ──

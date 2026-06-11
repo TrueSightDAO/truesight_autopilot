@@ -33,7 +33,10 @@ def sync_beta_to_prod(prod_repo: str) -> dict[str, Any]:
             ),
         }
     if not settings.github_pat:
-        return {"status": "error", "message": "TRUESIGHT_DAO_AUTOPILOT PAT not configured."}
+        return {
+            "status": "error",
+            "message": "TRUESIGHT_DAO_AUTOPILOT PAT not configured.",
+        }
 
     url = f"https://api.github.com/repos/TrueSightDAO/{prod_repo}/merge-upstream"
     headers = {

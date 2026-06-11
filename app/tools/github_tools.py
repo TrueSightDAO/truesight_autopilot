@@ -33,7 +33,12 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
             return {
                 "type": "directory",
                 "entries": [
-                    {"name": item.get("name"), "type": item.get("type"), "path": item.get("path")} for item in data
+                    {
+                        "name": item.get("name"),
+                        "type": item.get("type"),
+                        "path": item.get("path"),
+                    }
+                    for item in data
                 ],
                 "url": str(resp.url),
             }
@@ -131,7 +136,10 @@ def _list_org_repos_handler(args: dict, ctx: dict) -> str:
     repos = gh.list_org_repos()
     if not repos:
         return "Failed to list repos or none found."
-    lines = [f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}" for r in repos]
+    lines = [
+        f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}"
+        for r in repos
+    ]
     return "TrueSightDAO repositories:\n" + "\n".join(lines)
 
 
@@ -143,11 +151,15 @@ def _read_context_file_handler(args: dict, ctx: dict) -> str:
 
 
 def _read_repo_file_handler(args: dict, ctx: dict) -> str:
-    result = read_repo_file(args.get("repo", ""), args.get("path", ""), args.get("ref", "main"))
+    result = read_repo_file(
+        args.get("repo", ""), args.get("path", ""), args.get("ref", "main")
+    )
     if result.get("type") == "file":
         return result["content"]
     if result.get("type") == "directory":
-        return "Directory listing:\n" + "\n".join(f"- {e['name']} ({e['type']})" for e in result.get("entries", []))
+        return "Directory listing:\n" + "\n".join(
+            f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
+        )
     return f"Error: {result.get('error', 'unknown')}"
 
 
@@ -161,7 +173,16 @@ def _list_prs_handler(args: dict, ctx: dict) -> str:
     state = args.get("state", "all")
     limit = int(args.get("limit", 20))
     prs = gh.list_prs(repo_name, state=state, limit=limit)
-    return _json.dumps({"status": "ok", "repo": repo_name, "state": state, "count": len(prs), "prs": prs}, indent=2)
+    return _json.dumps(
+        {
+            "status": "ok",
+            "repo": repo_name,
+            "state": state,
+            "count": len(prs),
+            "prs": prs,
+        },
+        indent=2,
+    )
 
 
 def _merge_pr_handler(args: dict, ctx: dict) -> str:
@@ -200,7 +221,9 @@ def _mark_pr_ready_handler(args: dict, ctx: dict) -> str:
     repo_name = args.get("repo", "")
     pr_number = args.get("pr_number", 0)
     if repo_name not in settings.allowed_repos:
-        return _json.dumps({"status": "error", "reason": f"repo '{repo_name}' not in allowed list"})
+        return _json.dumps(
+            {"status": "error", "reason": f"repo '{repo_name}' not in allowed list"}
+        )
     if not pr_number:
         return _json.dumps({"status": "error", "reason": "pr_number is required"})
     gh = GitHubClient()
@@ -228,8 +251,14 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Term or phrase to search for."},
-                "repo": {"type": "string", "description": "Optional repo name under TrueSightDAO; omit for org-wide."},
+                "query": {
+                    "type": "string",
+                    "description": "Term or phrase to search for.",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Optional repo name under TrueSightDAO; omit for org-wide.",
+                },
             },
             "required": ["query"],
         },
@@ -267,7 +296,11 @@ TOOL_SPECS = [
                     "description": f"GitHub repo name under TrueSightDAO. Allowed: {_ALLOWED_CHAT_REPOS}",
                 },
                 "path": {"type": "string", "description": "File path in the repo."},
-                "ref": {"type": "string", "description": "Branch or commit. Default: main", "default": "main"},
+                "ref": {
+                    "type": "string",
+                    "description": "Branch or commit. Default: main",
+                    "default": "main",
+                },
             },
             "required": ["repo", "path"],
         },
@@ -279,14 +312,21 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name under TrueSightDAO.",
+                },
                 "state": {
                     "type": "string",
                     "description": "open, closed, or all.",
                     "enum": ["open", "closed", "all"],
                     "default": "all",
                 },
-                "limit": {"type": "integer", "description": "Max PRs to return.", "default": 20},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max PRs to return.",
+                    "default": 20,
+                },
             },
             "required": ["repo"],
         },
@@ -298,8 +338,14 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
-                "pr_number": {"type": "integer", "description": "The pull request number to merge."},
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name under TrueSightDAO.",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "The pull request number to merge.",
+                },
                 "merge_method": {
                     "type": "string",
                     "description": "squash (default), merge, or rebase.",
@@ -317,8 +363,14 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
-                "pr_number": {"type": "integer", "description": "The pull request number to promote."},
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name under TrueSightDAO.",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "The pull request number to promote.",
+                },
             },
             "required": ["repo", "pr_number"],
         },

@@ -129,7 +129,11 @@ def _collect_from_module(module_name: str) -> list[ToolSpec]:
             if isinstance(s, ToolSpec):
                 out.append(s)
             else:
-                logger.warning("tool_registry: %s.TOOL_SPECS contains non-ToolSpec: %r", module_name, s)
+                logger.warning(
+                    "tool_registry: %s.TOOL_SPECS contains non-ToolSpec: %r",
+                    module_name,
+                    s,
+                )
     return out
 
 
@@ -143,7 +147,11 @@ def discover_tools() -> list[ToolSpec]:
     for module_name in _iter_tool_modules():
         for spec in _collect_from_module(module_name):
             if spec.name in seen:
-                logger.warning("tool_registry: duplicate tool name %s in %s", spec.name, module_name)
+                logger.warning(
+                    "tool_registry: duplicate tool name %s in %s",
+                    spec.name,
+                    module_name,
+                )
                 continue
             seen.add(spec.name)
             out.append(spec)
@@ -155,7 +163,11 @@ def get_registry() -> dict[str, ToolSpec]:
     global _REGISTRY
     if _REGISTRY is None:
         _REGISTRY = {s.name: s for s in discover_tools()}
-        logger.info("tool_registry: discovered %d tools: %s", len(_REGISTRY), sorted(_REGISTRY.keys()))
+        logger.info(
+            "tool_registry: discovered %d tools: %s",
+            len(_REGISTRY),
+            sorted(_REGISTRY.keys()),
+        )
     return _REGISTRY
 
 

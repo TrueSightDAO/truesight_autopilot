@@ -19,7 +19,12 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
@@ -64,7 +69,12 @@ from .tools.dao_identity import register_identity
 from .tools.fs_tools import list_directory, read_local_file
 from .tools.github_tools import read_repo_file
 from .tools.inventory_lookup import list_matching_qr_codes
-from .tools.qr_scanner import lookup_qr_batch, lookup_qr_code, scan_qr_batch, scan_qr_from_file
+from .tools.qr_scanner import (
+    lookup_qr_batch,
+    lookup_qr_code,
+    scan_qr_batch,
+    scan_qr_from_file,
+)
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("autopilot")
@@ -101,7 +111,9 @@ def _init_bugsnag():
             settings.bugsnag_release_stage,
         )
     except Exception as e:
-        logger.warning("Bugsnag init failed (will continue without self-reporting): %s", e)
+        logger.warning(
+            "Bugsnag init failed (will continue without self-reporting): %s", e
+        )
 
 
 _init_bugsnag()
@@ -109,11 +121,17 @@ _init_bugsnag()
 email_poller: EmailPoller | None = None
 aws_monitor: AWSMonitor | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
-_pending_submissions: dict[str, dict] = {}  # session_key -> proposed submission awaiting approval
+_pending_submissions: dict[
+    str, dict
+] = {}  # session_key -> proposed submission awaiting approval
 _active_streams: dict[str, float] = {}  # session_key -> last activity timestamp
-_cancel_flags: dict[str, bool] = {}  # session_key -> True when caller hit DELETE /chat/active/{session_id}
+_cancel_flags: dict[
+    str, bool
+] = {}  # session_key -> True when caller hit DELETE /chat/active/{session_id}
 _message_queues: dict[str, list[dict]] = {}  # session_key -> list of queued messages
-_session_locks: dict[str, asyncio.Lock] = {}  # session_key -> lock (one writer/executor per thread)
+_session_locks: dict[
+    str, asyncio.Lock
+] = {}  # session_key -> lock (one writer/executor per thread)
 
 
 def _session_lock(session_id: str) -> asyncio.Lock:
@@ -163,7 +181,9 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
             for m in messages:
                 content = m.get("content", "")
                 if isinstance(content, str) and (
-                    "<function_calls>" in content or "<invoke " in content or "<||DSML||" in content
+                    "<function_calls>" in content
+                    or "<invoke " in content
+                    or "<||DSML||" in content
                 ):
                     c = content
                     c = re.sub(
@@ -173,9 +193,17 @@ def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
                         flags=re.DOTALL,
                     )
                     c = re.sub(
-                        r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>', "", c, flags=re.DOTALL
+                        r'<\|\|DSML\|\|invoke\s+name="[^"]+"\s*>.*?</\|\|DSML\|\|invoke>',
+                        "",
+                        c,
+                        flags=re.DOTALL,
                     )
-                    c = re.sub(r'<invoke\s+name="[^"]+"\s*>.*?</invoke>', "", c, flags=re.DOTALL)
+                    c = re.sub(
+                        r'<invoke\s+name="[^"]+"\s*>.*?</invoke>',
+                        "",
+                        c,
+                        flags=re.DOTALL,
+                    )
                     m["content"] = c.strip()
             # Heal BOTH tool-protocol corruption directions (orphan tool messages
             # AND orphan tool_calls) so a transcript raced by a prior process never
@@ -237,7 +265,15 @@ def _install_signal_loggers():
     before us so graceful shutdown still works."""
     import signal as _signal
 
-    sig_names = ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2", "SIGPIPE"]
+    sig_names = [
+        "SIGTERM",
+        "SIGINT",
+        "SIGHUP",
+        "SIGQUIT",
+        "SIGUSR1",
+        "SIGUSR2",
+        "SIGPIPE",
+    ]
     for sig_name in sig_names:
         sig = getattr(_signal, sig_name, None)
         if sig is None:
@@ -276,7 +312,9 @@ def _install_signal_loggers():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global email_poller, aws_monitor
-    logger.info("LIFECYCLE: Autopilot starting up — pid=%d ppid=%d", os.getpid(), os.getppid())
+    logger.info(
+        "LIFECYCLE: Autopilot starting up — pid=%d ppid=%d", os.getpid(), os.getppid()
+    )
     _install_signal_loggers()
 
     # ── Deploy notification: check for marker file from deploy.py ──
@@ -310,7 +348,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("LIFECYCLE: Autopilot shutting down — pid=%d ppid=%d", os.getpid(), os.getppid())
+    logger.info(
+        "LIFECYCLE: Autopilot shutting down — pid=%d ppid=%d", os.getpid(), os.getppid()
+    )
 
 
 app = FastAPI(
@@ -337,7 +377,9 @@ def _check_oracle_rate_limit(ip: str) -> None:
     now = time.time()
     last = _oracle_rate_limit.get(ip, 0.0)
     if now - last < 2.0:
-        raise HTTPException(status_code=429, detail="Rate limited — max 1 request per 2 seconds per IP")
+        raise HTTPException(
+            status_code=429, detail="Rate limited — max 1 request per 2 seconds per IP"
+        )
     _oracle_rate_limit[ip] = now
 
 
@@ -601,7 +643,9 @@ async def oracle_advisory(
         if resp.status_code == 200:
             snapshot_text = resp.text
         else:
-            logger.warning("oracle-advisory: failed to fetch snapshot (HTTP %d)", resp.status_code)
+            logger.warning(
+                "oracle-advisory: failed to fetch snapshot (HTTP %d)", resp.status_code
+            )
     except Exception as e:
         logger.warning("oracle-advisory: error fetching snapshot: %s", e)
 
@@ -620,7 +664,9 @@ async def oracle_advisory(
     )
 
     if snapshot_text:
-        system_prompt += f"## DAO State Snapshot (ADVISORY_SNAPSHOT.md)\n\n{snapshot_text}\n\n"
+        system_prompt += (
+            f"## DAO State Snapshot (ADVISORY_SNAPSHOT.md)\n\n{snapshot_text}\n\n"
+        )
     else:
         system_prompt += "## DAO State Snapshot\n\n(Unavailable — advisory based on hexagram alone.)\n\n"
 
@@ -632,9 +678,7 @@ async def oracle_advisory(
         f"- **Primary Judgment**: {primary_judgment}\n"
     )
     if related_number:
-        system_prompt += (
-            f"- **Related Hexagram**: {related_number} — {related_name}\n- **Related Judgment**: {related_judgment}\n"
-        )
+        system_prompt += f"- **Related Hexagram**: {related_number} — {related_name}\n- **Related Judgment**: {related_judgment}\n"
     if changing_lines:
         system_prompt += f"- **Changing Lines**: {changing_lines}\n"
     if qmdj_chart:
@@ -651,7 +695,9 @@ async def oracle_advisory(
         f"with mode '{mode}'. Please provide the oracle advisory."
     )
     try:
-        completion = client.chat(system_prompt, [{"role": "user", "content": user_msg}], tools=None)
+        completion = client.chat(
+            system_prompt, [{"role": "user", "content": user_msg}], tools=None
+        )
         advice = client.extract_text(completion)
         model_used = client.model
     except LLMError as e:
@@ -669,7 +715,9 @@ async def oracle_advisory(
             "ok": True,
             "advice": advice,
             "model": model_used,
-            "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "generated_at_utc": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
         }
     )
 
@@ -707,18 +755,24 @@ async def daily_briefing(request: Request):
 
     public_key = request.headers.get("X-Public-Key", "")
     if not public_key:
-        return _cors_json_response({"ok": False, "error": "X-Public-Key header required"}, status_code=400)
+        return _cors_json_response(
+            {"ok": False, "error": "X-Public-Key header required"}, status_code=400
+        )
 
     try:
         body = await request.json()
     except Exception:
-        return _cors_json_response({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+        return _cors_json_response(
+            {"ok": False, "error": "Invalid JSON body"}, status_code=400
+        )
 
     payload = body.get("payload", {})
     signature = body.get("signature", "")
 
     if not payload or not signature:
-        return _cors_json_response({"ok": False, "error": "payload and signature required"}, status_code=400)
+        return _cors_json_response(
+            {"ok": False, "error": "payload and signature required"}, status_code=400
+        )
 
     result = await handle_daily_briefing(payload, signature, public_key)
     status_code = 200 if result.get("ok") else (400 if result.get("error") else 200)
@@ -762,7 +816,9 @@ async def get_session(request: Request, limit: int = 30) -> JSONResponse:
         if len(content) > 2000:
             content = content[:2000] + "\n...(truncated)"
         # Strip legacy XML tool-call syntax if it leaked through
-        content = re.sub(r"<function_calls>.*?</function_calls>", "", content, flags=re.DOTALL).strip()
+        content = re.sub(
+            r"<function_calls>.*?</function_calls>", "", content, flags=re.DOTALL
+        ).strip()
         if not content:
             continue
         if role in ("user", "assistant") and "GOVERNOR_IDENTITY:" not in content:
@@ -793,7 +849,10 @@ async def list_sessions(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="X-Public-Key header required")
     import hashlib
 
-    idx_file = SESSION_LOG_DIR / f"{hashlib.md5(public_key.encode()).hexdigest()[:12]}_sessions.json"
+    idx_file = (
+        SESSION_LOG_DIR
+        / f"{hashlib.md5(public_key.encode()).hexdigest()[:12]}_sessions.json"
+    )
     if not idx_file.exists():
         return JSONResponse({"sessions": []})
     data = json.loads(idx_file.read_text(encoding="utf-8"))
@@ -877,12 +936,16 @@ async def auth_challenge(request: Request) -> JSONResponse:
     public_key = request.headers.get("X-Public-Key", "")
 
     if not payload or not signature or not public_key:
-        raise HTTPException(status_code=400, detail="payload, signature, and X-Public-Key required.")
+        raise HTTPException(
+            status_code=400, detail="payload, signature, and X-Public-Key required."
+        )
 
     verify_payload(payload, signature, public_key)
     token = create_jwt(public_key)
 
-    response = JSONResponse({"token": token, "expires_in": settings.jwt_expiry_minutes * 60})
+    response = JSONResponse(
+        {"token": token, "expires_in": settings.jwt_expiry_minutes * 60}
+    )
     response.set_cookie(
         key="governor_chat_session",
         value=token,
@@ -895,9 +958,7 @@ async def auth_challenge(request: Request) -> JSONResponse:
 
 
 def _sse_event(event_type: str, data: object) -> str:
-    return (
-        f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
-    )
+    return f"data: {json.dumps({'type': event_type, **({'content': data} if not isinstance(data, dict) else data)})}\n\n"
 
 
 async def _sse_single_response(text: str):
@@ -905,7 +966,9 @@ async def _sse_single_response(text: str):
     yield _sse_event("done", {"response": text})
 
 
-async def _heartbeat_until_done(task: asyncio.Task, phase: str, session_id: str | None = None, **meta):
+async def _heartbeat_until_done(
+    task: asyncio.Task, phase: str, session_id: str | None = None, **meta
+):
     """Async generator. Yields SSE `heartbeat` events every 15s while `task`
     is still pending. Caller awaits `task` after this generator exits to
     retrieve the result. Keeps the SSE connection alive across long-running
@@ -921,9 +984,13 @@ async def _heartbeat_until_done(task: asyncio.Task, phase: str, session_id: str 
             elapsed = round(time.monotonic() - started, 1)
             if session_id and _cancel_flags.get(session_id):
                 task.cancel()
-                yield _sse_event("cancelled", {"phase": phase, "elapsed_s": elapsed, **meta})
+                yield _sse_event(
+                    "cancelled", {"phase": phase, "elapsed_s": elapsed, **meta}
+                )
                 return
-            yield _sse_event("heartbeat", {"phase": phase, "elapsed_s": elapsed, **meta})
+            yield _sse_event(
+                "heartbeat", {"phase": phase, "elapsed_s": elapsed, **meta}
+            )
 
 
 _DSML_OPEN_TOKEN = "<｜｜DSML｜｜"  # raw DSML opener seen leaking from DeepSeek
@@ -1144,7 +1211,11 @@ async def _run_tool(
     _registry_result = _registry_dispatch(
         func_name,
         func_args or {},
-        {"history": history or [], "session_id": session_id, "governor_name": governor_name},
+        {
+            "history": history or [],
+            "session_id": session_id,
+            "governor_name": governor_name,
+        },
     )
     if _registry_result is not None:
         return _registry_result
@@ -1152,7 +1223,10 @@ async def _run_tool(
         gh = GitHubClient()
         repos = gh.list_org_repos()
         if repos:
-            lines = [f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}" for r in repos]
+            lines = [
+                f"- {r['name']} ({'private' if r['private'] else 'public'}) — {r['description']}"
+                for r in repos
+            ]
             return "TrueSightDAO repositories:\n" + "\n".join(lines)
         return "Failed to list repos or none found."
     if func_name == "read_context_file":
@@ -1167,7 +1241,9 @@ async def _run_tool(
         if result.get("type") == "file":
             return result["content"]
         if result.get("type") == "directory":
-            return "Directory listing:\n" + "\n".join(f"- {e['name']} ({e['type']})" for e in result.get("entries", []))
+            return "Directory listing:\n" + "\n".join(
+                f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
+            )
         return f"Error: {result.get('error', 'unknown')}"
     if func_name == "submit_contribution":
         # DUPLICATE GUARD: check DAO ledger (ground truth) before submitting
@@ -1197,10 +1273,16 @@ async def _run_tool(
                 if (
                     msg.get("role") == "tool"
                     and qr in content
-                    and ("submitted successfully" in content.lower() or "duplicate" in content.lower())
+                    and (
+                        "submitted successfully" in content.lower()
+                        or "duplicate" in content.lower()
+                    )
                 ):
                     return json.dumps(
-                        {"status": "duplicate", "message": f"QR code {qr} was already submitted. Skipping."}
+                        {
+                            "status": "duplicate",
+                            "message": f"QR code {qr} was already submitted. Skipping.",
+                        }
                     )
 
         # 2. Check DAO ledger (ground truth)
@@ -1218,7 +1300,11 @@ async def _run_tool(
                                 "ledger_state": ledger_state,
                             }
                         )
-                    if recipient and current_manager and recipient.lower() == current_manager.lower():
+                    if (
+                        recipient
+                        and current_manager
+                        and recipient.lower() == current_manager.lower()
+                    ):
                         return json.dumps(
                             {
                                 "status": "duplicate",
@@ -1235,7 +1321,9 @@ async def _run_tool(
             for msg in reversed(history):
                 if msg.get("role") == "user":
                     content = str(msg.get("content", "")).lower()
-                    clean_content = content.replace("[governor_identity:", "").split("\n## instructions\n")[0]
+                    clean_content = content.replace("[governor_identity:", "").split(
+                        "\n## instructions\n"
+                    )[0]
                     if qr and qr.lower() in clean_content:
                         if any(
                             kw in clean_content
@@ -1252,8 +1340,16 @@ async def _run_tool(
                             ]
                         ):
                             approved = True
-                        elif any(kw in clean_content for kw in ["reject", "cancel", "no", "stop", "don't"]):
-                            return json.dumps({"status": "cancelled", "message": "Submission cancelled by user."})
+                        elif any(
+                            kw in clean_content
+                            for kw in ["reject", "cancel", "no", "stop", "don't"]
+                        ):
+                            return json.dumps(
+                                {
+                                    "status": "cancelled",
+                                    "message": "Submission cancelled by user.",
+                                }
+                            )
                     break  # Only check the single most recent user message
 
         if not approved:
@@ -1262,7 +1358,11 @@ async def _run_tool(
             item = attributes.get("Inventory Item", "")
             qty = attributes.get("Quantity", "1")
             ledger = attributes.get("Destination Inventory File Location", "")
-            summary = f"Move {qty}x {item} from {manager} to {recipient}" if item else f"Submit {event_name} for {qr}"
+            summary = (
+                f"Move {qty}x {item} from {manager} to {recipient}"
+                if item
+                else f"Submit {event_name} for {qr}"
+            )
             command = "truesight-dao-report-inventory-movement"
             if manager:
                 command += f' --manager-name "{manager}"'
@@ -1313,11 +1413,19 @@ async def _run_tool(
             today = time.strftime("%Y-%m-%d", time.gmtime())
             sid_hash = hashlib.md5((session_id or "").encode()).hexdigest()[:12]
             transcript_url = f"https://github.com/TrueSightDAO/{_TRANSCRIPT_REPO}/blob/main/sessions/{today}/{sid_hash}/transcript.md"
-            attributes["Approved By"] = f"{governor_name} | Key FP: {fingerprint} | Session: {transcript_url}"
+            attributes["Approved By"] = (
+                f"{governor_name} | Key FP: {fingerprint} | Session: {transcript_url}"
+            )
 
         edgar = EdgarDirectClient()
-        ok = edgar.submit_contribution(event_name, attributes, description=attributes.get("Description", ""))
-        return "Contribution submitted successfully." if ok else "Failed to submit contribution."
+        ok = edgar.submit_contribution(
+            event_name, attributes, description=attributes.get("Description", "")
+        )
+        return (
+            "Contribution submitted successfully."
+            if ok
+            else "Failed to submit contribution."
+        )
     if func_name == "open_fix_pr":
         from .fix_agent import repo_class_block
 
@@ -1422,17 +1530,28 @@ async def _run_tool(
         title = func_args.get("title", "")
         body = func_args.get("body", "")
         pr_urls = func_args.get("pr_urls", [])
-        contributors = func_args.get("contributors", governor_name or "autopilot@agroverse.shop")
+        contributors = func_args.get(
+            "contributors", governor_name or "autopilot@agroverse.shop"
+        )
         amount = func_args.get("amount", "0")
         tdg_issued = func_args.get("tdg_issued", "0")
         attachment_path = func_args.get("attachment_path", "")
         attachment_filename = func_args.get("attachment_filename", "")
         if not title or not body or not pr_urls:
-            return json.dumps({"status": "error", "message": "title, body, and pr_urls are required"})
+            return json.dumps(
+                {"status": "error", "message": "title, body, and pr_urls are required"}
+            )
         edgar = EdgarDirectClient()
         if not edgar.is_configured():
-            return json.dumps({"status": "error", "message": "Edgar credentials not configured — cannot submit"})
-        pr_block = "Pull requests (GitHub evidence):\n" + "\n".join(f"- {u.strip()}" for u in pr_urls)
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": "Edgar credentials not configured — cannot submit",
+                }
+            )
+        pr_block = "Pull requests (GitHub evidence):\n" + "\n".join(
+            f"- {u.strip()}" for u in pr_urls
+        )
         description = f"{title}\n\n{pr_block}\n\nDetails:\n{body}"
         attrs: dict[str, str] = {
             "Type": "Time (Minutes)" if amount == "0" or float(amount) > 60 else "USD",
@@ -1456,7 +1575,9 @@ async def _run_tool(
             )
             return json.dumps(
                 {
-                    "status": "success" if result.get("status") == "success" else "error",
+                    "status": "success"
+                    if result.get("status") == "success"
+                    else "error",
                     "message": "Contribution with attachment submitted"
                     if result.get("status") == "success"
                     else f"Submission failed: {result.get('stderr', '')}",
@@ -1465,7 +1586,9 @@ async def _run_tool(
         else:
             attrs["Attached Filename"] = "N/A"
             attrs["Destination Contribution File Location"] = "N/A"
-            ok = edgar.submit_contribution("CONTRIBUTION EVENT", attrs, description=title)
+            ok = edgar.submit_contribution(
+                "CONTRIBUTION EVENT", attrs, description=title
+            )
             return json.dumps(
                 {
                     "status": "success" if ok else "error",
@@ -1663,7 +1786,9 @@ _COMMAND_TOOLS = {"ssh_run", "run_command"}
 def _oneline(s: str) -> str:
     r"""Collapse to a single clean line — also kills literal '\n'/'\t' that leak
     from JSON-encoded tool results into a Telegram line."""
-    return re.sub(r"\s+", " ", str(s).replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")).strip()
+    return re.sub(
+        r"\s+", " ", str(s).replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
+    ).strip()
 
 
 def _summarise_tool_result(result: str) -> str:
@@ -1672,7 +1797,9 @@ def _summarise_tool_result(result: str) -> str:
     text = (result or "").strip()
     if not text:
         return ""
-    m = re.search(r"https?://[^\s\"'\\)]+", text)  # stop at backslash so '...repo\n' doesn't leak
+    m = re.search(
+        r"https?://[^\s\"'\\)]+", text
+    )  # stop at backslash so '...repo\n' doesn't leak
     if m:
         return m.group(0)
     if text[:1] in "{[":
@@ -1681,7 +1808,16 @@ def _summarise_tool_result(result: str) -> str:
         except (json.JSONDecodeError, ValueError):
             obj = None
         if isinstance(obj, dict):
-            for k in ("pr_url", "url", "html_url", "message", "error", "reason", "status", "stdout"):
+            for k in (
+                "pr_url",
+                "url",
+                "html_url",
+                "message",
+                "error",
+                "reason",
+                "status",
+                "stdout",
+            ):
                 v = obj.get(k)
                 if isinstance(v, str) and v.strip():
                     return _oneline(v)[:140]
@@ -1716,7 +1852,9 @@ def _build_turn_report(tool_trace: list[dict]) -> str:
     groups: dict[str, list[str]] = {}
     for t in effects:
         name = str(t.get("name", ""))
-        groups.setdefault(name, []).append(_detail_for(name, t.get("args"), t.get("result", "")))
+        groups.setdefault(name, []).append(
+            _detail_for(name, t.get("args"), t.get("result", ""))
+        )
     lines = ["", "———", "**✅ Done this turn — actions taken:**"]
     for name, details in groups.items():
         label = name.replace("_", " ")
@@ -1789,8 +1927,15 @@ async def _run_tool_round_loop(
         round_num += 1
 
         if _cancel_flags.get(session_id):
-            logger.info("[%d] %sCancelled by user before round %d", req_id, log_prefix, round_num)
-            yield _sse_event("cancelled", _emit({"round": round_num, "reason": "user_requested"}))
+            logger.info(
+                "[%d] %sCancelled by user before round %d",
+                req_id,
+                log_prefix,
+                round_num,
+            )
+            yield _sse_event(
+                "cancelled", _emit({"round": round_num, "reason": "user_requested"})
+            )
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
             return
@@ -1804,10 +1949,14 @@ async def _run_tool_round_loop(
             while pending:
                 next_msg = pending.pop(0)
                 logger.info("[%d] Mid-round interjection: %s", req_id, next_msg["id"])
-                yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "interjected"})
+                yield _sse_event(
+                    "queue", {"msg_id": next_msg["id"], "status": "interjected"}
+                )
                 history.append({"role": "user", "content": next_msg["content"]})
 
-        chat_task = asyncio.create_task(asyncio.to_thread(client.chat, system_prompt, history, tools=tools))
+        chat_task = asyncio.create_task(
+            asyncio.to_thread(client.chat, system_prompt, history, tools=tools)
+        )
         try:
             async for hb in _heartbeat_until_done(
                 chat_task,
@@ -1820,7 +1969,10 @@ async def _run_tool_round_loop(
             completion = await chat_task
         except asyncio.CancelledError:
             logger.info("[%d] %sLLM call cancelled by user", req_id, log_prefix)
-            yield _sse_event("cancelled", _emit({"phase": "llm", "round": round_num, "reason": "user_requested"}))
+            yield _sse_event(
+                "cancelled",
+                _emit({"phase": "llm", "round": round_num, "reason": "user_requested"}),
+            )
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
             return
@@ -1855,7 +2007,10 @@ async def _run_tool_round_loop(
                         {
                             "id": tc["id"],
                             "type": tc["type"],
-                            "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]},
+                            "function": {
+                                "name": tc["function"]["name"],
+                                "arguments": tc["function"]["arguments"],
+                            },
                         }
                         for tc in tool_calls
                     ],
@@ -1868,20 +2023,36 @@ async def _run_tool_round_loop(
                 try:
                     func_args = json.loads(raw_args)
                 except json.JSONDecodeError:
-                    logger.warning("[%d] %sTOOL ARGS INVALID for %s: %s", req_id, log_prefix, func_name, raw_args[:200])
+                    logger.warning(
+                        "[%d] %sTOOL ARGS INVALID for %s: %s",
+                        req_id,
+                        log_prefix,
+                        func_name,
+                        raw_args[:200],
+                    )
                     history.append(
                         {
                             "role": "tool",
                             "tool_call_id": tc["id"],
-                            "content": json.dumps({"error": "invalid_arguments", "raw": raw_args[:500]}),
+                            "content": json.dumps(
+                                {"error": "invalid_arguments", "raw": raw_args[:500]}
+                            ),
                         }
                     )
                     continue
                 tool_call_id = tc["id"]
-                logger.info("[%d] %sTOOL CALL: %s args=%.200s", req_id, log_prefix, func_name, json.dumps(func_args))
+                logger.info(
+                    "[%d] %sTOOL CALL: %s args=%.200s",
+                    req_id,
+                    log_prefix,
+                    func_name,
+                    json.dumps(func_args),
+                )
 
                 yield _sse_event("tool", {"tool": func_name, "status": "calling"})
-                tool_task = asyncio.create_task(_run_tool(func_name, func_args, history, session_id, governor_name))
+                tool_task = asyncio.create_task(
+                    _run_tool(func_name, func_args, history, session_id, governor_name)
+                )
                 try:
                     async for hb in _heartbeat_until_done(
                         tool_task,
@@ -1893,17 +2064,37 @@ async def _run_tool_round_loop(
                         yield hb
                     result_text = await tool_task
                 except asyncio.CancelledError:
-                    logger.info("[%d] %sTool %s cancelled by user", req_id, log_prefix, func_name)
+                    logger.info(
+                        "[%d] %sTool %s cancelled by user",
+                        req_id,
+                        log_prefix,
+                        func_name,
+                    )
                     yield _sse_event(
-                        "cancelled", _emit({"phase": "tool", "tool": func_name, "reason": "user_requested"})
+                        "cancelled",
+                        _emit(
+                            {
+                                "phase": "tool",
+                                "tool": func_name,
+                                "reason": "user_requested",
+                            }
+                        ),
                     )
                     state["cancelled"] = True
                     state["assistant_text"] = assistant_text
                     return
                 yield _sse_event("tool", {"tool": func_name, "status": "done"})
-                logger.info("[%d] %sTOOL RESULT: %s result=%.300s", req_id, log_prefix, func_name, result_text[:300])
+                logger.info(
+                    "[%d] %sTOOL RESULT: %s result=%.300s",
+                    req_id,
+                    log_prefix,
+                    func_name,
+                    result_text[:300],
+                )
 
-                state["tool_trace"].append({"name": func_name, "args": func_args, "result": result_text})
+                state["tool_trace"].append(
+                    {"name": func_name, "args": func_args, "result": result_text}
+                )
                 history.append(
                     {
                         "role": "tool",
@@ -1916,7 +2107,12 @@ async def _run_tool_round_loop(
             break  # no more tool calls — exit loop
 
     if not assistant_text:
-        logger.info("[%d] %sEmpty after %d tool rounds — forcing text-only completion", req_id, log_prefix, round_num)
+        logger.info(
+            "[%d] %sEmpty after %d tool rounds — forcing text-only completion",
+            req_id,
+            log_prefix,
+            round_num,
+        )
         state["wanted_more_rounds"] = True
         completion = client.chat(system_prompt, history, tools=None)
         assistant_text = client.extract_text(completion)
@@ -1924,9 +2120,14 @@ async def _run_tool_round_loop(
     assistant_text, dsml_leaked = _strip_dsml(assistant_text)
     if dsml_leaked:
         state["wanted_more_rounds"] = True
-        logger.info("[%d] %sStripped DSML leakage from final response", req_id, log_prefix)
+        logger.info(
+            "[%d] %sStripped DSML leakage from final response", req_id, log_prefix
+        )
     if state["wanted_more_rounds"]:
-        yield _sse_event("wanted_more_rounds", _emit({"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS}))
+        yield _sse_event(
+            "wanted_more_rounds",
+            _emit({"rounds_used": round_num, "round_cap": MAX_TOOL_ROUNDS}),
+        )
     state["assistant_text"] = assistant_text
 
 
@@ -1991,13 +2192,20 @@ async def _stream_chat(
         return
 
     # Log final response
-    logger.info("[%d] CHAT RESP: len=%d tokens=%.150s", req_id, len(assistant_text), assistant_text[:150])
+    logger.info(
+        "[%d] CHAT RESP: len=%d tokens=%.150s",
+        req_id,
+        len(assistant_text),
+        assistant_text[:150],
+    )
 
     # Parse embedded proposal JSON — supports both single and batch proposals
     proposal = None
     proposals = None  # batch mode
     try:
-        json_match = re.search(r"```json\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```", assistant_text, re.DOTALL)
+        json_match = re.search(
+            r"```json\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```", assistant_text, re.DOTALL
+        )
         if json_match:
             embedded = json.loads(json_match.group(1))
             if isinstance(embedded, list):
@@ -2007,7 +2215,10 @@ async def _stream_chat(
             elif isinstance(embedded, dict) and "proposals" in embedded:
                 proposals = embedded["proposals"]
             assistant_text = re.sub(
-                r"```json\s*[\[\{][\s\S]*?[\]\}]\s*```", "", assistant_text, flags=re.DOTALL
+                r"```json\s*[\[\{][\s\S]*?[\]\}]\s*```",
+                "",
+                assistant_text,
+                flags=re.DOTALL,
             ).strip()
     except Exception:
         pass
@@ -2030,7 +2241,11 @@ async def _stream_chat(
     _log_session(session_id, history)
 
     # Publish transcript to public GitHub repo for DAO transparency
-    asyncio.create_task(_publish_transcript(session_id, history, governor_name, do_not_publish=do_not_publish))
+    asyncio.create_task(
+        _publish_transcript(
+            session_id, history, governor_name, do_not_publish=do_not_publish
+        )
+    )
 
     # ── Queue processing: after done, check for queued messages ──
     queue = _message_queues.get(session_id, [])
@@ -2040,7 +2255,9 @@ async def _stream_chat(
         yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "processing"})
 
         queued_content = next_msg["content"]
-        if governor_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+        if governor_name and not any(
+            "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+        ):
             queued_content = f"[GOVERNOR_IDENTITY: You are speaking with {governor_name}. When they say 'I', 'me', or 'my', they mean {governor_name}.]\n\n{queued_content}"
         history.append({"role": "user", "content": queued_content})
         _log_session(session_id, history)
@@ -2061,7 +2278,9 @@ async def _stream_chat(
                 yield ev
             if q_state.get("cancelled"):
                 return
-            queued_text = _append_turn_report(q_state.get("assistant_text", ""), q_state)
+            queued_text = _append_turn_report(
+                q_state.get("assistant_text", ""), q_state
+            )
         except LLMError as exc:
             logger.error("[%d] QUEUE CHAT ERROR: %s", req_id, exc)
             _record_chat_error(str(exc))
@@ -2076,7 +2295,11 @@ async def _stream_chat(
         history.append({"role": "assistant", "content": queued_text})
         _sessions[session_id] = history
         _log_session(session_id, history)
-        asyncio.create_task(_publish_transcript(session_id, history, governor_name, do_not_publish=do_not_publish))
+        asyncio.create_task(
+            _publish_transcript(
+                session_id, history, governor_name, do_not_publish=do_not_publish
+            )
+        )
 
 
 def _chunk_text(text: str, size: int = 80) -> list[str]:
@@ -2114,7 +2337,9 @@ def _log_session(session_id: str, history: list[dict]) -> None:
         # Atomic write: a torn/clobbered transcript is what bricks a thread, so
         # write to a temp file in the same dir and os.replace() it into place.
         tmp_path = log_path.with_name(f"{sid_hash}.json.{os.getpid()}.tmp")
-        tmp_path.write_text(json.dumps(log_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(log_data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         os.replace(tmp_path, log_path)
         # Ease-of-access: symlink/pointer to latest session
         latest = SESSION_LOG_DIR / "_latest.json"
@@ -2151,7 +2376,10 @@ def _save_session_index(user_key: str, sid: str, name: str | None = None) -> Non
     import hashlib
 
     idx_key = _gov_name_for_key(user_key) if len(user_key) > 50 else user_key
-    idx_file = SESSION_LOG_DIR / f"{hashlib.md5((idx_key or user_key[:20]).encode()).hexdigest()[:12]}_sessions.json"
+    idx_file = (
+        SESSION_LOG_DIR
+        / f"{hashlib.md5((idx_key or user_key[:20]).encode()).hexdigest()[:12]}_sessions.json"
+    )
     data: dict[str, list] = {"sessions": []}
     if idx_file.exists():
         try:
@@ -2183,7 +2411,9 @@ def _save_session_index(user_key: str, sid: str, name: str | None = None) -> Non
     idx_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def _auto_name_session(public_key: str, request: Request, history: list, user_message: str) -> None:
+def _auto_name_session(
+    public_key: str, request: Request, history: list, user_message: str
+) -> None:
     """Auto-name the session from the first user message (non-attachment text)."""
     sid = request.headers.get("X-Session-Id", "")
     if not sid:
@@ -2191,7 +2421,11 @@ def _auto_name_session(public_key: str, request: Request, history: list, user_me
     user_count = sum(1 for m in history if m.get("role") == "user")
     if user_count != 2:
         return
-    clean = user_message.replace("[GOVERNOR_IDENTITY:", "").split("[File attachment:")[0].strip()
+    clean = (
+        user_message.replace("[GOVERNOR_IDENTITY:", "")
+        .split("[File attachment:")[0]
+        .strip()
+    )
     name = clean[:50].replace("\n", " ") if clean else ""
     if name:
         _save_session_index(public_key, sid, name)
@@ -2295,10 +2529,18 @@ def _cleanup_resolved_pending(public_key: str, gh: GitHubClient | None = None) -
                 cleaned.append(item)
             else:
                 removed += 1
-                logger.info("Pending cleanup: dropped '%s' (PR is %s)", item.get("title"), pr.state)
+                logger.info(
+                    "Pending cleanup: dropped '%s' (PR is %s)",
+                    item.get("title"),
+                    pr.state,
+                )
         except Exception as e:
             # Conservative: keep entries we can't verify (typos, network blips, etc.)
-            logger.debug("Pending cleanup: skipped '%s' (verify failed: %s)", item.get("title"), e)
+            logger.debug(
+                "Pending cleanup: skipped '%s' (verify failed: %s)",
+                item.get("title"),
+                e,
+            )
             cleaned.append(item)
     if removed:
         _save_pending(public_key, cleaned)
@@ -2320,7 +2562,9 @@ async def _pending_janitor_loop():
             try:
                 gh = GitHubClient()
             except Exception as e:
-                logger.warning("Pending janitor: GitHubClient init failed (%s); sleeping", e)
+                logger.warning(
+                    "Pending janitor: GitHubClient init failed (%s); sleeping", e
+                )
                 await asyncio.sleep(12 * 60 * 60)
                 continue
             total_removed = 0
@@ -2350,7 +2594,10 @@ async def _pending_janitor_loop():
                         else:
                             removed += 1
                             logger.info(
-                                "Pending janitor: dropped '%s' from %s (PR is %s)", item.get("title"), pf.name, pr.state
+                                "Pending janitor: dropped '%s' from %s (PR is %s)",
+                                item.get("title"),
+                                pf.name,
+                                pr.state,
                             )
                     except Exception:
                         cleaned.append(item)
@@ -2358,7 +2605,10 @@ async def _pending_janitor_loop():
                     pf.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
                     total_removed += removed
             if total_removed:
-                logger.info("Pending janitor: pruned %d total stale pending entries across all sessions", total_removed)
+                logger.info(
+                    "Pending janitor: pruned %d total stale pending entries across all sessions",
+                    total_removed,
+                )
         except Exception as e:
             logger.warning("Pending janitor pass failed: %s", e)
         await asyncio.sleep(12 * 60 * 60)
@@ -2390,7 +2640,10 @@ _TRANSCRIPT_REPO = "truesight_autopilot_transcript"
 _REDACTION_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED:AWS_ACCESS_KEY]"),
     (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "[REDACTED:LLM_API_KEY]"),
-    (re.compile(r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b"), "[REDACTED:GITHUB_TOKEN]"),
+    (
+        re.compile(r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b"),
+        "[REDACTED:GITHUB_TOKEN]",
+    ),
     (re.compile(r"xox[abprs]-[A-Za-z0-9-]{20,}"), "[REDACTED:SLACK_TOKEN]"),
     (
         re.compile(
@@ -2399,9 +2652,17 @@ _REDACTION_PATTERNS: list[tuple[re.Pattern, str]] = [
         "[REDACTED:PRIVATE_KEY_BLOCK]",
     ),
     # JWT-shaped tokens: 3 base64url segments separated by dots, each at least 8 chars
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), "[REDACTED:JWT]"),
+    (
+        re.compile(
+            r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
+        ),
+        "[REDACTED:JWT]",
+    ),
     # env-style line: KEY_LIKE=secret-shaped-value (long, no spaces, base64-ish)
-    (re.compile(r"^([A-Z][A-Z0-9_]{3,})=([A-Za-z0-9+/=_\-]{20,})$", re.MULTILINE), r"\1=[REDACTED:ENV_VALUE]"),
+    (
+        re.compile(r"^([A-Z][A-Z0-9_]{3,})=([A-Za-z0-9+/=_\-]{20,})$", re.MULTILINE),
+        r"\1=[REDACTED:ENV_VALUE]",
+    ),
 ]
 
 
@@ -2413,14 +2674,21 @@ def _redact_secrets(text: str) -> tuple[str, list[str]]:
     matched: list[str] = []
     for pattern, replacement in _REDACTION_PATTERNS:
         if pattern.search(text):
-            tag = replacement.split(":", 1)[1].rstrip("]") if ":" in replacement else replacement
+            tag = (
+                replacement.split(":", 1)[1].rstrip("]")
+                if ":" in replacement
+                else replacement
+            )
             matched.append(tag)
             text = pattern.sub(replacement, text)
     return text, matched
 
 
 async def _publish_transcript(
-    session_id: str, history: list[dict], governor_name: str | None = None, do_not_publish: bool = False
+    session_id: str,
+    history: list[dict],
+    governor_name: str | None = None,
+    do_not_publish: bool = False,
 ) -> None:
     """Publish conversation transcript + uploaded images to public GitHub repo
     for DAO transparency. Runs as background task, never blocks the response.
@@ -2429,7 +2697,10 @@ async def _publish_transcript(
     chat payload's `do_not_publish` field — useful when chat content is
     sensitive and the governor doesn't want it on the public transcript repo)."""
     if do_not_publish:
-        logger.info("Transcript publish skipped: do_not_publish=True for session %s", session_id[:16])
+        logger.info(
+            "Transcript publish skipped: do_not_publish=True for session %s",
+            session_id[:16],
+        )
         return
     try:
         import hashlib as _hlib
@@ -2455,25 +2726,40 @@ async def _publish_transcript(
                 continue
             if role == "user":
                 # Strip internal markers for public transcript
-                content = content.replace("[GOVERNOR_IDENTITY:", "").split("[GOVERNOR_IDENTITY:")[-1]
+                content = content.replace("[GOVERNOR_IDENTITY:", "").split(
+                    "[GOVERNOR_IDENTITY:"
+                )[-1]
                 content, hits = _redact_secrets(content)
                 all_redactions.update(hits)
                 lines.append(f"### 🧑 Governor\n\n{content}\n\n")
             elif role == "assistant":
                 # Strip XML tool-call syntax
-                content = re.sub(r"<function_calls>.*?</function_calls>", "", content, flags=re.DOTALL).strip()
+                content = re.sub(
+                    r"<function_calls>.*?</function_calls>",
+                    "",
+                    content,
+                    flags=re.DOTALL,
+                ).strip()
                 if content:
                     content, hits = _redact_secrets(content)
                     all_redactions.update(hits)
                     lines.append(f"### 🤖 Autopilot\n\n{content}\n\n")
         if all_redactions:
             logger.info(
-                "Transcript redacted %d categories before publish: %s", len(all_redactions), sorted(all_redactions)
+                "Transcript redacted %d categories before publish: %s",
+                len(all_redactions),
+                sorted(all_redactions),
             )
 
         transcript = "\n".join(lines)
         path = f"sessions/{today}/{sid_hash}/transcript.md"
-        gh.commit_file(_TRANSCRIPT_REPO, "main", path, transcript, f"[autopilot] Session {sid_hash} — {today}")
+        gh.commit_file(
+            _TRANSCRIPT_REPO,
+            "main",
+            path,
+            transcript,
+            f"[autopilot] Session {sid_hash} — {today}",
+        )
 
         # Publish uploaded images referenced in the conversation
         for msg in history:
@@ -2601,13 +2887,19 @@ async def cancel_active_chat(session_short: str, request: Request) -> JSONRespon
     session_id = _session_key(public_key, request)
     if session_id[:16] != session_short:
         raise HTTPException(
-            status_code=400, detail=f"session_short does not match this caller's session ({session_id[:16]}...)"
+            status_code=400,
+            detail=f"session_short does not match this caller's session ({session_id[:16]}...)",
         )
     if session_id not in _active_streams:
-        return JSONResponse({"status": "no_active_stream", "session_id_short": session_short}, status_code=404)
+        return JSONResponse(
+            {"status": "no_active_stream", "session_id_short": session_short},
+            status_code=404,
+        )
     _cancel_flags[session_id] = True
     logger.info("Cancel requested for session %s", session_id[:16])
-    return JSONResponse({"status": "cancel_requested", "session_id_short": session_short})
+    return JSONResponse(
+        {"status": "cancel_requested", "session_id_short": session_short}
+    )
 
 
 @app.post("/chat")
@@ -2676,7 +2968,10 @@ async def chat(request: Request):
             history = [
                 m
                 for m in history
-                if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))
+                if not (
+                    isinstance(m.get("content", ""), str)
+                    and str(m["content"]).startswith("[PENDING_ROLE:")
+                )
             ]
             set_role_in_history(history, pending)
             _log_session(session_id, history)
@@ -2690,7 +2985,9 @@ async def chat(request: Request):
         # Session exists but no role set — try to parse user message as role choice
         role = resolve_role(user_message)
         if role:
-            msg_count = sum(1 for m in history if m.get("role") in ("user", "assistant"))
+            msg_count = sum(
+                1 for m in history if m.get("role") in ("user", "assistant")
+            )
             if msg_count >= RESET_CONTEXT_THRESHOLD:
                 # Large existing session — ask about reset before committing
                 history.insert(0, {"role": "system", "content": pending_role_tag(role)})
@@ -2702,7 +2999,9 @@ async def chat(request: Request):
             set_role_in_history(history, role)
             _log_session(session_id, history)
             return StreamingResponse(
-                _sse_single_response(f"✅ Role set: **{role.name}**.\n\nWhat would you like me to work on?"),
+                _sse_single_response(
+                    f"✅ Role set: **{role.name}**.\n\nWhat would you like me to work on?"
+                ),
                 media_type="text/event-stream",
             )
         # Still no role match — show menu again
@@ -2715,7 +3014,9 @@ async def chat(request: Request):
 
     # Inject governor identity so the LLM knows who "I" / "me" refers to
     gov_name = _gov_name_for_key(public_key)
-    if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+    if gov_name and not any(
+        "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+    ):
         user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
 
     history.append({"role": "user", "content": user_message})
@@ -2734,7 +3035,12 @@ async def chat(request: Request):
         async with _session_lock(session_id):
             try:
                 async for event in _stream_chat(
-                    user_message, history, session_id, governor_name=gov_name, do_not_publish=do_not_publish, role=role
+                    user_message,
+                    history,
+                    session_id,
+                    governor_name=gov_name,
+                    do_not_publish=do_not_publish,
+                    role=role,
                 ):
                     yield event
             finally:
@@ -2788,7 +3094,9 @@ async def chat_upload(
         dest.write_bytes(content)
 
         mime_type = (
-            upload_file.content_type or mimetypes.guess_type(upload_file.filename)[0] or "application/octet-stream"
+            upload_file.content_type
+            or mimetypes.guess_type(upload_file.filename)[0]
+            or "application/octet-stream"
         )
         size_kb = round(len(content) / 1024, 1)
         converted = False
@@ -2809,9 +3117,13 @@ async def chat_upload(
                 dest = jpg_dest
                 safe_name = jpg_dest.name
                 converted = True
-                logger.info("Converted HEIC %s to JPEG (%d KB)", upload_file.filename, size_kb)
+                logger.info(
+                    "Converted HEIC %s to JPEG (%d KB)", upload_file.filename, size_kb
+                )
             except Exception as e:
-                logger.warning("HEIC conversion failed for %s: %s", upload_file.filename, e)
+                logger.warning(
+                    "HEIC conversion failed for %s: %s", upload_file.filename, e
+                )
 
         processed_files.append(
             {
@@ -2834,13 +3146,20 @@ async def chat_upload(
         total = len(processed_files)
 
         yield _sse_event(
-            "status", {"stage": "upload", "message": f"Processing {total} file{'s' if total > 1 else ''}..."}
+            "status",
+            {
+                "stage": "upload",
+                "message": f"Processing {total} file{'s' if total > 1 else ''}...",
+            },
         )
 
         # Pyzbar scan all files
         yield _sse_event(
             "status",
-            {"stage": "pyzbar", "message": f"Scanning {total} image{'s' if total > 1 else ''} for barcodes..."},
+            {
+                "stage": "pyzbar",
+                "message": f"Scanning {total} image{'s' if total > 1 else ''} for barcodes...",
+            },
         )
         jpg_paths: list[str] = []
         for pf in processed_files:
@@ -2863,13 +3182,18 @@ async def chat_upload(
             )
             try:
                 all_grok = await asyncio.wait_for(
-                    asyncio.to_thread(grok_analyze_images, jpg_paths, "", GROK_MODEL, 0.2, 60.0),
+                    asyncio.to_thread(
+                        grok_analyze_images, jpg_paths, "", GROK_MODEL, 0.2, 60.0
+                    ),
                     timeout=70.0,
                 )
             except Exception:
                 pass
 
-        yield _sse_event("status", {"stage": "done", "message": "Analysis complete, preparing response..."})
+        yield _sse_event(
+            "status",
+            {"stage": "done", "message": "Analysis complete, preparing response..."},
+        )
 
         # Build combined content part
         content_parts = []
@@ -2883,7 +3207,11 @@ async def chat_upload(
             content_parts.append(cp)
 
         # Pyzbar results
-        any_pyzbar = [p for p in all_pyzbar if p["result"].get("status") == "success" and p["result"].get("codes")]
+        any_pyzbar = [
+            p
+            for p in all_pyzbar
+            if p["result"].get("status") == "success" and p["result"].get("codes")
+        ]
         if any_pyzbar:
             cp = "\n=== PYZBAR SCAN RESULTS ===\n"
             for p in any_pyzbar:
@@ -2937,14 +3265,21 @@ async def chat_upload(
         role = find_role_in_history(history)
         # If no role, default to general (upload endpoints always have history from scanning step)
         gov_name = _gov_name_for_key(public_key)
-        if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+        if gov_name and not any(
+            "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+        ):
             user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
         history.append({"role": "user", "content": user_message})
         _auto_name_session(public_key, request, history, user_message)
         _log_session(session_id, history)
 
         async for event in _stream_chat(
-            user_message, history, session_id, attachment_info=attachment_info, governor_name=gov_name, role=role
+            user_message,
+            history,
+            session_id,
+            attachment_info=attachment_info,
+            governor_name=gov_name,
+            role=role,
         ):
             yield event
 
@@ -2988,7 +3323,9 @@ async def chat_blocking(request: Request) -> JSONResponse:
         return await _chat_blocking_turn(session_id, user_message, public_key)
 
 
-async def _chat_blocking_turn(session_id: str, user_message: str, public_key: str) -> JSONResponse:
+async def _chat_blocking_turn(
+    session_id: str, user_message: str, public_key: str
+) -> JSONResponse:
     history = _load_or_create_session(session_id)
     role = find_role_in_history(history)
 
@@ -3017,12 +3354,17 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                 set_role_in_history(history, pending)
                 _log_session(session_id, history)
                 return JSONResponse(
-                    {"response": f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"}
+                    {
+                        "response": f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
+                    }
                 )
             history = [
                 m
                 for m in history
-                if not (isinstance(m.get("content", ""), str) and str(m["content"]).startswith("[PENDING_ROLE:"))
+                if not (
+                    isinstance(m.get("content", ""), str)
+                    and str(m["content"]).startswith("[PENDING_ROLE:")
+                )
             ]
             set_role_in_history(history, pending)
             _log_session(session_id, history)
@@ -3034,14 +3376,20 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
 
         role = resolve_role(user_message)
         if role:
-            msg_count = sum(1 for m in history if m.get("role") in ("user", "assistant"))
+            msg_count = sum(
+                1 for m in history if m.get("role") in ("user", "assistant")
+            )
             if msg_count >= RESET_CONTEXT_THRESHOLD:
                 history.insert(0, {"role": "system", "content": pending_role_tag(role)})
                 _log_session(session_id, history)
                 return JSONResponse({"response": reset_context_prompt(role, msg_count)})
             set_role_in_history(history, role)
             _log_session(session_id, history)
-            return JSONResponse({"response": f"✅ Role set: {role.name}.\n\nWhat would you like me to work on?"})
+            return JSONResponse(
+                {
+                    "response": f"✅ Role set: {role.name}.\n\nWhat would you like me to work on?"
+                }
+            )
         return JSONResponse(
             {
                 "response": f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
@@ -3049,7 +3397,9 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
         )
 
     gov_name = _gov_name_for_key(public_key)
-    if gov_name and not any("GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history):
+    if gov_name and not any(
+        "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+    ):
         user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
     history.append({"role": "user", "content": user_message})
 
@@ -3080,7 +3430,10 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                         {
                             "id": tc["id"],
                             "type": tc["type"],
-                            "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]},
+                            "function": {
+                                "name": tc["function"]["name"],
+                                "arguments": tc["function"]["arguments"],
+                            },
                         }
                         for tc in tool_calls
                     ],
@@ -3090,12 +3443,22 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
                 func_name = tc["function"]["name"]
                 raw_args = tc["function"].get("arguments")
                 try:
-                    func_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                    func_args = (
+                        json.loads(raw_args)
+                        if isinstance(raw_args, str)
+                        else (raw_args or {})
+                    )
                 except (json.JSONDecodeError, TypeError):
                     func_args = {}
-                result_text = await _run_tool(func_name, func_args, history, session_id, gov_name)
-                tool_trace.append({"name": func_name, "args": func_args, "result": result_text})
-                history.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
+                result_text = await _run_tool(
+                    func_name, func_args, history, session_id, gov_name
+                )
+                tool_trace.append(
+                    {"name": func_name, "args": func_args, "result": result_text}
+                )
+                history.append(
+                    {"role": "tool", "tool_call_id": tc["id"], "content": result_text}
+                )
 
         # Force a clean text-only answer if we exhausted the budget, came back
         # blank, or the model leaked a text-format tool call instead of executing it.
@@ -3105,7 +3468,9 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
             or "<tool_call>" in assistant_text
             or assistant_text in ("(empty response)", "(no response)")
         ):
-            logger.info("Forcing text-only completion (rounds exhausted / blank / leaked tool-call)")
+            logger.info(
+                "Forcing text-only completion (rounds exhausted / blank / leaked tool-call)"
+            )
             completion = client.chat(system_prompt, history, tools=None)
             assistant_text = client.extract_text(completion)
 
@@ -3114,9 +3479,7 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
 
     # Never return a blank response — Telegram (and other clients) reject empty text.
     if not assistant_text or not assistant_text.strip():
-        assistant_text = (
-            "(Autopilot produced an empty response — try rephrasing or breaking the request into smaller steps.)"
-        )
+        assistant_text = "(Autopilot produced an empty response — try rephrasing or breaking the request into smaller steps.)"
 
     proposal = None
     try:
@@ -3125,7 +3488,9 @@ async def _chat_blocking_turn(session_id: str, user_message: str, public_key: st
             embedded = json.loads(json_match.group(1))
             if "proposal" in embedded:
                 proposal = embedded["proposal"]
-                assistant_text = re.sub(r"```json\s*\{.*?\}\s*```", "", assistant_text, flags=re.DOTALL).strip()
+                assistant_text = re.sub(
+                    r"```json\s*\{.*?\}\s*```", "", assistant_text, flags=re.DOTALL
+                ).strip()
     except Exception:
         pass
 
@@ -3159,7 +3524,12 @@ async def list_governors(request: Request) -> JSONResponse:
             "updated_at": data.get("updated_at", ""),
             "source": data.get("source", ""),
             "governors": [
-                {"name": g.get("name"), "email": g.get("email"), "status": g.get("status")} for g in governors
+                {
+                    "name": g.get("name"),
+                    "email": g.get("email"),
+                    "status": g.get("status"),
+                }
+                for g in governors
             ],
         }
     )
@@ -3240,7 +3610,9 @@ def _looks_base64(s: str) -> bool:
     )
 
 
-_RECOVERED_TOOL_RESULT = "[tool result lost to a concurrent-write race; session auto-recovered]"
+_RECOVERED_TOOL_RESULT = (
+    "[tool result lost to a concurrent-write race; session auto-recovered]"
+)
 
 
 def _sanitise_tool_messages(history: list[dict]) -> None:
@@ -3273,7 +3645,11 @@ def _sanitise_tool_messages(history: list[dict]) -> None:
                 known_call_ids.add(tc.get("id", ""))
         if m.get("role") == "tool":
             if m.get("tool_call_id", "") not in known_call_ids:
-                logger.info("Dropped orphaned tool message at index %d id=%s", i, m.get("tool_call_id", ""))
+                logger.info(
+                    "Dropped orphaned tool message at index %d id=%s",
+                    i,
+                    m.get("tool_call_id", ""),
+                )
                 history.pop(i)
                 continue
         i += 1
@@ -3291,9 +3667,22 @@ def _sanitise_tool_messages(history: list[dict]) -> None:
                 j += 1
             missing = [cid for cid in ids if cid not in seen]
             if missing:
-                stubs = [{"role": "tool", "tool_call_id": cid, "content": _RECOVERED_TOOL_RESULT} for cid in missing]
-                history[j:j] = stubs  # insert right after the existing contiguous tool run
-                logger.info("Healed %d orphaned tool_call(s) at assistant index %d", len(stubs), i)
+                stubs = [
+                    {
+                        "role": "tool",
+                        "tool_call_id": cid,
+                        "content": _RECOVERED_TOOL_RESULT,
+                    }
+                    for cid in missing
+                ]
+                history[j:j] = (
+                    stubs  # insert right after the existing contiguous tool run
+                )
+                logger.info(
+                    "Healed %d orphaned tool_call(s) at assistant index %d",
+                    len(stubs),
+                    i,
+                )
                 i = j + len(stubs)
                 continue
         i += 1
@@ -3304,7 +3693,9 @@ def _record_chat_error(error_detail: str) -> None:
     now = time.time()
     _self_heal_errors.append({"time": now, "error": error_detail})
     # Prune old entries
-    _self_heal_errors[:] = [e for e in _self_heal_errors if now - e["time"] < _SELF_HEAL_WINDOW]
+    _self_heal_errors[:] = [
+        e for e in _self_heal_errors if now - e["time"] < _SELF_HEAL_WINDOW
+    ]
 
 
 async def _self_heal_loop():
@@ -3313,7 +3704,9 @@ async def _self_heal_loop():
         await asyncio.sleep(300)  # every 5 minutes
         try:
             now = time.time()
-            recent = [e for e in _self_heal_errors if now - e["time"] < _SELF_HEAL_WINDOW]
+            recent = [
+                e for e in _self_heal_errors if now - e["time"] < _SELF_HEAL_WINDOW
+            ]
             if len(recent) >= _SELF_HEAL_THRESHOLD:
                 logger.warning("Self-heal triggered: %d errors in window", len(recent))
                 patterns = "\n".join(recent[-5:])
@@ -3341,12 +3734,12 @@ def _update_context_after_fix(repo: str, pr_url: str, summary: str) -> None:
         if result.get("type") == "file":
             content = result["content"]
         else:
-            content = (
-                "# Context Updates\n\nAutopilot logs significant changes here so other AIs can stay up to date.\n\n"
-            )
+            content = "# Context Updates\n\nAutopilot logs significant changes here so other AIs can stay up to date.\n\n"
 
         # Prepend new entry
-        new_content = content.replace("# Context Updates\n\n", f"# Context Updates\n\n{entry}")
+        new_content = content.replace(
+            "# Context Updates\n\n", f"# Context Updates\n\n{entry}"
+        )
 
         # Commit to a branch and open PR
         branch = f"autopilot/context-update-{int(time.time())}"
@@ -3364,7 +3757,10 @@ def _update_context_after_fix(repo: str, pr_url: str, summary: str) -> None:
             )
         except Exception:
             repo.create_file(
-                "CONTEXT_UPDATES.md", f"[autopilot] Context update: {repo} fix", new_content, branch=branch
+                "CONTEXT_UPDATES.md",
+                f"[autopilot] Context update: {repo} fix",
+                new_content,
+                branch=branch,
             )
         pr = repo.create_pull(
             title=f"[autopilot] Context update: {repo} fix",
@@ -3390,16 +3786,35 @@ async def github_webhook(payload: dict):
     head_ref = (pr.get("head") or {}).get("ref", "")
     repo_name = ((payload.get("repository") or {}).get("name") or "").strip()
 
-    logger.info("GitHub webhook received: action=%s repo=%s head_ref=%s", action, repo_name, head_ref)
+    logger.info(
+        "GitHub webhook received: action=%s repo=%s head_ref=%s",
+        action,
+        repo_name,
+        head_ref,
+    )
 
-    if action == "closed" and head_ref.startswith(_AUTOPILOT_BRANCH_PREFIX) and repo_name in settings.allowed_repos:
+    if (
+        action == "closed"
+        and head_ref.startswith(_AUTOPILOT_BRANCH_PREFIX)
+        and repo_name in settings.allowed_repos
+    ):
         try:
             gh = GitHubClient()
             ok = gh.delete_branch(repo_name, head_ref)
             if ok:
-                logger.info("Janitor: deleted closed-PR branch %s on %s", head_ref, repo_name)
-                return {"status": "branch_deleted", "repo": repo_name, "branch": head_ref}
-            return {"status": "branch_delete_failed", "repo": repo_name, "branch": head_ref}
+                logger.info(
+                    "Janitor: deleted closed-PR branch %s on %s", head_ref, repo_name
+                )
+                return {
+                    "status": "branch_deleted",
+                    "repo": repo_name,
+                    "branch": head_ref,
+                }
+            return {
+                "status": "branch_delete_failed",
+                "repo": repo_name,
+                "branch": head_ref,
+            }
         except Exception as e:
             logger.warning("Janitor webhook handler failed: %s", e)
             return {"status": "error", "message": str(e)}
@@ -3427,7 +3842,9 @@ async def _context_sync_loop():
             if errs:
                 logger.warning("Context sync: results=%s", results)
             else:
-                logger.info("Context sync: refreshed %s", results or "(no mirrors found)")
+                logger.info(
+                    "Context sync: refreshed %s", results or "(no mirrors found)"
+                )
         except Exception as e:
             logger.warning("Context sync pass failed: %s", e)
         await asyncio.sleep(settings.context_sync_interval_seconds)
@@ -3464,7 +3881,10 @@ async def _branch_janitor_loop():
                     if gh.delete_branch(repo, b["name"]):
                         total_deleted += 1
             if total_deleted:
-                logger.info("Janitor: pruned %d stale autopilot branches across allowed repos", total_deleted)
+                logger.info(
+                    "Janitor: pruned %d stale autopilot branches across allowed repos",
+                    total_deleted,
+                )
         except Exception as e:
             logger.warning("Janitor pass failed: %s", e)
         await asyncio.sleep(24 * 60 * 60)
@@ -3540,7 +3960,9 @@ async def metrics():
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     # Add CORS headers so oracle.truesight.me can see error responses
     if request.url.path == "/oracle-advisory":
-        return JSONResponse({"error": exc.detail}, status_code=exc.status_code, headers=_CORS_HEADERS)
+        return JSONResponse(
+            {"error": exc.detail}, status_code=exc.status_code, headers=_CORS_HEADERS
+        )
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
 

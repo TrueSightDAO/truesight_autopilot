@@ -98,7 +98,9 @@ def register_identity(email: str, env_path: str | None = None) -> dict[str, Any]
             }
 
         # 5. Save keys to .env
-        dotenv_path = env_path or str(Path(__file__).resolve().parent.parent.parent / ".env")
+        dotenv_path = env_path or str(
+            Path(__file__).resolve().parent.parent.parent / ".env"
+        )
         dotenv_set_key(dotenv_path, "EMAIL", email)
         dotenv_set_key(dotenv_path, "PUBLIC_KEY", pub_der_b64)
         dotenv_set_key(dotenv_path, "PRIVATE_KEY", priv_der_b64)
@@ -130,8 +132,12 @@ TOOL_SPEC = ToolSpec(
     description="Register a new DAO identity by generating an RSA-2048 keypair and submitting to Edgar.",
     parameters={
         "type": "object",
-        "properties": {"email": {"type": "string", "description": "The email address to register."}},
+        "properties": {
+            "email": {"type": "string", "description": "The email address to register."}
+        },
         "required": ["email"],
     },
-    handler=lambda args, ctx: _json.dumps(register_identity(args.get("email", "")), indent=2),
+    handler=lambda args, ctx: _json.dumps(
+        register_identity(args.get("email", "")), indent=2
+    ),
 )

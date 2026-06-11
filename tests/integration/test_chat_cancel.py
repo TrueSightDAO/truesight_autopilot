@@ -61,7 +61,10 @@ async def run() -> int:
     async def fire_cancel_after(delay: float) -> None:
         await asyncio.sleep(delay)
         resp = await cancel_chat(key)
-        print(f"  → DELETE /chat/active → {resp['status_code']} {resp['body']}", flush=True)
+        print(
+            f"  → DELETE /chat/active → {resp['status_code']} {resp['body']}",
+            flush=True,
+        )
 
     cancel_task = asyncio.create_task(fire_cancel_after(CANCEL_AFTER_S))
     result = await stream_chat(key, INITIAL, on_event=on_event)

@@ -47,7 +47,11 @@ def test_normal_completion_with_tool_calls():
         ],
         "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
     }
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     p._http = _make_client(body)
 
     resp = p.chat("You are helpful.", [{"role": "user", "content": "hi"}])
@@ -86,10 +90,16 @@ def test_xml_tool_calls_in_content():
         ],
         "usage": {"prompt_tokens": 200, "completion_tokens": 30, "total_tokens": 230},
     }
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     p._http = _make_client(body)
 
-    resp = p.chat("You are helpful.", [{"role": "user", "content": "scan /tmp/test.jpg"}])
+    resp = p.chat(
+        "You are helpful.", [{"role": "user", "content": "scan /tmp/test.jpg"}]
+    )
 
     # Content should be cleaned of XML
     assert "<function_calls>" not in resp.text
@@ -127,7 +137,11 @@ def test_dsml_tool_calls():
         ],
         "usage": {"prompt_tokens": 300, "completion_tokens": 40, "total_tokens": 340},
     }
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     p._http = _make_client(body)
 
     resp = p.chat("You are helpful.", [{"role": "user", "content": "submit movement"}])
@@ -146,10 +160,25 @@ def test_dsml_tool_calls():
 
 def test_usage_populated():
     body = {
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75, "prompt_cache_hit_tokens": 10},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 25,
+            "total_tokens": 75,
+            "prompt_cache_hit_tokens": 10,
+        },
     }
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     p._http = _make_client(body)
 
     resp = p.chat("You are helpful.", [{"role": "user", "content": "hi"}])
@@ -164,7 +193,11 @@ def test_usage_populated():
 
 
 def test_estimate_cost():
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     usage = LLMUsage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
     cost = p.estimate_cost(usage)
     assert cost is not None
@@ -181,7 +214,11 @@ def test_http_error_surfaces_as_llm_error():
         return httpx.Response(429, json={"error": "rate limited"})
 
     transport = httpx.MockTransport(handler)
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     p._http = httpx.Client(transport=transport, base_url=p.base_url)
 
     with pytest.raises(LLMError) as exc_info:
@@ -195,10 +232,16 @@ def test_http_error_surfaces_as_llm_error():
 
 def test_empty_content():
     body = {
-        "choices": [{"index": 0, "message": {"role": "assistant"}, "finish_reason": "stop"}],
+        "choices": [
+            {"index": 0, "message": {"role": "assistant"}, "finish_reason": "stop"}
+        ],
         "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
     }
-    p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
+    p = DeepSeekProvider(
+        api_key="test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+    )
     p._http = _make_client(body)
 
     resp = p.chat("You are helpful.", [{"role": "user", "content": "hi"}])

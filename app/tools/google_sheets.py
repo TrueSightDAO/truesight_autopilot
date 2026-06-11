@@ -48,7 +48,12 @@ def read_google_sheet(
 
     try:
         service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-        resp = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_a1).execute()
+        resp = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=range_a1)
+            .execute()
+        )
     except Exception as e:
         logger.warning("read_google_sheet failed: %s", e)
         return _err(str(e), spreadsheet_id=spreadsheet_id, range=range_a1)

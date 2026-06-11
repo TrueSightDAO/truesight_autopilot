@@ -34,7 +34,10 @@ def _run_script(script_name: str, *args: str) -> dict:
             timeout=120,
         )
         if result.returncode != 0:
-            return {"status": "error", "message": f"Script exited {result.returncode}: {result.stderr[:500]}"}
+            return {
+                "status": "error",
+                "message": f"Script exited {result.returncode}: {result.stderr[:500]}",
+            }
         return json.loads(result.stdout)
     except json.JSONDecodeError as e:
         return {"status": "error", "message": f"Script output was not valid JSON: {e}"}
@@ -107,9 +110,16 @@ def append_to_transcript(
         JSON string with status and transcript URL.
     """
     if not session_id or not content or not filename:
-        return json.dumps({"status": "error", "reason": "session_id, content, and filename are required"})
+        return json.dumps(
+            {
+                "status": "error",
+                "reason": "session_id, content, and filename are required",
+            }
+        )
     if file_type not in ("PDF", "Image"):
-        return json.dumps({"status": "error", "reason": "file_type must be 'PDF' or 'Image'"})
+        return json.dumps(
+            {"status": "error", "reason": "file_type must be 'PDF' or 'Image'"}
+        )
 
     result = _run_script(
         "append_to_transcript.py",
@@ -139,7 +149,12 @@ TOOL_SPECS = [
         description="Extract text from a PDF file using pymupdf (fallback to pdfminer). Returns per-page text content. Use this when a governor sends a PDF attachment.",
         parameters={
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Full path to the PDF file on disk."}},
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Full path to the PDF file on disk.",
+                }
+            },
             "required": ["path"],
         },
         handler=lambda args, ctx: extract_pdf_text(args.get("path", "")),
@@ -150,12 +165,21 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Full path to the image file on disk."},
-                "lang": {"type": "string", "description": "Tesseract language code (default: eng).", "default": "eng"},
+                "path": {
+                    "type": "string",
+                    "description": "Full path to the image file on disk.",
+                },
+                "lang": {
+                    "type": "string",
+                    "description": "Tesseract language code (default: eng).",
+                    "default": "eng",
+                },
             },
             "required": ["path"],
         },
-        handler=lambda args, ctx: ocr_image(args.get("path", ""), args.get("lang", "eng")),
+        handler=lambda args, ctx: ocr_image(
+            args.get("path", ""), args.get("lang", "eng")
+        ),
     ),
     ToolSpec(
         name="append_to_transcript",
@@ -163,11 +187,28 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "session_id": {"type": "string", "description": "Session hash/ID to attach the content to."},
-                "content": {"type": "string", "description": "Main extracted text content from the file."},
-                "filename": {"type": "string", "description": "Original filename of the attachment."},
-                "file_type": {"type": "string", "enum": ["PDF", "Image"], "description": "Type of file: PDF or Image."},
-                "ocr_text": {"type": "string", "description": "OCR-extracted text (for images only).", "default": ""},
+                "session_id": {
+                    "type": "string",
+                    "description": "Session hash/ID to attach the content to.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Main extracted text content from the file.",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Original filename of the attachment.",
+                },
+                "file_type": {
+                    "type": "string",
+                    "enum": ["PDF", "Image"],
+                    "description": "Type of file: PDF or Image.",
+                },
+                "ocr_text": {
+                    "type": "string",
+                    "description": "OCR-extracted text (for images only).",
+                    "default": "",
+                },
                 "grok_description": {
                     "type": "string",
                     "description": "Grok vision description (for images only).",

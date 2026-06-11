@@ -76,7 +76,9 @@ def _check_dedup(public_key: str) -> bool:
     return False
 
 
-def _mark_dedup(public_key: str, governor_name: str, reading_data: dict | None = None) -> None:
+def _mark_dedup(
+    public_key: str, governor_name: str, reading_data: dict | None = None
+) -> None:
     """Mark this governor as briefed today."""
     key = _dedup_key(public_key)
     _DEDUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -127,7 +129,9 @@ def _fetch_handoffs() -> str:
                         handoff_name = cols[2]
                         plan_file = cols[3]
                         topic_link = cols[4]
-                        active_handoffs.append(f"  • {handoff_name} — {plan_file} ({topic_link})")
+                        active_handoffs.append(
+                            f"  • {handoff_name} — {plan_file} ({topic_link})"
+                        )
             elif in_table and not line.startswith("|"):
                 in_table = False
 
@@ -258,7 +262,9 @@ def _compose_agenda(
         primary_number = primary.get("number", "")
         primary_name = primary.get("name", "")
         if primary_number and primary_name:
-            hexagram_line = f"\n🌅 Today's hexagram: **{primary_number} — {primary_name}**"
+            hexagram_line = (
+                f"\n🌅 Today's hexagram: **{primary_number} — {primary_name}**"
+            )
 
     lines = [
         f"☀️ **Good morning, {governor_name}!**",
@@ -338,9 +344,17 @@ def _post_to_telegram(text: str) -> bool:
             logger.info("Briefing posted to #General (chat %s)", _GENERAL_CHAT_ID)
             return True
         else:
-            logger.warning("Failed to post briefing: HTTP %s: %s", resp.status_code, resp.text[:200])
+            logger.warning(
+                "Failed to post briefing: HTTP %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
             # Fallback: plain text
-            fallback = {"chat_id": _GENERAL_CHAT_ID, "text": text, "disable_web_page_preview": True}
+            fallback = {
+                "chat_id": _GENERAL_CHAT_ID,
+                "text": text,
+                "disable_web_page_preview": True,
+            }
             try:
                 resp2 = httpx.post(
                     f"{_TELEGRAM_API}/bot{settings.telegram_bot_api_key}/sendMessage",
@@ -385,7 +399,9 @@ async def handle_daily_briefing(payload: dict, signature: str, public_key: str) 
 
     # 3. Dedup
     if _check_dedup(public_key):
-        logger.info("Briefing: governor %s already briefed today — skipping", governor_name)
+        logger.info(
+            "Briefing: governor %s already briefed today — skipping", governor_name
+        )
         return {"ok": True, "message": "Already briefed today", "dedup": True}
 
     # 4. Extract reading data from payload
@@ -408,7 +424,13 @@ async def handle_daily_briefing(payload: dict, signature: str, public_key: str) 
 
     if posted:
         logger.info("Briefing delivered for governor %s", governor_name)
-        return {"ok": True, "message": "Briefing posted to #General", "governor": governor_name}
+        return {
+            "ok": True,
+            "message": "Briefing posted to #General",
+            "governor": governor_name,
+        }
     else:
-        logger.warning("Briefing composed but Telegram post failed for %s", governor_name)
+        logger.warning(
+            "Briefing composed but Telegram post failed for %s", governor_name
+        )
         return {"ok": False, "error": "Telegram post failed", "governor": governor_name}

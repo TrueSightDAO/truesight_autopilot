@@ -17,7 +17,9 @@ import sys
 
 from ..watch_runner import AWS_KINDS
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 
 
 def _chat_thread_from_session(session_id: str | None) -> tuple[str | None, str | None]:
@@ -50,14 +52,26 @@ def _launch(argv: list[str]) -> None:
 def watch_aws_resource(args: dict, ctx: dict) -> str:
     chat_id, thread_id = _chat_thread_from_session(ctx.get("session_id"))
     if chat_id is None:
-        return json.dumps({"status": "error", "reason": "watch_aws_resource only works inside a Telegram topic."})
+        return json.dumps(
+            {
+                "status": "error",
+                "reason": "watch_aws_resource only works inside a Telegram topic.",
+            }
+        )
     kind = args.get("resource_kind", "")
     rid = args.get("resource_id", "")
     account = args.get("account", "")
     if kind not in AWS_KINDS:
-        return json.dumps({"status": "error", "reason": f"resource_kind must be one of {sorted(AWS_KINDS)}"})
+        return json.dumps(
+            {
+                "status": "error",
+                "reason": f"resource_kind must be one of {sorted(AWS_KINDS)}",
+            }
+        )
     if not rid or not account:
-        return json.dumps({"status": "error", "reason": "resource_id and account are required."})
+        return json.dumps(
+            {"status": "error", "reason": "resource_id and account are required."}
+        )
     label = args.get("label") or f"{kind} {rid}"
     interval = int(args.get("interval_seconds", 30))
     timeout = int(args.get("timeout_seconds", 3600))
@@ -95,7 +109,12 @@ def watch_aws_resource(args: dict, ctx: dict) -> str:
 def watch_url(args: dict, ctx: dict) -> str:
     chat_id, thread_id = _chat_thread_from_session(ctx.get("session_id"))
     if chat_id is None:
-        return json.dumps({"status": "error", "reason": "watch_url only works inside a Telegram topic."})
+        return json.dumps(
+            {
+                "status": "error",
+                "reason": "watch_url only works inside a Telegram topic.",
+            }
+        )
     url = args.get("url", "")
     if not url:
         return json.dumps({"status": "error", "reason": "url is required."})
@@ -155,14 +174,28 @@ TOOL_SPECS = [
                     "enum": sorted(AWS_KINDS),
                     "description": "ami (snapshot bake), snapshot, instance_running (boot), volume.",
                 },
-                "resource_id": {"type": "string", "description": "e.g. ami-…, snap-…, i-…, vol-…"},
-                "account": {"type": "string", "enum": ["explorya", "nelanco"], "description": "AWS account label."},
-                "region": {"type": "string", "description": "Override the account default region (e.g. us-east-1)."},
+                "resource_id": {
+                    "type": "string",
+                    "description": "e.g. ami-…, snap-…, i-…, vol-…",
+                },
+                "account": {
+                    "type": "string",
+                    "enum": ["explorya", "nelanco"],
+                    "description": "AWS account label.",
+                },
+                "region": {
+                    "type": "string",
+                    "description": "Override the account default region (e.g. us-east-1).",
+                },
                 "label": {
                     "type": "string",
                     "description": "Human label for the notification, e.g. 'getdata-cache AMI'.",
                 },
-                "interval_seconds": {"type": "integer", "default": 30, "description": "Poll interval."},
+                "interval_seconds": {
+                    "type": "integer",
+                    "default": 30,
+                    "description": "Poll interval.",
+                },
                 "timeout_seconds": {
                     "type": "integer",
                     "default": 3600,
@@ -184,10 +217,23 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "URL to poll (e.g. a /ping or /health endpoint)."},
-                "expect_status": {"type": "integer", "default": 200, "description": "HTTP status that means 'done'."},
-                "expect_substring": {"type": "string", "description": "Optional: body must contain this too."},
-                "label": {"type": "string", "description": "Human label for the notification."},
+                "url": {
+                    "type": "string",
+                    "description": "URL to poll (e.g. a /ping or /health endpoint).",
+                },
+                "expect_status": {
+                    "type": "integer",
+                    "default": 200,
+                    "description": "HTTP status that means 'done'.",
+                },
+                "expect_substring": {
+                    "type": "string",
+                    "description": "Optional: body must contain this too.",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Human label for the notification.",
+                },
                 "interval_seconds": {"type": "integer", "default": 30},
                 "timeout_seconds": {"type": "integer", "default": 1800},
             },

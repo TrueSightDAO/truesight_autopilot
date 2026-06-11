@@ -27,7 +27,9 @@ _MAX_TRANSCRIPTS = 50
 
 def _get_github_token() -> str:
     """Get GitHub PAT from environment."""
-    return os.environ.get("TRUESIGHT_DAO_AUTOPILOT", "") or os.environ.get("GITHUB_PAT", "")
+    return os.environ.get("TRUESIGHT_DAO_AUTOPILOT", "") or os.environ.get(
+        "GITHUB_PAT", ""
+    )
 
 
 def _github_request(method: str, url: str, data: dict | None = None) -> dict:
@@ -58,7 +60,10 @@ def _github_request(method: str, url: str, data: dict | None = None) -> dict:
             elif resp.status_code == 404:
                 return {"status": "not_found"}
             else:
-                return {"status": "error", "message": f"GitHub API error {resp.status_code}: {resp.text[:300]}"}
+                return {
+                    "status": "error",
+                    "message": f"GitHub API error {resp.status_code}: {resp.text[:300]}",
+                }
     except Exception as e:
         return {"status": "error", "message": f"HTTP request failed: {e}"}
 
@@ -74,7 +79,9 @@ def _list_session_dirs(max_days: int = 30) -> list[str]:
     for day_offset in range(max_days):
         date_str = (today - timedelta(days=day_offset)).strftime("%Y-%m-%d")
         path = f"sessions/{date_str}"
-        result = _github_request("GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{path}")
+        result = _github_request(
+            "GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{path}"
+        )
         if isinstance(result, list):
             dirs.append(path)
         elif isinstance(result, dict) and result.get("status") == "not_found":
@@ -87,7 +94,9 @@ def _list_session_dirs(max_days: int = 30) -> list[str]:
 
 def _list_session_hashes(date_path: str) -> list[str]:
     """List session hashes within a date directory."""
-    result = _github_request("GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{date_path}")
+    result = _github_request(
+        "GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{date_path}"
+    )
     if not isinstance(result, list):
         return []
     return [item["name"] for item in result if item["type"] == "dir"]
@@ -96,7 +105,9 @@ def _list_session_hashes(date_path: str) -> list[str]:
 def _read_transcript(date_path: str, session_hash: str) -> str | None:
     """Read a session transcript file."""
     path = f"{date_path}/{session_hash}/transcript.md"
-    result = _github_request("GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{path}")
+    result = _github_request(
+        "GET", f"{GITHUB_API}/repos/TrueSightDAO/{TRANSCRIPT_REPO}/contents/{path}"
+    )
     if not isinstance(result, dict) or "content" not in result:
         return None
     try:
@@ -159,7 +170,11 @@ def search_transcript(query: str, max_days_back: int = 30) -> str:
     date_dirs = _list_session_dirs(max_days)
     if not date_dirs:
         return json.dumps(
-            {"status": "ok", "matches": [], "message": "No session transcripts found in the last {max_days} days."}
+            {
+                "status": "ok",
+                "matches": [],
+                "message": "No session transcripts found in the last {max_days} days.",
+            }
         )
 
     matches: list[dict] = []
@@ -188,7 +203,8 @@ def search_transcript(query: str, max_days_back: int = 30) -> str:
                             "session_date": date_path.replace("sessions/", ""),
                             "session_hash": session_hash,
                             "filename": att.get("filename", ""),
-                            "extracted_text_preview": text[:2000] + ("..." if len(text) > 2000 else ""),
+                            "extracted_text_preview": text[:2000]
+                            + ("..." if len(text) > 2000 else ""),
                             "full_text_length": len(text),
                         }
                     )

@@ -126,7 +126,9 @@ def main():
     parser.add_argument("--run-id", required=True, type=int, help="Workflow run ID")
     parser.add_argument("--chat-id", required=True, help="Telegram chat ID")
     parser.add_argument("--thread-id", help="Telegram thread/topic ID")
-    parser.add_argument("--poll-interval", type=int, default=30, help="Poll interval in seconds")
+    parser.add_argument(
+        "--poll-interval", type=int, default=30, help="Poll interval in seconds"
+    )
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -140,7 +142,9 @@ def main():
         sys.exit(1)
 
     print(f"[ci_pingback] Monitoring {args.repo}/actions/runs/{args.run_id}...")
-    print(f"[ci_pingback] Polling every {args.poll_interval}s, will notify chat {args.chat_id}")
+    print(
+        f"[ci_pingback] Polling every {args.poll_interval}s, will notify chat {args.chat_id}"
+    )
 
     last_status = None
 

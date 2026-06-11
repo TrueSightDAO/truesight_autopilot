@@ -29,7 +29,10 @@ def list_directory(dir_path: str) -> dict[str, Any]:
     """
     # Sanitize: reject paths with ".." to prevent directory traversal
     if ".." in dir_path.split(os.sep):
-        return {"status": "error", "message": "Path traversal detected: '..' is not allowed."}
+        return {
+            "status": "error",
+            "message": "Path traversal detected: '..' is not allowed.",
+        }
 
     p = Path(dir_path)
 
@@ -93,7 +96,10 @@ def read_local_file(file_path: str) -> dict[str, Any]:
     """
     # Sanitize: reject paths with ".." to prevent directory traversal
     if ".." in file_path.split(os.sep):
-        return {"status": "error", "message": "Path traversal detected: '..' is not allowed."}
+        return {
+            "status": "error",
+            "message": "Path traversal detected: '..' is not allowed.",
+        }
 
     p = Path(file_path)
     if not p.exists():
@@ -105,7 +111,10 @@ def read_local_file(file_path: str) -> dict[str, Any]:
     try:
         chunk = p.read_bytes()[:8192]
         if b"\x00" in chunk:
-            return {"status": "error", "message": "Binary file detected — use list_directory instead"}
+            return {
+                "status": "error",
+                "message": "Binary file detected — use list_directory instead",
+            }
     except Exception as e:
         return {"status": "error", "message": f"Error reading file: {e}"}
 
@@ -137,19 +146,30 @@ TOOL_SPECS = [
         description="List files in a local directory on the server.",
         parameters={
             "type": "object",
-            "properties": {"dir_path": {"type": "string", "description": "Full path to the directory."}},
+            "properties": {
+                "dir_path": {
+                    "type": "string",
+                    "description": "Full path to the directory.",
+                }
+            },
             "required": ["dir_path"],
         },
-        handler=lambda args, ctx: _json.dumps(list_directory(args.get("dir_path", "")), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            list_directory(args.get("dir_path", "")), indent=2
+        ),
     ),
     ToolSpec(
         name="read_local_file",
         description="Read a local text file from the server filesystem.",
         parameters={
             "type": "object",
-            "properties": {"file_path": {"type": "string", "description": "Full path to the file."}},
+            "properties": {
+                "file_path": {"type": "string", "description": "Full path to the file."}
+            },
             "required": ["file_path"],
         },
-        handler=lambda args, ctx: _json.dumps(read_local_file(args.get("file_path", "")), indent=2),
+        handler=lambda args, ctx: _json.dumps(
+            read_local_file(args.get("file_path", "")), indent=2
+        ),
     ),
 ]

@@ -110,7 +110,14 @@ def http_fetch(
             echoed = {
                 k: v
                 for k, v in resp.headers.items()
-                if k.lower() in {"content-type", "content-length", "location", "etag", "x-ratelimit-remaining"}
+                if k.lower()
+                in {
+                    "content-type",
+                    "content-length",
+                    "location",
+                    "etag",
+                    "x-ratelimit-remaining",
+                }
             }
     except httpx.HTTPError as e:
         logger.warning("http_fetch network error: %s", e)
@@ -160,7 +167,11 @@ TOOL_SPEC = ToolSpec(
                 "description": "Optional request body. Dicts/lists are JSON-serialised with Content-Type: application/json. Strings sent as-is."
             },
             "headers": {"type": "object", "description": "Optional request headers."},
-            "timeout": {"type": "number", "description": "Timeout in seconds (default 30, max 60).", "default": 30},
+            "timeout": {
+                "type": "number",
+                "description": "Timeout in seconds (default 30, max 60).",
+                "default": 30,
+            },
         },
         "required": ["url"],
     },

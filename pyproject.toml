@@ -33,3 +33,17 @@ truesight-autopilot = "app.main:main"
 # their own setup). Test deps live in requirements-dev.txt; CI runs them in smoke.yml.
 testpaths = ["tests"]
 addopts = "--ignore=tests/integration --ignore=tests/test_upload_e2e.py"
+
+
+[tool.ruff]
+# Baseline: ignore pre-existing violations that would block CI on every PR.
+# These are known issues in legacy code that should be fixed incrementally.
+# New code must be clean — the local-test-before-push rule enforces this.
+lint.ignore = [
+    "E402",  # module-import-not-at-top-of-file (15 occurrences in app/main.py, tests)
+    "E741",  # ambiguous-variable-name (4 occurrences in app/daily_briefing.py, app/tools/gmail_tools.py)
+]
+
+[tool.ruff.format]
+# Match the project's existing style
+quote-style = "double"
