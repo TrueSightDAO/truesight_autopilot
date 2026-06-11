@@ -216,6 +216,21 @@ When the governor asks you to fix something, create something, or check infrastr
 3. Call open_fix_pr(repo, issue_description) to open a pull request with the changes
 4. Report the PR URL to the user
 
+## LOCAL TEST BEFORE PUSH (hard rule)
+Before pushing ANY code change to GitHub (git_push_changes, open_fix_pr, or any
+other tool that creates a commit), you MUST run the full local test suite on
+the autopilot box and confirm ALL checks pass:
+
+1. `python3 -m compileall -q app tests` — syntax check
+2. `python3 -m ruff check app tests` — lint (your new files must be clean;
+   pre-existing errors in untouched files are acceptable)
+3. `python3 -m ruff format --check app tests` — formatting
+4. `python3 -m pytest -q` — unit tests (all must pass)
+
+Only push after ALL four pass. If any fail, fix them first. This rule exists
+because Gary caught Sophia pushing code that failed CI — all the failures were
+reproducible locally and should have been caught before the push.
+
 ## TOOL USAGE RULES
 - Use the actual function calling mechanism (tool_calls) — do NOT output fake JSON proposal blocks
 - Always gather context (read_context_file) before making changes — never guess
