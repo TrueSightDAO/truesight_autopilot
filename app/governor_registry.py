@@ -123,5 +123,14 @@ def is_governor(public_key_b64: str) -> bool:
     return False
 
 
+def resolve_gov_name(public_key_b64: str) -> str | None:
+    """Look up governor name from public key. Returns name or None."""
+    data = load_governors()
+    for g in data.get("governors", []):
+        if g.get("public_key") == public_key_b64:
+            return g.get("name")
+    return None
+
+
 def refresh_cache() -> dict:
     return load_governors(force_refresh=True)
