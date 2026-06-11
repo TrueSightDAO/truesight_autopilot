@@ -1,4 +1,5 @@
 """Context ingestion: build the system prompt from agentic_ai_context and related docs."""
+
 from __future__ import annotations
 
 import contextlib
@@ -61,6 +62,7 @@ def context_write_lock():
     """Exclusive cross-process lock: held only around the in-place
     `git reset --hard` so no reader (any thread, any worker) sees a torn tree."""
     return _context_lock(exclusive=True)
+
 
 CANONICAL_CONTEXT_FILES: list[str] = [
     "OPERATING_INSTRUCTIONS.md",
@@ -301,9 +303,10 @@ _CONTEXT_SYNC_REPOS = ("agentic_ai_context", "tokenomics")
 def _origin_default_branch(repo_dir: Path) -> str:
     try:
         r = subprocess.run(
-            ["git", "-C", str(repo_dir), "symbolic-ref", "--quiet", "--short",
-             "refs/remotes/origin/HEAD"],
-            capture_output=True, text=True, timeout=30,
+            ["git", "-C", str(repo_dir), "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip().rsplit("/", 1)[-1]
@@ -331,7 +334,9 @@ def refresh_context_repos() -> dict[str, str]:
             # blocks get_context_file / search_context.
             subprocess.run(
                 ["git", "-C", str(repo_dir), "fetch", "--quiet", "origin"],
-                check=True, capture_output=True, timeout=120,
+                check=True,
+                capture_output=True,
+                timeout=120,
             )
             branch = _origin_default_branch(repo_dir)
             # reset --hard mutates the working tree in place → take the exclusive
@@ -340,7 +345,9 @@ def refresh_context_repos() -> dict[str, str]:
             with context_write_lock():
                 subprocess.run(
                     ["git", "-C", str(repo_dir), "reset", "--hard", f"origin/{branch}"],
-                    check=True, capture_output=True, timeout=60,
+                    check=True,
+                    capture_output=True,
+                    timeout=60,
                 )
             results[name] = "ok"
         except Exception as e:  # noqa: BLE001 — best-effort sync, never crash caller
@@ -356,6 +363,7 @@ def build_system_prompt() -> str:
     so she never hallucinates her own location.
     """
     from .host_identity import host_identity_block
+
     return f"{_SYSTEM_PROMPT_HEADER}\n{host_identity_block()}"
 
 

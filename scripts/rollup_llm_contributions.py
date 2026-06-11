@@ -8,6 +8,7 @@ contributor per day.
 Usage:
     python3 scripts/rollup_llm_contributions.py [--date YYYY-MM-DD] [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -99,6 +100,7 @@ def submit_contribution(contributor: str, amount_usd: float, date_str: str, dry_
 
     try:
         from truesight_dao_client.edgar_client import EdgarClient
+
         from app.config import settings
 
         client = EdgarClient(
@@ -135,7 +137,7 @@ def main():
         return
 
     ok_all = True
-    for provider, contributors in grouped.items():
+    for _provider, contributors in grouped.items():
         for name, total in contributors.items():
             ok = submit_contribution(name, total, args.date, args.dry_run)
             if not ok:

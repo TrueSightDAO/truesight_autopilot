@@ -28,6 +28,7 @@ Runtime requirements (autopilot host) — all provisioned automatically by
 If any of those aren't ready, the tool surfaces the failure verbatim
 rather than masking it — so the operator can react.
 """
+
 from __future__ import annotations
 
 import json
@@ -160,7 +161,10 @@ def gas_deploy_project(
     }
     logger.info(
         "gas_deploy_project: script_id=%s push=%s with_hooks=%s exit=%d",
-        script_id, push, with_hooks, result.returncode,
+        script_id,
+        push,
+        with_hooks,
+        result.returncode,
     )
     return json.dumps(payload)
 

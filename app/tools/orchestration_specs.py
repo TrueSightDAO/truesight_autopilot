@@ -6,6 +6,7 @@ that the generic registry handler signature doesn't carry yet. Until a future
 PR migrates them with a uniform context-dict pattern, this module just
 publishes their JSON schemas so the LLM sees them and role-gating works.
 """
+
 from __future__ import annotations
 
 from ..config import settings
@@ -23,7 +24,10 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "repo": {"type": "string", "description": f"Repo name under TrueSightDAO. Allowed: {_ALLOWED_CHAT_REPOS}"},
+                "repo": {
+                    "type": "string",
+                    "description": f"Repo name under TrueSightDAO. Allowed: {_ALLOWED_CHAT_REPOS}",
+                },
                 "issue_description": {"type": "string", "description": "Description of the issue to fix."},
             },
             "required": ["repo", "issue_description"],

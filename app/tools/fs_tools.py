@@ -2,6 +2,7 @@
 
 Provides tools to discover and inspect files on the local server filesystem.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,23 +44,27 @@ def list_directory(dir_path: str) -> dict[str, Any]:
         for entry in p.iterdir():
             try:
                 stat = entry.stat()
-                entries.append({
-                    "name": entry.name,
-                    "path": str(entry.resolve()),
-                    "size": stat.st_size,
-                    "is_dir": entry.is_dir(),
-                    "ext": entry.suffix.lower() if not entry.is_dir() else "",
-                })
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry.resolve()),
+                        "size": stat.st_size,
+                        "is_dir": entry.is_dir(),
+                        "ext": entry.suffix.lower() if not entry.is_dir() else "",
+                    }
+                )
             except (OSError, PermissionError) as e:
                 # Skip entries we can't stat (permission denied, broken symlinks, etc.)
-                entries.append({
-                    "name": entry.name,
-                    "path": str(entry.resolve()),
-                    "size": 0,
-                    "is_dir": False,
-                    "ext": "",
-                    "error": str(e),
-                })
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry.resolve()),
+                        "size": 0,
+                        "is_dir": False,
+                        "ext": "",
+                        "error": str(e),
+                    }
+                )
 
         # Sort: directories first, then by name
         entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
@@ -99,7 +104,7 @@ def read_local_file(file_path: str) -> dict[str, Any]:
     # Reject binary files (check first 8KB for null bytes)
     try:
         chunk = p.read_bytes()[:8192]
-        if b'\x00' in chunk:
+        if b"\x00" in chunk:
             return {"status": "error", "message": "Binary file detected — use list_directory instead"}
     except Exception as e:
         return {"status": "error", "message": f"Error reading file: {e}"}
@@ -123,6 +128,7 @@ def read_local_file(file_path: str) -> dict[str, Any]:
 # ── capability manifest entries ───────────────────────────────────────────
 
 import json as _json  # noqa: E402
+
 from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPECS = [

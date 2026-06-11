@@ -10,6 +10,7 @@ Model naming follows litellm's convention:
     anthropic/claude-sonnet-4-20250514  →  Claude
     openai/gpt-4o            →  OpenAI
 """
+
 from __future__ import annotations
 
 import logging
@@ -95,14 +96,16 @@ class LiteLLMProvider(LLMProvider):
         tool_calls: list[dict[str, Any]] = []
         if message.tool_calls:
             for tc in message.tool_calls:
-                tool_calls.append({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                )
 
         usage = LLMUsage(
             prompt_tokens=resp.usage.prompt_tokens if resp.usage else 0,

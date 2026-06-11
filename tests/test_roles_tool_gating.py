@@ -4,6 +4,7 @@ Past incidents: the infrastructure role exposed `open_fix_pr` but not
 `merge_pr`, so when a governor told autopilot to merge a PR the model had no
 way to do it and hallucinated excuses ("no github token on this server").
 """
+
 from __future__ import annotations
 
 from app.roles import ROLES, get_tool_schemas_for_role
@@ -30,8 +31,13 @@ def test_general_role_gets_all_tools():
     # Empty tools list = all tools (see get_tool_schemas_for_role).
     names = _tool_names(ROLES["general"])
     for required in (
-        "merge_pr", "open_fix_pr", "aws_query",
-        "read_google_sheet", "gmail_search", "gmail_send", "generate_pdf",
+        "merge_pr",
+        "open_fix_pr",
+        "aws_query",
+        "read_google_sheet",
+        "gmail_search",
+        "gmail_send",
+        "generate_pdf",
     ):
         assert required in names, f"general role should expose {required}"
 

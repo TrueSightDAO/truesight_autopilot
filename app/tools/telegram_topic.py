@@ -19,6 +19,7 @@ chat_id resolution (in order):
   3. ``settings.telegram_home_group_id`` (the configured working group) — this
      is what the off-Telegram ``/chat`` handoff trigger relies on.
 """
+
 from __future__ import annotations
 
 import json
@@ -54,9 +55,9 @@ def _deep_link(chat_id: str, thread_id: int) -> str:
     return ""
 
 
-def create_telegram_topic(name: str, kickoff_message: str = "",
-                          chat_id: str | None = None,
-                          session_id: str | None = None) -> dict:
+def create_telegram_topic(
+    name: str, kickoff_message: str = "", chat_id: str | None = None, session_id: str | None = None
+) -> dict:
     name = (name or "").strip()
     if not name:
         return {"status": "error", "reason": "topic name is required"}
@@ -64,33 +65,42 @@ def create_telegram_topic(name: str, kickoff_message: str = "",
     if not token:
         return {"status": "error", "reason": "TELEGRAM_BOT_API_KEY not configured on this box"}
 
-    target = (chat_id or _chat_id_from_session(session_id)
-              or (str(settings.telegram_home_group_id) if settings.telegram_home_group_id else None))
+    target = (
+        chat_id
+        or _chat_id_from_session(session_id)
+        or (str(settings.telegram_home_group_id) if settings.telegram_home_group_id else None)
+    )
     if not target:
-        return {"status": "error",
-                "reason": "no target group — not in a Telegram topic session and "
-                          "TELEGRAM_HOME_GROUP_ID is unset. Set the working group id or pass chat_id."}
+        return {
+            "status": "error",
+            "reason": "no target group — not in a Telegram topic session and "
+            "TELEGRAM_HOME_GROUP_ID is unset. Set the working group id or pass chat_id.",
+        }
 
     try:
-        r = httpx.post(f"{_API}/bot{token}/createForumTopic",
-                       json={"chat_id": target, "name": name[:128]}, timeout=_TIMEOUT)
+        r = httpx.post(
+            f"{_API}/bot{token}/createForumTopic", json={"chat_id": target, "name": name[:128]}, timeout=_TIMEOUT
+        )
         data = r.json()
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "reason": f"createForumTopic call failed: {e}"}
 
     if not data.get("ok"):
         desc = data.get("description", "unknown error")
-        hint = ("Ensure the group has Topics enabled AND Sophia's bot is a group "
-                "admin with the 'Manage Topics' permission.")
+        hint = (
+            "Ensure the group has Topics enabled AND Sophia's bot is a group admin with the 'Manage Topics' permission."
+        )
         return {"status": "error", "reason": f"Telegram: {desc}", "hint": hint, "chat_id": target}
 
     thread_id = data["result"]["message_thread_id"]
     posted = False
     if kickoff_message.strip():
         try:
-            pr = httpx.post(f"{_API}/bot{token}/sendMessage",
-                            json={"chat_id": target, "message_thread_id": thread_id,
-                                  "text": kickoff_message}, timeout=_TIMEOUT)
+            pr = httpx.post(
+                f"{_API}/bot{token}/sendMessage",
+                json={"chat_id": target, "message_thread_id": thread_id, "text": kickoff_message},
+                timeout=_TIMEOUT,
+            )
             posted = bool(pr.json().get("ok"))
         except Exception as e:  # noqa: BLE001
             logger.warning("kickoff sendMessage failed: %s", e)
@@ -124,15 +134,21 @@ TOOL_SPEC = ToolSpec(
         "properties": {
             "name": {"type": "string", "description": "Topic title (e.g. 'Exec: warm-up auto-send')."},
             "kickoff_message": {"type": "string", "description": "Optional first message to post in the new topic."},
-            "chat_id": {"type": "string", "description": "Optional explicit group chat id; defaults to current group / configured working group."},
+            "chat_id": {
+                "type": "string",
+                "description": "Optional explicit group chat id; defaults to current group / configured working group.",
+            },
         },
         "required": ["name"],
     },
-    handler=lambda args, ctx: json.dumps(create_telegram_topic(
-        name=args.get("name", ""),
-        kickoff_message=args.get("kickoff_message", ""),
-        chat_id=args.get("chat_id"),
-        session_id=ctx.get("session_id"),
-    ), indent=2),
+    handler=lambda args, ctx: json.dumps(
+        create_telegram_topic(
+            name=args.get("name", ""),
+            kickoff_message=args.get("kickoff_message", ""),
+            chat_id=args.get("chat_id"),
+            session_id=ctx.get("session_id"),
+        ),
+        indent=2,
+    ),
     default_roles=None,  # uniform — any role a governor is in can hand off
 )

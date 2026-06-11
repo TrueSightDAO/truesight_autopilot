@@ -1,4 +1,5 @@
 """Unit tests for the Gmail tools (Gmail API mocked)."""
+
 from __future__ import annotations
 
 import base64
@@ -18,14 +19,18 @@ def _reset_env(monkeypatch, tmp_path):
 
 
 def _write_token(tmp_path, account: str):
-    (tmp_path / f"{account}_token.json").write_text(json.dumps({
-        "token": "ya29.fake",
-        "refresh_token": "1//fake",
-        "client_id": "id",
-        "client_secret": "secret",
-        "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }))
+    (tmp_path / f"{account}_token.json").write_text(
+        json.dumps(
+            {
+                "token": "ya29.fake",
+                "refresh_token": "1//fake",
+                "client_id": "id",
+                "client_secret": "secret",
+                "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        )
+    )
 
 
 def test_credentials_missing_returns_error():
@@ -52,6 +57,7 @@ def test_search_happy_path(tmp_path):
     service.users.return_value.messages.return_value.list.return_value.execute.return_value = {
         "messages": [{"id": "m1"}, {"id": "m2"}],
     }
+
     def fake_get(userId, id, format, metadataHeaders=None):
         exec_mock = MagicMock()
         exec_mock.execute.return_value = {
@@ -59,13 +65,16 @@ def test_search_happy_path(tmp_path):
             "threadId": f"t-{id}",
             "snippet": f"snippet-{id}",
             "labelIds": ["INBOX"],
-            "payload": {"headers": [
-                {"name": "From", "value": "a@b.com"},
-                {"name": "Subject", "value": f"Subj {id}"},
-                {"name": "Date", "value": "Thu, 28 May 2026 00:00:00 +0000"},
-            ]},
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "a@b.com"},
+                    {"name": "Subject", "value": f"Subj {id}"},
+                    {"name": "Date", "value": "Thu, 28 May 2026 00:00:00 +0000"},
+                ]
+            },
         }
         return exec_mock
+
     service.users.return_value.messages.return_value.get.side_effect = fake_get
 
     with patch.object(gt, "_build_service", return_value=(service, None)):
@@ -112,18 +121,25 @@ def test_send_builds_raw_payload(tmp_path):
     _write_token(tmp_path, "admin")
     service = _mock_service()
     captured = {}
+
     def capture_send(userId, body):
         captured["body"] = body
         exec_mock = MagicMock()
         exec_mock.execute.return_value = {"id": "sent-1", "threadId": "t1", "labelIds": ["SENT"]}
         return exec_mock
+
     service.users.return_value.messages.return_value.send.side_effect = capture_send
 
     with patch.object(gt, "_build_service", return_value=(service, None)):
-        out = json.loads(gt.gmail_send(
-            to="p@q.com", subject="Re: hi", body="Hello\nthere.",
-            account="admin", cc="r@q.com",
-        ))
+        out = json.loads(
+            gt.gmail_send(
+                to="p@q.com",
+                subject="Re: hi",
+                body="Hello\nthere.",
+                account="admin",
+                cc="r@q.com",
+            )
+        )
 
     assert out["status"] == "ok"
     assert out["id"] == "sent-1"
@@ -144,9 +160,14 @@ def test_create_draft_uses_drafts_create(tmp_path):
     }
 
     with patch.object(gt, "_build_service", return_value=(service, None)):
-        out = json.loads(gt.gmail_create_draft(
-            to="p@q.com", subject="draft test", body="body", account="admin",
-        ))
+        out = json.loads(
+            gt.gmail_create_draft(
+                to="p@q.com",
+                subject="draft test",
+                body="body",
+                account="admin",
+            )
+        )
 
     assert out["status"] == "ok"
     assert out["draft_id"] == "d1"
@@ -169,12 +190,19 @@ def test_resolve_account_uses_default_env(monkeypatch):
 def test_legacy_env_fallback_for_admin(monkeypatch, tmp_path):
     monkeypatch.setenv("GMAIL_TOKENS_DIR", str(tmp_path))
     # No admin_token.json on disk — should fall back to env var.
-    monkeypatch.setenv("GMAIL_TOKEN_JSON", json.dumps({
-        "token": "ya29.fake", "refresh_token": "1//fake",
-        "client_id": "id", "client_secret": "secret",
-        "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }))
+    monkeypatch.setenv(
+        "GMAIL_TOKEN_JSON",
+        json.dumps(
+            {
+                "token": "ya29.fake",
+                "refresh_token": "1//fake",
+                "client_id": "id",
+                "client_secret": "secret",
+                "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        ),
+    )
     data = gt._token_data("admin")
     assert data is not None
     assert data["client_id"] == "id"

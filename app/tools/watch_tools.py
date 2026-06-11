@@ -7,6 +7,7 @@ launches a detached ``app.watch_runner`` process that polls the op and posts bac
 to *this* Telegram topic when it finishes. ONLY after calling one of these may she
 truthfully say "I'll let you know when it's done."
 """
+
 from __future__ import annotations
 
 import json
@@ -39,16 +40,17 @@ def _launch(argv: list[str]) -> None:
     inherits the service env (AWS creds + TELEGRAM_BOT_API_KEY)."""
     subprocess.Popen(  # noqa: S603 — fixed argv, operator-trusted
         [sys.executable, "-m", "app.watch_runner", *argv],
-        cwd=_REPO_ROOT, start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=_REPO_ROOT,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 
 def watch_aws_resource(args: dict, ctx: dict) -> str:
     chat_id, thread_id = _chat_thread_from_session(ctx.get("session_id"))
     if chat_id is None:
-        return json.dumps({"status": "error",
-                           "reason": "watch_aws_resource only works inside a Telegram topic."})
+        return json.dumps({"status": "error", "reason": "watch_aws_resource only works inside a Telegram topic."})
     kind = args.get("resource_kind", "")
     rid = args.get("resource_id", "")
     account = args.get("account", "")
@@ -59,45 +61,76 @@ def watch_aws_resource(args: dict, ctx: dict) -> str:
     label = args.get("label") or f"{kind} {rid}"
     interval = int(args.get("interval_seconds", 30))
     timeout = int(args.get("timeout_seconds", 3600))
-    argv = ["--kind", kind, "--resource-id", rid, "--account", account,
-            "--chat-id", chat_id, "--label", label,
-            "--interval", str(interval), "--timeout", str(timeout)]
+    argv = [
+        "--kind",
+        kind,
+        "--resource-id",
+        rid,
+        "--account",
+        account,
+        "--chat-id",
+        chat_id,
+        "--label",
+        label,
+        "--interval",
+        str(interval),
+        "--timeout",
+        str(timeout),
+    ]
     if args.get("region"):
         argv += ["--region", args["region"]]
     if thread_id is not None:
         argv += ["--thread-id", thread_id]
     _launch(argv)
-    return json.dumps({
-        "status": "watching", "resource": rid,
-        "message": f"👁 Watching {label} ({rid}). I'll post here as soon as it's done "
-                   f"(checking every {interval}s, up to {round(timeout/60)}m).",
-    })
+    return json.dumps(
+        {
+            "status": "watching",
+            "resource": rid,
+            "message": f"👁 Watching {label} ({rid}). I'll post here as soon as it's done "
+            f"(checking every {interval}s, up to {round(timeout / 60)}m).",
+        }
+    )
 
 
 def watch_url(args: dict, ctx: dict) -> str:
     chat_id, thread_id = _chat_thread_from_session(ctx.get("session_id"))
     if chat_id is None:
-        return json.dumps({"status": "error",
-                           "reason": "watch_url only works inside a Telegram topic."})
+        return json.dumps({"status": "error", "reason": "watch_url only works inside a Telegram topic."})
     url = args.get("url", "")
     if not url:
         return json.dumps({"status": "error", "reason": "url is required."})
     label = args.get("label") or url
     interval = int(args.get("interval_seconds", 30))
     timeout = int(args.get("timeout_seconds", 1800))
-    argv = ["--kind", "http", "--url", url, "--chat-id", chat_id, "--label", label,
-            "--expect-status", str(int(args.get("expect_status", 200))),
-            "--interval", str(interval), "--timeout", str(timeout)]
+    argv = [
+        "--kind",
+        "http",
+        "--url",
+        url,
+        "--chat-id",
+        chat_id,
+        "--label",
+        label,
+        "--expect-status",
+        str(int(args.get("expect_status", 200))),
+        "--interval",
+        str(interval),
+        "--timeout",
+        str(timeout),
+    ]
     if args.get("expect_substring"):
         argv += ["--expect-substring", args["expect_substring"]]
     if thread_id is not None:
         argv += ["--thread-id", thread_id]
     _launch(argv)
-    return json.dumps({
-        "status": "watching", "url": url,
-        "message": f"👁 Watching {label}. I'll post here when it returns "
-                   f"{int(args.get('expect_status', 200))} (checking every {interval}s).",
-    })
+    return json.dumps(
+        {
+            "status": "watching",
+            "url": url,
+            "message": f"👁 Watching {label}. I'll post here when it returns "
+            f"{int(args.get('expect_status', 200))} (checking every {interval}s).",
+        }
+    )
 
 
 from ..tool_registry import ToolSpec  # noqa: E402
@@ -117,14 +150,24 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "resource_kind": {"type": "string", "enum": sorted(AWS_KINDS),
-                                  "description": "ami (snapshot bake), snapshot, instance_running (boot), volume."},
+                "resource_kind": {
+                    "type": "string",
+                    "enum": sorted(AWS_KINDS),
+                    "description": "ami (snapshot bake), snapshot, instance_running (boot), volume.",
+                },
                 "resource_id": {"type": "string", "description": "e.g. ami-…, snap-…, i-…, vol-…"},
                 "account": {"type": "string", "enum": ["explorya", "nelanco"], "description": "AWS account label."},
                 "region": {"type": "string", "description": "Override the account default region (e.g. us-east-1)."},
-                "label": {"type": "string", "description": "Human label for the notification, e.g. 'getdata-cache AMI'."},
+                "label": {
+                    "type": "string",
+                    "description": "Human label for the notification, e.g. 'getdata-cache AMI'.",
+                },
                 "interval_seconds": {"type": "integer", "default": 30, "description": "Poll interval."},
-                "timeout_seconds": {"type": "integer", "default": 3600, "description": "Give up + report after this long."},
+                "timeout_seconds": {
+                    "type": "integer",
+                    "default": 3600,
+                    "description": "Give up + report after this long.",
+                },
             },
             "required": ["resource_kind", "resource_id", "account"],
         },

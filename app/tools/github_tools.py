@@ -1,4 +1,5 @@
 """GitHub API tools for reading code from TrueSightDAO repos."""
+
 from __future__ import annotations
 
 import base64
@@ -32,8 +33,7 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
             return {
                 "type": "directory",
                 "entries": [
-                    {"name": item.get("name"), "type": item.get("type"), "path": item.get("path")}
-                    for item in data
+                    {"name": item.get("name"), "type": item.get("type"), "path": item.get("path")} for item in data
                 ],
                 "url": str(resp.url),
             }
@@ -103,16 +103,30 @@ def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
 
 from ..tool_registry import ToolSpec  # noqa: E402
 
-_ALLOWED_CHAT_REPOS = ", ".join([
-    "dapp_beta", "dapp_prod", "tokenomics", "truesight_me", "truesight_me_prod",
-    "agroverse_shop", "agroverse_shop_prod", "dao_client",
-    "market_research", "sentiment_importer", "truesight_autopilot",
-    ".github", "agentic_ai_context", "agroverse-inventory", "dao_protocol",
-])
+_ALLOWED_CHAT_REPOS = ", ".join(
+    [
+        "dapp_beta",
+        "dapp_prod",
+        "tokenomics",
+        "truesight_me",
+        "truesight_me_prod",
+        "agroverse_shop",
+        "agroverse_shop_prod",
+        "dao_client",
+        "market_research",
+        "sentiment_importer",
+        "truesight_autopilot",
+        ".github",
+        "agentic_ai_context",
+        "agroverse-inventory",
+        "dao_protocol",
+    ]
+)
 
 
 def _list_org_repos_handler(args: dict, ctx: dict) -> str:
     from ..github_client import GitHubClient
+
     gh = GitHubClient()
     repos = gh.list_org_repos()
     if not repos:
@@ -123,6 +137,7 @@ def _list_org_repos_handler(args: dict, ctx: dict) -> str:
 
 def _read_context_file_handler(args: dict, ctx: dict) -> str:
     from ..context import get_context_file
+
     result = get_context_file(args.get("path", ""))
     return result if result else "File not found."
 
@@ -132,15 +147,15 @@ def _read_repo_file_handler(args: dict, ctx: dict) -> str:
     if result.get("type") == "file":
         return result["content"]
     if result.get("type") == "directory":
-        return "Directory listing:\n" + "\n".join(
-            f"- {e['name']} ({e['type']})" for e in result.get("entries", [])
-        )
+        return "Directory listing:\n" + "\n".join(f"- {e['name']} ({e['type']})" for e in result.get("entries", []))
     return f"Error: {result.get('error', 'unknown')}"
 
 
 def _list_prs_handler(args: dict, ctx: dict) -> str:
     import json as _json
+
     from ..github_client import GitHubClient
+
     gh = GitHubClient()
     repo_name = args.get("repo", "")
     state = args.get("state", "all")
@@ -152,6 +167,7 @@ def _list_prs_handler(args: dict, ctx: dict) -> str:
 def _merge_pr_handler(args: dict, ctx: dict) -> str:
     from ..config import settings
     from ..github_client import GitHubClient
+
     repo_name = args.get("repo", "")
     pr_number = args.get("pr_number", 0)
     merge_method = args.get("merge_method", "squash")
@@ -165,10 +181,7 @@ def _merge_pr_handler(args: dict, ctx: dict) -> str:
             "not PR merges on prod."
         )
     if repo_name in settings.api_only_repos:
-        return (
-            f"Refused: '{repo_name}' is an API-only data repo (machine-owned); "
-            "agents do not merge PRs there."
-        )
+        return f"Refused: '{repo_name}' is an API-only data repo (machine-owned); agents do not merge PRs there."
     if not pr_number:
         return "Error: pr_number is required."
     gh = GitHubClient()
@@ -180,8 +193,10 @@ def _merge_pr_handler(args: dict, ctx: dict) -> str:
 
 def _mark_pr_ready_handler(args: dict, ctx: dict) -> str:
     import json as _json
+
     from ..config import settings
     from ..github_client import GitHubClient
+
     repo_name = args.get("repo", "")
     pr_number = args.get("pr_number", 0)
     if repo_name not in settings.allowed_repos:
@@ -195,6 +210,7 @@ def _mark_pr_ready_handler(args: dict, ctx: dict) -> str:
 
 def _search_code_handler(args: dict, ctx: dict) -> str:
     import json as _json
+
     result = search_codebase(args.get("repo") or None, args.get("query", ""))
     return _json.dumps(result, indent=2)
 
@@ -230,7 +246,12 @@ TOOL_SPECS = [
         description="Read a file from the agentic_ai_context repository.",
         parameters={
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Relative path inside agentic_ai_context, e.g. 'WORKSPACE_CONTEXT.md'"}},
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path inside agentic_ai_context, e.g. 'WORKSPACE_CONTEXT.md'",
+                }
+            },
             "required": ["path"],
         },
         handler=_read_context_file_handler,
@@ -241,7 +262,10 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "repo": {"type": "string", "description": f"GitHub repo name under TrueSightDAO. Allowed: {_ALLOWED_CHAT_REPOS}"},
+                "repo": {
+                    "type": "string",
+                    "description": f"GitHub repo name under TrueSightDAO. Allowed: {_ALLOWED_CHAT_REPOS}",
+                },
                 "path": {"type": "string", "description": "File path in the repo."},
                 "ref": {"type": "string", "description": "Branch or commit. Default: main", "default": "main"},
             },
@@ -256,7 +280,12 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
-                "state": {"type": "string", "description": "open, closed, or all.", "enum": ["open", "closed", "all"], "default": "all"},
+                "state": {
+                    "type": "string",
+                    "description": "open, closed, or all.",
+                    "enum": ["open", "closed", "all"],
+                    "default": "all",
+                },
                 "limit": {"type": "integer", "description": "Max PRs to return.", "default": 20},
             },
             "required": ["repo"],
@@ -271,7 +300,12 @@ TOOL_SPECS = [
             "properties": {
                 "repo": {"type": "string", "description": "Repo name under TrueSightDAO."},
                 "pr_number": {"type": "integer", "description": "The pull request number to merge."},
-                "merge_method": {"type": "string", "description": "squash (default), merge, or rebase.", "enum": ["squash", "merge", "rebase"], "default": "squash"},
+                "merge_method": {
+                    "type": "string",
+                    "description": "squash (default), merge, or rebase.",
+                    "enum": ["squash", "merge", "rebase"],
+                    "default": "squash",
+                },
             },
             "required": ["repo", "pr_number"],
         },

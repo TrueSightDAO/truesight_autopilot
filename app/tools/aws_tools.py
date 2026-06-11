@@ -19,6 +19,7 @@ confirm_write=False)``.
 The boto3 response is JSON-serialised with ``datetime`` → ISO-8601 and bytes
 → base64 so the model can consume it.
 """
+
 from __future__ import annotations
 
 import base64
@@ -35,8 +36,16 @@ logger = logging.getLogger("autopilot.tools.aws_tools")
 # conventionally prefixes mutating ops with Create*/Delete*/Update*/Put*/
 # Run*/Terminate*/Start*/Stop*/etc., and read-only ops with these verbs.
 _READ_PREFIXES = (
-    "Describe", "Get", "List", "Search", "Filter", "Lookup", "Head", "Query",
-    "BatchGet", "Scan",  # Dynamo Scan is read-only despite the verb
+    "Describe",
+    "Get",
+    "List",
+    "Search",
+    "Filter",
+    "Lookup",
+    "Head",
+    "Query",
+    "BatchGet",
+    "Scan",  # Dynamo Scan is read-only despite the verb
     "Change",  # Route53 ChangeResourceRecordSets — grandfathered pre-write-gate
 )
 
@@ -49,7 +58,7 @@ _DENYLISTED_OPERATIONS = {
     "LeaveOrganization",
     "DeleteOrganization",
     "RemoveAccountFromOrganization",
-    "DeleteHostedZone",   # would take down a whole domain's DNS
+    "DeleteHostedZone",  # would take down a whole domain's DNS
 }
 
 
@@ -93,9 +102,9 @@ def aws_query(
 
     if service.lower() in _DENYLISTED_SERVICES or operation in _DENYLISTED_OPERATIONS:
         return _err(
-            "operation is denylisted — catastrophic/account-level mutations are "
-            "never allowed from this tool",
-            service=service, operation=operation,
+            "operation is denylisted — catastrophic/account-level mutations are never allowed from this tool",
+            service=service,
+            operation=operation,
         )
 
     if not _is_read_only(operation) and not confirm_write:
@@ -156,17 +165,23 @@ def aws_query(
         return _err(
             f"AWS ClientError: {e.response.get('Error', {}).get('Code', '?')}",
             message=str(e),
-            account=account, service=service, operation=operation,
+            account=account,
+            service=service,
+            operation=operation,
         )
     except BotoCoreError as e:
         return _err(
             f"AWS BotoCoreError: {e}",
-            account=account, service=service, operation=operation,
+            account=account,
+            service=service,
+            operation=operation,
         )
     except TypeError as e:
         return _err(
             f"bad parameters: {e}",
-            account=account, service=service, operation=operation,
+            account=account,
+            service=service,
+            operation=operation,
             received_keys=list(params.keys()),
         )
 
@@ -176,17 +191,23 @@ def aws_query(
 
     logger.info(
         "aws_query ok: account=%s service=%s op=%s region=%s",
-        account, service, operation, target_region,
+        account,
+        service,
+        operation,
+        target_region,
     )
-    return json.dumps({
-        "status": "ok",
-        "account": account.lower(),
-        "service": service,
-        "operation": operation,
-        "region": target_region,
-        "request_id": request_id,
-        "response": response,
-    }, default=_json_default)
+    return json.dumps(
+        {
+            "status": "ok",
+            "account": account.lower(),
+            "service": service,
+            "operation": operation,
+            "region": target_region,
+            "request_id": request_id,
+            "response": response,
+        },
+        default=_json_default,
+    )
 
 
 # ── capability manifest entry ─────────────────────────────────────────────
@@ -210,11 +231,21 @@ TOOL_SPEC = ToolSpec(
         "type": "object",
         "properties": {
             "account": {"type": "string", "description": "AWS account label.", "enum": ["explorya", "nelanco"]},
-            "service": {"type": "string", "description": "boto3 service name, e.g. 'ec2', 's3', 'logs', 'cloudwatch', 'ce'."},
-            "operation": {"type": "string", "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'RebootInstances'."},
+            "service": {
+                "type": "string",
+                "description": "boto3 service name, e.g. 'ec2', 's3', 'logs', 'cloudwatch', 'ce'.",
+            },
+            "operation": {
+                "type": "string",
+                "description": "PascalCase AWS API operation, e.g. 'DescribeInstances', 'ListBuckets', 'RebootInstances'.",
+            },
             "parameters": {"type": "object", "description": "Operation parameters as a JSON object."},
             "region": {"type": "string", "description": "Override the account's default region for this call."},
-            "confirm_write": {"type": "boolean", "description": "Required true for write-class (mutating) operations. Leave unset for reads.", "default": False},
+            "confirm_write": {
+                "type": "boolean",
+                "description": "Required true for write-class (mutating) operations. Leave unset for reads.",
+                "default": False,
+            },
         },
         "required": ["account", "service", "operation"],
     },

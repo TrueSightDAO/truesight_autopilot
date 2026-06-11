@@ -1,4 +1,5 @@
 """Tests for app.host_identity — location awareness block."""
+
 from app import host_identity
 
 
@@ -56,6 +57,7 @@ def test_ec2_detect_and_block(monkeypatch):
 def test_system_prompt_includes_host_block(monkeypatch):
     """build_system_prompt() embeds the live host block."""
     from app import context
+
     _fresh()
     monkeypatch.setattr(host_identity, "_imds_token", lambda: None)
     prompt = context.build_system_prompt()

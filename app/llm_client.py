@@ -3,6 +3,7 @@
 Backwards-compatible — same constructor, same return shapes, same methods.
 XML/DSML tool-call parsing now lives in DeepSeekProvider, not here.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,7 +39,7 @@ class LLMClient:
         **extra: Any,
     ) -> dict[str, Any]:
         """Send a chat completion. Returns dict matching the pre-Phase-2 shape.
-        
+
         Extra kwargs forwarded to the provider (caller, session_id, turn, round_num).
         """
         try:
@@ -57,15 +58,17 @@ class LLMClient:
 
         # Convert LLMResponse back to the legacy dict shape
         return {
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": resp.text,
-                    "tool_calls": resp.tool_calls,
-                },
-                "finish_reason": resp.finish_reason,
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": resp.text,
+                        "tool_calls": resp.tool_calls,
+                    },
+                    "finish_reason": resp.finish_reason,
+                }
+            ],
             "usage": {
                 "prompt_tokens": resp.usage.prompt_tokens,
                 "completion_tokens": resp.usage.completion_tokens,
@@ -93,9 +96,11 @@ class LLMClient:
         message = choices[0].get("message", {})
         content = message.get("content")
         if not content:
-            logger.warning("LLM response has empty content. Finish reason: %s. Message keys: %s",
-                           choices[0].get("finish_reason"),
-                           list(message.keys()))
+            logger.warning(
+                "LLM response has empty content. Finish reason: %s. Message keys: %s",
+                choices[0].get("finish_reason"),
+                list(message.keys()),
+            )
         return content or "(empty response)"
 
     def extract_tool_calls(self, completion: dict[str, Any]) -> list[dict[str, Any]]:
@@ -159,5 +164,5 @@ def get_tool_schemas() -> list[dict[str, Any]]:
     ``app/tool_registry.py`` + ``app/tools/README.md``.
     """
     from .tool_registry import discover_tools
-    return [spec.to_openai_schema() for spec in discover_tools()]
 
+    return [spec.to_openai_schema() for spec in discover_tools()]

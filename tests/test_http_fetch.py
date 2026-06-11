@@ -1,11 +1,11 @@
 """Unit tests for the http_fetch tool (httpx mocked)."""
+
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 from app.tools import http_fetch as hf
 
@@ -72,21 +72,25 @@ def test_json_body_auto_serialised(monkeypatch):
     captured = {}
 
     fake_client_ctx = MagicMock()
+
     def capture_request(method, url, headers=None, content=None):
         captured["method"] = method
         captured["url"] = url
         captured["headers"] = headers
         captured["content"] = content
         return fake_response
+
     fake_client_ctx.__enter__.return_value.request.side_effect = capture_request
     fake_client_ctx.__exit__.return_value = False
     monkeypatch.setattr(hf.httpx, "Client", lambda **kwargs: fake_client_ctx)
 
-    json.loads(hf.http_fetch(
-        "https://example.com/api",
-        method="POST",
-        body={"event": "ping"},
-    ))
+    json.loads(
+        hf.http_fetch(
+            "https://example.com/api",
+            method="POST",
+            body={"event": "ping"},
+        )
+    )
     assert captured["method"] == "POST"
     assert captured["content"] == '{"event": "ping"}'
     assert captured["headers"].get("Content-Type") == "application/json"

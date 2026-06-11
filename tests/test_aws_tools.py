@@ -1,29 +1,32 @@
 """Unit tests for aws_query — exercises the read-only allowlist + dispatch."""
+
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.tools import aws_tools
 
 
 def _stub_specs(label="explorya"):
-    return [{
-        "label": label,
-        "key_id": "AKIA-TEST",
-        "secret": "secret-test",
-        "region": "us-east-1",
-    }]
+    return [
+        {
+            "label": label,
+            "key_id": "AKIA-TEST",
+            "secret": "secret-test",
+            "region": "us-east-1",
+        }
+    ]
 
 
 def test_write_class_operation_requires_confirm_write(monkeypatch):
-    out = json.loads(aws_tools.aws_query(
-        account="explorya",
-        service="ec2",
-        operation="TerminateInstances",
-    ))
+    out = json.loads(
+        aws_tools.aws_query(
+            account="explorya",
+            service="ec2",
+            operation="TerminateInstances",
+        )
+    )
     assert out["status"] == "error"
     assert "confirm_write" in out["reason"]
 
@@ -38,46 +41,54 @@ def test_write_class_operation_dispatches_with_confirm_write(monkeypatch):
     fake_session.client.return_value = fake_client
 
     with patch("boto3.Session", return_value=fake_session):
-        out = json.loads(aws_tools.aws_query(
-            account="explorya",
-            service="ec2",
-            operation="RebootInstances",
-            parameters={"InstanceIds": ["i-1"]},
-            confirm_write=True,
-        ))
+        out = json.loads(
+            aws_tools.aws_query(
+                account="explorya",
+                service="ec2",
+                operation="RebootInstances",
+                parameters={"InstanceIds": ["i-1"]},
+                confirm_write=True,
+            )
+        )
 
     assert out["status"] == "ok"
     fake_client.reboot_instances.assert_called_once_with(InstanceIds=["i-1"])
 
 
 def test_denylisted_operation_blocked_even_with_confirm_write():
-    out = json.loads(aws_tools.aws_query(
-        account="explorya",
-        service="route53",
-        operation="DeleteHostedZone",
-        confirm_write=True,
-    ))
+    out = json.loads(
+        aws_tools.aws_query(
+            account="explorya",
+            service="route53",
+            operation="DeleteHostedZone",
+            confirm_write=True,
+        )
+    )
     assert out["status"] == "error"
     assert "denylisted" in out["reason"]
 
 
 def test_denylisted_service_blocked():
-    out = json.loads(aws_tools.aws_query(
-        account="explorya",
-        service="organizations",
-        operation="ListAccounts",  # even reads — org service has no SRE use
-    ))
+    out = json.loads(
+        aws_tools.aws_query(
+            account="explorya",
+            service="organizations",
+            operation="ListAccounts",  # even reads — org service has no SRE use
+        )
+    )
     assert out["status"] == "error"
     assert "denylisted" in out["reason"]
 
 
 def test_unknown_account_returns_error(monkeypatch):
     monkeypatch.setattr("app.aws_monitor.read_account_specs", lambda: _stub_specs())
-    out = json.loads(aws_tools.aws_query(
-        account="ghost-account",
-        service="ec2",
-        operation="DescribeInstances",
-    ))
+    out = json.loads(
+        aws_tools.aws_query(
+            account="ghost-account",
+            service="ec2",
+            operation="DescribeInstances",
+        )
+    )
     assert out["status"] == "error"
     assert "unknown AWS account" in out["reason"]
     assert "explorya" in out["available"]
@@ -95,11 +106,13 @@ def test_read_only_operation_dispatches(monkeypatch):
     fake_session.client.return_value = fake_client
 
     with patch("boto3.Session", return_value=fake_session):
-        out = json.loads(aws_tools.aws_query(
-            account="explorya",
-            service="ec2",
-            operation="DescribeInstances",
-        ))
+        out = json.loads(
+            aws_tools.aws_query(
+                account="explorya",
+                service="ec2",
+                operation="DescribeInstances",
+            )
+        )
 
     assert out["status"] == "ok"
     assert out["account"] == "explorya"
@@ -117,12 +130,14 @@ def test_parameters_passed_through(monkeypatch):
     fake_session.client.return_value = fake_client
 
     with patch("boto3.Session", return_value=fake_session):
-        out = json.loads(aws_tools.aws_query(
-            account="explorya",
-            service="s3",
-            operation="ListBuckets",
-            parameters={"MaxBuckets": 5},
-        ))
+        out = json.loads(
+            aws_tools.aws_query(
+                account="explorya",
+                service="s3",
+                operation="ListBuckets",
+                parameters={"MaxBuckets": 5},
+            )
+        )
 
     assert out["status"] == "ok"
     fake_client.list_buckets.assert_called_once_with(MaxBuckets=5)

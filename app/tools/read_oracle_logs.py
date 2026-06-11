@@ -1,9 +1,9 @@
 """Tool to read oracle draw logs from the oracle_logs repo."""
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 import httpx
 
@@ -56,12 +56,9 @@ def read_oracle_logs(date: str | None = None) -> str:
         if resp.status_code != 200:
             return json.dumps({"status": "error", "message": f"Draw not found: {date}"})
 
-        return json.dumps({
-            "status": "ok",
-            "date": date,
-            "content": resp.text,
-            "message": f"Oracle draw for {date} retrieved"
-        })
+        return json.dumps(
+            {"status": "ok", "date": date, "content": resp.text, "message": f"Oracle draw for {date} retrieved"}
+        )
 
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})
@@ -76,7 +73,13 @@ TOOL_SPEC = ToolSpec(
     description="Read oracle draw logs from TrueSightDAO/oracle_logs.",
     parameters={
         "type": "object",
-        "properties": {"date": {"type": "string", "description": "YYYY-MM-DD date, 'latest', or omit to list draws.", "default": "latest"}},
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": "YYYY-MM-DD date, 'latest', or omit to list draws.",
+                "default": "latest",
+            }
+        },
     },
     handler=lambda args, ctx: read_oracle_logs(date=args.get("date")),
 )

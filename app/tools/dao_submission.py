@@ -1,4 +1,5 @@
 """Phase 2 tool: programmatic DAO submission via Edgar."""
+
 from __future__ import annotations
 
 import os
@@ -6,8 +7,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
-from ..config import settings
 
 
 def submit_ai_agent_contribution(
@@ -69,7 +68,9 @@ def submit_ai_agent_contribution(
     if dry_run:
         cmd.append("--dry-run")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(dao_client_dir) if use_module else None)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, env=env, cwd=str(dao_client_dir) if use_module else None
+    )
 
     try:
         os.unlink(body_file)
@@ -101,7 +102,10 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "event_name": {"type": "string", "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT'."},
+                "event_name": {
+                    "type": "string",
+                    "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT'.",
+                },
                 "attributes": {"type": "object", "description": "Key-value pairs describing the event."},
             },
             "required": ["event_name", "attributes"],
@@ -120,8 +124,14 @@ TOOL_SPECS = [
                 "contributors": {"type": "string", "description": "Display name."},
                 "amount": {"type": "string", "description": "Minutes or dollar amount.", "default": "0"},
                 "tdg_issued": {"type": "string", "description": "TDG to issue.", "default": "0"},
-                "attachment_path": {"type": "string", "description": "Local file path to attach (e.g. /tmp/tg_attachments/receipt.pdf). File is uploaded to GitHub via Edgar."},
-                "attachment_filename": {"type": "string", "description": "Override the auto-generated attachment filename."},
+                "attachment_path": {
+                    "type": "string",
+                    "description": "Local file path to attach (e.g. /tmp/tg_attachments/receipt.pdf). File is uploaded to GitHub via Edgar.",
+                },
+                "attachment_filename": {
+                    "type": "string",
+                    "description": "Override the auto-generated attachment filename.",
+                },
             },
             "required": ["title", "body", "pr_urls"],
         },

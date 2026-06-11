@@ -27,6 +27,7 @@ deployments behave identically.
 All log lines from this module are prefixed with ``[<label>]`` so journal
 output stays disambiguated when monitoring multiple accounts.
 """
+
 from __future__ import annotations
 
 import logging
@@ -58,32 +59,35 @@ def read_account_specs() -> list[dict]:
             upper = label.upper()
             key_id = os.environ.get(f"AWS_ACCESS_KEY_ID_{upper}", "").strip()
             secret = os.environ.get(f"AWS_SECRET_ACCESS_KEY_{upper}", "").strip()
-            region = (
-                os.environ.get(f"AWS_REGION_{upper}", "").strip()
-                or settings.aws_region
-            )
+            region = os.environ.get(f"AWS_REGION_{upper}", "").strip() or settings.aws_region
             if not key_id or not secret:
                 logger.warning(
                     "[%s] AWS_ACCESS_KEY_ID_%s or AWS_SECRET_ACCESS_KEY_%s missing — skipping",
-                    label.lower(), upper, upper,
+                    label.lower(),
+                    upper,
+                    upper,
                 )
                 continue
-            specs.append({
-                "label": label.lower(),
-                "key_id": key_id,
-                "secret": secret,
-                "region": region,
-            })
+            specs.append(
+                {
+                    "label": label.lower(),
+                    "key_id": key_id,
+                    "secret": secret,
+                    "region": region,
+                }
+            )
         return specs
 
     # Backwards-compat: legacy single-account env, label='default'.
     if settings.aws_access_key_id and settings.aws_secret_access_key:
-        specs.append({
-            "label": "default",
-            "key_id": settings.aws_access_key_id,
-            "secret": settings.aws_secret_access_key,
-            "region": settings.aws_region,
-        })
+        specs.append(
+            {
+                "label": "default",
+                "key_id": settings.aws_access_key_id,
+                "secret": settings.aws_secret_access_key,
+                "region": settings.aws_region,
+            }
+        )
     return specs
 
 
@@ -120,7 +124,9 @@ class _AccountClients:
             self.cw.list_metrics(Namespace="AWS/EC2")
             logger.info(
                 "[%s] AWS CloudWatch connected (account %s, region %s)",
-                self.label, self.account_id, region,
+                self.label,
+                self.account_id,
+                region,
             )
         except NoCredentialsError:
             logger.warning("[%s] AWS init failed: no credentials located", self.label)
@@ -160,6 +166,7 @@ class AWSMonitor:
         proceed.
         """
         import asyncio
+
         last_cost_check = None
         while True:
             try:

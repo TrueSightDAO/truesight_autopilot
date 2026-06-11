@@ -40,13 +40,15 @@ That's it — no edits to ``llm_client.py`` / ``main.py`` / ``roles.py``.
 
 See ``app/tools/README.md`` for the full authoring guide.
 """
+
 from __future__ import annotations
 
 import importlib
 import logging
 import pkgutil
-from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger("autopilot.tool_registry")
 
@@ -101,6 +103,7 @@ def _iter_tool_modules() -> Iterable[str]:
     """Yield fully-qualified module names under ``app.tools``."""
     # Lazy import to avoid a circular import at package init time.
     from . import tools as tools_pkg
+
     for info in pkgutil.iter_modules(tools_pkg.__path__):
         # Skip dunder + private modules; helpers like ``google_creds`` don't
         # export a TOOL_SPEC, so the absence check below catches them anyway.
@@ -152,8 +155,7 @@ def get_registry() -> dict[str, ToolSpec]:
     global _REGISTRY
     if _REGISTRY is None:
         _REGISTRY = {s.name: s for s in discover_tools()}
-        logger.info("tool_registry: discovered %d tools: %s",
-                    len(_REGISTRY), sorted(_REGISTRY.keys()))
+        logger.info("tool_registry: discovered %d tools: %s", len(_REGISTRY), sorted(_REGISTRY.keys()))
     return _REGISTRY
 
 
@@ -191,10 +193,12 @@ def dispatch(func_name: str, func_args: dict, context: dict) -> str | None:
         # Match the existing tool-call convention: errors surface to the model
         # as a JSON-shaped tool result rather than crashing the request.
         import json as _json
+
         return _json.dumps({"status": "error", "reason": str(e), "tool": func_name})
 
 
 # ── role validation ───────────────────────────────────────────────────────
+
 
 def validate_role_tool_names(role_tools: dict[str, list[str]]) -> list[str]:
     """Return the list of (role, tool) names that don't exist in the registry.

@@ -6,6 +6,7 @@ Bug (role menu re-prompt loop): a new topic does `history = build_role_menu()`
 message re-loaded stale empty history → `len(history)==0` → role menu re-prompted
 forever (replying "1" never stuck).
 """
+
 from __future__ import annotations
 
 import os

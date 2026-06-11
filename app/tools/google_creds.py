@@ -24,12 +24,13 @@ This module deliberately exposes ``load_credentials()`` (returning a
 API client objects — the per-tool modules build their own clients with the
 scopes they need.
 """
+
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 logger = logging.getLogger("autopilot.tools.google_creds")
 
@@ -84,9 +85,7 @@ def load_credentials(
         )
         return None
     try:
-        return service_account.Credentials.from_service_account_file(
-            path, scopes=list(scopes or [])
-        )
+        return service_account.Credentials.from_service_account_file(path, scopes=list(scopes or []))
     except Exception as e:
         logger.error("Failed to load Google credentials from %s: %s", path, e)
         return None

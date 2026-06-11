@@ -1,4 +1,5 @@
 """Unit tests for the PDF generation tool."""
+
 from __future__ import annotations
 
 import base64
@@ -19,11 +20,13 @@ def test_empty_content_returns_error():
 
 def test_simple_markdown_renders_to_pdf(tmp_path):
     out_path = tmp_path / "test.pdf"
-    out = json.loads(pdf_tools.generate_pdf(
-        content="# Hello\n\nThis is **bold** and *italic*.\n\n- bullet one\n- bullet two",
-        title="Test Doc",
-        output_path=str(out_path),
-    ))
+    out = json.loads(
+        pdf_tools.generate_pdf(
+            content="# Hello\n\nThis is **bold** and *italic*.\n\n- bullet one\n- bullet two",
+            title="Test Doc",
+            output_path=str(out_path),
+        )
+    )
     assert out["status"] == "ok"
     assert out["byte_count"] > 0
     assert out["output_path"] == str(out_path)

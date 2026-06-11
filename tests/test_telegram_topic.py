@@ -1,7 +1,7 @@
 """Tests for create_telegram_topic chat-id resolution + guard paths."""
-from app.tools import telegram_topic as tt
-from app import telegram_adapter as ta
 
+from app import telegram_adapter as ta
+from app.tools import telegram_topic as tt
 
 _REG = """
 | Date | Handoff | Plan file | Topic | thread_id | session_id | Status |

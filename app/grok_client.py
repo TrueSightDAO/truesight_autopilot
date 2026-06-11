@@ -3,6 +3,7 @@
 Used as stage 1 of the two-stage autopilot pipeline:
   Images → Grok (vision) → structured analysis → DeepSeek (DAO context) → response
 """
+
 from __future__ import annotations
 
 import json
@@ -174,6 +175,7 @@ def grok_analyze_images(
 
 def _b64(data: bytes) -> str:
     import base64
+
     return base64.b64encode(data).decode("ascii")
 
 

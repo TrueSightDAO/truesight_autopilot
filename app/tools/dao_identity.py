@@ -4,13 +4,12 @@ Uses the dao_client library (already in venv) to generate an RSA keypair,
 sign an [EMAIL REGISTERED EVENT], submit to Edgar, and save the new keys
 to the autopilot's .env file.
 """
+
 from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
@@ -29,21 +28,20 @@ def register_identity(email: str, env_path: str | None = None) -> dict[str, Any]
         error: str (if unsuccessful)
     """
     try:
-        from truesight_dao_client.edgar_client import (
-            EdgarClient,
-            generate_keypair,
-            load_public_key,
-            load_private_key,
-        )
         import requests as http
         from dotenv import set_key as dotenv_set_key
+        from truesight_dao_client.edgar_client import (
+            generate_keypair,
+            load_private_key,
+            load_public_key,
+        )
     except ImportError as e:
         return {"success": False, "error": f"Missing dependency: {e}"}
 
     try:
         # 1. Generate keypair
         pub_der_b64, priv_der_b64 = generate_keypair()
-        pub_key = load_public_key(pub_der_b64)
+        load_public_key(pub_der_b64)
         priv_key = load_private_key(priv_der_b64)
 
         # 2. Build and sign [EMAIL REGISTERED EVENT]
@@ -65,7 +63,7 @@ def register_identity(email: str, env_path: str | None = None) -> dict[str, Any]
         sig_b64 = base64.b64encode(sig_bytes).decode()
 
         # 3. Build share_text
-        txn_id = hashlib.sha256(sig_bytes).hexdigest()[:16]
+        hashlib.sha256(sig_bytes).hexdigest()[:16]
         generation_source = "https://github.com/TrueSightDAO/truesight_autopilot"
         verify_url = "https://edgar.truesight.me/dao/submit_contribution"
 
@@ -124,6 +122,7 @@ def register_identity(email: str, env_path: str | None = None) -> dict[str, Any]
 # ── capability manifest entry ─────────────────────────────────────────────
 
 import json as _json  # noqa: E402
+
 from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(

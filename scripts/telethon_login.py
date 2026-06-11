@@ -20,6 +20,7 @@ starts the watchdog unit when it exists.
 
 To revoke later: Telegram app → Settings → Devices → terminate the session.
 """
+
 from __future__ import annotations
 
 import sys
@@ -32,18 +33,20 @@ from app.config import settings  # noqa: E402
 
 def main() -> int:
     if not settings.telegram_api_id or not settings.telegram_api_hash:
-        print("TELEGRAM_API_ID / TELEGRAM_API_HASH missing from .env — get them at\n"
-              "https://my.telegram.org (API development tools), add to .env, re-run.")
+        print(
+            "TELEGRAM_API_ID / TELEGRAM_API_HASH missing from .env — get them at\n"
+            "https://my.telegram.org (API development tools), add to .env, re-run."
+        )
         return 1
     from telethon.sync import TelegramClient
 
-    with TelegramClient(settings.watchdog_session_path,
-                        settings.telegram_api_id,
-                        settings.telegram_api_hash) as client:
+    with TelegramClient(settings.watchdog_session_path, settings.telegram_api_id, settings.telegram_api_hash) as client:
         me = client.get_me()
-        print(f"\nAuthorized as {me.first_name or ''} {me.last_name or ''} "
-              f"(@{me.username}) — session saved to "
-              f"{settings.watchdog_session_path}.session")
+        print(
+            f"\nAuthorized as {me.first_name or ''} {me.last_name or ''} "
+            f"(@{me.username}) — session saved to "
+            f"{settings.watchdog_session_path}.session"
+        )
         client.send_message(
             "me",
             "👋 Attention watchdog session created. Sophia will nudge you here "

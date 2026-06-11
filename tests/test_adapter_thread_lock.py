@@ -5,6 +5,7 @@ must serialize turns within a topic (so rapid-fire messages queue instead of
 racing the transcript) while different topics run in parallel. Attachment prep
 runs before the lock and stays parallel.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,8 +28,8 @@ def test_lock_identity():
     a2 = ta._thread_dispatch_lock(-100, 5)
     b = ta._thread_dispatch_lock(-100, 6)
     c = ta._thread_dispatch_lock(-100, None)  # bare topic → key :0
-    assert a1 is a2          # same topic → same lock
-    assert a1 is not b       # different topic → different lock
+    assert a1 is a2  # same topic → same lock
+    assert a1 is not b  # different topic → different lock
     assert c is ta._thread_dispatch_lock(-100, 0)  # None and 0 collapse
 
 
@@ -47,8 +48,10 @@ def _run_two(sid_args_a, sid_args_b):
 
     t1 = threading.Thread(target=turn, args=("A", *sid_args_a))
     t2 = threading.Thread(target=turn, args=("B", *sid_args_b))
-    t1.start(); t2.start()
-    t1.join(timeout=5); t2.join(timeout=5)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
     return events
 
 

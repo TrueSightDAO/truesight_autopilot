@@ -8,6 +8,7 @@ This deliberately does NOT follow ``localhost``/RFC1918 redirects — see the
 :func:`_is_safe_url` guard — to prevent the agent from probing the EC2 host's
 metadata service or other internal endpoints.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -101,12 +102,14 @@ def http_fetch(
                 encoding = "text"
             except UnicodeDecodeError:
                 import base64 as _b64
+
                 body_text = _b64.b64encode(raw).decode("ascii")
                 encoding = "base64"
             # Only echo a small whitelist of response headers — avoid leaking
             # cookies/auth.
             echoed = {
-                k: v for k, v in resp.headers.items()
+                k: v
+                for k, v in resp.headers.items()
                 if k.lower() in {"content-type", "content-length", "location", "etag", "x-ratelimit-remaining"}
             }
     except httpx.HTTPError as e:
@@ -115,19 +118,25 @@ def http_fetch(
 
     logger.info(
         "http_fetch ok: method=%s url=%.80s status=%d bytes=%d truncated=%s",
-        method, url, resp.status_code, len(raw), truncated,
+        method,
+        url,
+        resp.status_code,
+        len(raw),
+        truncated,
     )
-    return json.dumps({
-        "status": "ok",
-        "status_code": resp.status_code,
-        "url": str(resp.url),
-        "content_type": content_type,
-        "encoding": encoding,
-        "headers": echoed,
-        "body": body_text,
-        "byte_count": len(raw),
-        "truncated": truncated,
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "status_code": resp.status_code,
+            "url": str(resp.url),
+            "content_type": content_type,
+            "encoding": encoding,
+            "headers": echoed,
+            "body": body_text,
+            "byte_count": len(raw),
+            "truncated": truncated,
+        }
+    )
 
 
 # ── capability manifest entry ─────────────────────────────────────────────
@@ -141,8 +150,15 @@ TOOL_SPEC = ToolSpec(
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "Full HTTP(S) URL."},
-            "method": {"type": "string", "description": "HTTP method.", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"], "default": "GET"},
-            "body": {"description": "Optional request body. Dicts/lists are JSON-serialised with Content-Type: application/json. Strings sent as-is."},
+            "method": {
+                "type": "string",
+                "description": "HTTP method.",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+                "default": "GET",
+            },
+            "body": {
+                "description": "Optional request body. Dicts/lists are JSON-serialised with Content-Type: application/json. Strings sent as-is."
+            },
             "headers": {"type": "object", "description": "Optional request headers."},
             "timeout": {"type": "number", "description": "Timeout in seconds (default 30, max 60).", "default": 30},
         },

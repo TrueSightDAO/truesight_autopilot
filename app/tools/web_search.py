@@ -7,6 +7,7 @@ Two capabilities:
 The API key comes from settings.tavily_api_key (env var TAVILY_API). Tools return
 JSON strings, matching the convention of the other tools in this package.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,10 +50,12 @@ def web_search(
     try:
         resp = httpx.post(_SEARCH_URL, json=payload, timeout=_TIMEOUT)
         if resp.status_code != 200:
-            return json.dumps({
-                "status": "error",
-                "message": f"Tavily search HTTP {resp.status_code}: {resp.text[:300]}",
-            })
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"Tavily search HTTP {resp.status_code}: {resp.text[:300]}",
+                }
+            )
         data = resp.json()
         results = [
             {
@@ -92,10 +95,12 @@ def web_extract(urls: list[str] | str) -> str:
     try:
         resp = httpx.post(_EXTRACT_URL, json=payload, timeout=_TIMEOUT)
         if resp.status_code != 200:
-            return json.dumps({
-                "status": "error",
-                "message": f"Tavily extract HTTP {resp.status_code}: {resp.text[:300]}",
-            })
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"Tavily extract HTTP {resp.status_code}: {resp.text[:300]}",
+                }
+            )
         data = resp.json()
         results = [
             {
@@ -106,12 +111,14 @@ def web_extract(urls: list[str] | str) -> str:
         ]
         failed = data.get("failed_results", [])
         logger.info("web_extract ok: urls=%d extracted=%d failed=%d", len(urls), len(results), len(failed))
-        return json.dumps({
-            "status": "ok",
-            "extracted_count": len(results),
-            "results": results,
-            "failed": [f.get("url", "") for f in failed] if failed else [],
-        })
+        return json.dumps(
+            {
+                "status": "ok",
+                "extracted_count": len(results),
+                "results": results,
+                "failed": [f.get("url", "") for f in failed] if failed else [],
+            }
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("web_extract failed: %s", e)
         return json.dumps({"status": "error", "message": str(e)})
@@ -130,7 +137,12 @@ TOOL_SPECS = [
             "properties": {
                 "query": {"type": "string", "description": "The search query."},
                 "max_results": {"type": "integer", "description": "Number of results (1-10).", "default": 5},
-                "search_depth": {"type": "string", "description": "'basic' (fast) or 'advanced' (deeper).", "enum": ["basic", "advanced"], "default": "basic"},
+                "search_depth": {
+                    "type": "string",
+                    "description": "'basic' (fast) or 'advanced' (deeper).",
+                    "enum": ["basic", "advanced"],
+                    "default": "basic",
+                },
                 "include_answer": {"type": "boolean", "description": "Include a synthesized answer.", "default": True},
             },
             "required": ["query"],
@@ -148,7 +160,11 @@ TOOL_SPECS = [
         parameters={
             "type": "object",
             "properties": {
-                "urls": {"type": "array", "items": {"type": "string"}, "description": "List of page URLs to read (max 10)."},
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of page URLs to read (max 10).",
+                },
             },
             "required": ["urls"],
         },

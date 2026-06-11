@@ -18,6 +18,7 @@ Usage:
 Output:
     JSON with status and transcript URL.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,8 +26,6 @@ import base64
 import json
 import logging
 import os
-import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -94,6 +93,7 @@ def github_request(method: str, url: str, data: dict | None = None) -> dict:
 def get_transcript_path(session_id: str) -> str:
     """Build the transcript file path for a session."""
     import hashlib
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
     return f"sessions/{today}/{sid_hash}/transcript.md"
@@ -142,8 +142,8 @@ def append_to_transcript(
     # Build the attachment section
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     attachment_section = f"\n\n---\n\n## Attachment: {filename}\n\n"
-    attachment_section += f"| Field | Value |\n"
-    attachment_section += f"|-------|-------|\n"
+    attachment_section += "| Field | Value |\n"
+    attachment_section += "|-------|-------|\n"
     attachment_section += f"| **Type** | {file_type} |\n"
     attachment_section += f"| **Filename** | {filename} |\n"
     attachment_section += f"| **Received** | {timestamp} |\n"

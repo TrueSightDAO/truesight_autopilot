@@ -4,6 +4,7 @@ Exposes ``read_google_doc(document_id, service_account_name=None)`` returning
 the document title + flattened paragraph text. Bounded at ~64KB output so a
 giant doc can't drown the model.
 """
+
 from __future__ import annotations
 
 import json
@@ -69,15 +70,18 @@ def read_google_doc(
         text = text[:_MAX_TEXT_CHARS]
         truncated = True
 
-    logger.info("read_google_doc ok: doc=%s title=%s chars=%d truncated=%s",
-                document_id, title[:60], len(text), truncated)
-    return json.dumps({
-        "status": "ok",
-        "document_id": document_id,
-        "title": title,
-        "text": text,
-        "truncated": truncated,
-    })
+    logger.info(
+        "read_google_doc ok: doc=%s title=%s chars=%d truncated=%s", document_id, title[:60], len(text), truncated
+    )
+    return json.dumps(
+        {
+            "status": "ok",
+            "document_id": document_id,
+            "title": title,
+            "text": text,
+            "truncated": truncated,
+        }
+    )
 
 
 # ── capability manifest entry ─────────────────────────────────────────────
@@ -90,7 +94,10 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "document_id": {"type": "string", "description": "The Google Doc ID (the long string between /d/ and /edit in the URL)."},
+            "document_id": {
+                "type": "string",
+                "description": "The Google Doc ID (the long string between /d/ and /edit in the URL).",
+            },
             "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
         },
         "required": ["document_id"],

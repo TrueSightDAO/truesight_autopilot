@@ -5,6 +5,7 @@ report, so when several queued instructions run as back-to-back turns the
 governor sees what each accomplished before the next begins. Read-only turns
 get no report (no clutter).
 """
+
 from __future__ import annotations
 
 import os
@@ -38,8 +39,8 @@ def test_report_lists_side_effects_with_urls():
     assert "open fix pr" in report
     assert "https://github.com/TrueSightDAO/x/pull/7" in report  # URL preferred
     assert "deploy autopilot" in report
-    assert "deployed ok" in report          # first line when no URL
-    assert "read repo file" not in report   # read-only omitted
+    assert "deployed ok" in report  # first line when no URL
+    assert "read repo file" not in report  # read-only omitted
 
 
 def test_append_joins_report_to_text():

@@ -9,6 +9,7 @@
 
 Output sizes are capped to keep tool replies bounded.
 """
+
 from __future__ import annotations
 
 import base64
@@ -44,6 +45,7 @@ def _build_service(service_account_name: str | None):
         return None, _err("credentials missing", service_account_name=service_account_name)
     try:
         from googleapiclient.discovery import build  # type: ignore
+
         return build("drive", "v3", credentials=creds, cache_discovery=False), None
     except Exception as e:  # pragma: no cover
         return None, _err(f"google-api-python-client unavailable: {e}")
@@ -63,9 +65,7 @@ def read_drive_file(
         return err  # type: ignore[return-value]
 
     try:
-        meta = service.files().get(
-            fileId=file_id, fields="id,name,mimeType,size,modifiedTime"
-        ).execute()
+        meta = service.files().get(fileId=file_id, fields="id,name,mimeType,size,modifiedTime").execute()
     except Exception as e:
         return _err(str(e), file_id=file_id)
 
@@ -73,6 +73,7 @@ def read_drive_file(
     is_native = file_mime.startswith("application/vnd.google-apps.")
     try:
         from googleapiclient.http import MediaIoBaseDownload  # type: ignore
+
         buf = io.BytesIO()
         if is_native:
             export_mime = mime_type or _NATIVE_EXPORTS.get(file_mime, "text/plain")
@@ -109,20 +110,25 @@ def read_drive_file(
 
     logger.info(
         "read_drive_file ok: id=%s mime=%s bytes=%d truncated=%s",
-        file_id, effective_mime, len(raw), truncated,
+        file_id,
+        effective_mime,
+        len(raw),
+        truncated,
     )
-    return json.dumps({
-        "status": "ok",
-        "file_id": file_id,
-        "name": meta.get("name"),
-        "source_mime_type": file_mime,
-        "effective_mime_type": effective_mime,
-        "encoding": encoding,
-        "content": content,
-        "byte_count": len(raw),
-        "truncated": truncated,
-        "modified_time": meta.get("modifiedTime"),
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "file_id": file_id,
+            "name": meta.get("name"),
+            "source_mime_type": file_mime,
+            "effective_mime_type": effective_mime,
+            "encoding": encoding,
+            "content": content,
+            "byte_count": len(raw),
+            "truncated": truncated,
+            "modified_time": meta.get("modifiedTime"),
+        }
+    )
 
 
 def list_drive_folder(
@@ -140,22 +146,28 @@ def list_drive_folder(
 
     page_size = max(1, min(int(page_size or 50), 200))
     try:
-        resp = service.files().list(
-            q=f"'{folder_id}' in parents and trashed = false",
-            pageSize=page_size,
-            fields="files(id, name, mimeType, size, modifiedTime), nextPageToken",
-        ).execute()
+        resp = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                pageSize=page_size,
+                fields="files(id, name, mimeType, size, modifiedTime), nextPageToken",
+            )
+            .execute()
+        )
     except Exception as e:
         return _err(str(e), folder_id=folder_id)
 
     files = resp.get("files", []) or []
     logger.info("list_drive_folder ok: folder=%s files=%d", folder_id, len(files))
-    return json.dumps({
-        "status": "ok",
-        "folder_id": folder_id,
-        "files": files,
-        "next_page_token": resp.get("nextPageToken"),
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "folder_id": folder_id,
+            "files": files,
+            "next_page_token": resp.get("nextPageToken"),
+        }
+    )
 
 
 # ── capability manifest entries ───────────────────────────────────────────
@@ -188,7 +200,11 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "folder_id": {"type": "string", "description": "The Drive folder ID."},
-                "page_size": {"type": "integer", "description": "Max files to return (1-200). Default 50.", "default": 50},
+                "page_size": {
+                    "type": "integer",
+                    "description": "Max files to return (1-200). Default 50.",
+                    "default": 50,
+                },
                 "service_account_name": {"type": "string", "description": "Optional SA name (see read_google_sheet)."},
             },
             "required": ["folder_id"],

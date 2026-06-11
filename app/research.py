@@ -3,11 +3,12 @@
 Uses CrewAI under the hood to run multi-step autonomous research.
 Progress is reported via a callback that the Telegram adapter hooks into.
 """
+
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
 
 logger = logging.getLogger("autopilot.research")
 
@@ -30,10 +31,12 @@ def run_research(
         The final research report as a markdown string.
     """
     if on_progress is None:
-        on_progress = lambda msg: logger.info("research: %s", msg)
+
+        def on_progress(msg):
+            return logger.info("research: %s", msg)
 
     try:
-        from crewai import Agent, Task, Crew
+        from crewai import Agent, Crew, Task
         from crewai.tools import tool as crew_tool
     except ImportError:
         logger.error("crewai not installed — cannot run autonomous research")
@@ -46,7 +49,9 @@ def run_research(
     def web_search(query: str, max_results: int = 5) -> str:
         """Search the web via Tavily. Returns ranked results with snippets."""
         import httpx
+
         from ..config import settings
+
         try:
             resp = httpx.post(
                 "https://api.tavily.com/search",
@@ -75,7 +80,9 @@ def run_research(
     def web_extract(urls: str) -> str:
         """Extract cleaned text from one or more URLs (comma-separated)."""
         import httpx
+
         from ..config import settings
+
         url_list = [u.strip() for u in urls.split(",") if u.strip()]
         try:
             resp = httpx.post(
@@ -103,6 +110,7 @@ def run_research(
     def read_context_file(path: str) -> str:
         """Read a file from agentic_ai_context."""
         from ..context import get_context_file
+
         content = get_context_file(path)
         return content if content else f"File not found: {path}"
 
@@ -110,6 +118,7 @@ def run_research(
     def read_repo_file(repo: str, path: str) -> str:
         """Read a file from any TrueSightDAO GitHub repository via the Contents API."""
         import httpx
+
         try:
             resp = httpx.get(
                 f"https://raw.githubusercontent.com/TrueSightDAO/{repo}/main/{path}",
@@ -123,6 +132,7 @@ def run_research(
 
     # ── Agent ──────────────────────────────────────────────────────────
     from ..roles import ROLES
+
     role_def = ROLES.get(role)
     role_name = role_def.name if role_def else role
     role_goal = (
@@ -138,8 +148,8 @@ def run_research(
         role=role_name,
         goal=role_goal,
         backstory=f"You are an expert {role_name} for TrueSight DAO and Agroverse. "
-                  f"You have deep knowledge of the ceremonial cacao market, "
-                  f"holistic wellness industry, and content marketing strategy.",
+        f"You have deep knowledge of the ceremonial cacao market, "
+        f"holistic wellness industry, and content marketing strategy.",
         tools=[web_search, web_extract, read_context_file, read_repo_file],
         llm="deepseek/deepseek-chat",
         verbose=True,
@@ -178,9 +188,11 @@ def run_research(
         agents=[researcher],
         tasks=[task],
         verbose=True,
-        step_callback=lambda step: on_progress(
-            f"Research step: {step.get('tool', 'thinking')} — {str(step.get('output', ''))[:100]}"
-        ) if step else None,
+        step_callback=lambda step: (
+            on_progress(f"Research step: {step.get('tool', 'thinking')} — {str(step.get('output', ''))[:100]}")
+            if step
+            else None
+        ),
     )
 
     on_progress(f"Starting research on: {topic}")
@@ -191,7 +203,8 @@ def run_research(
     # ── Commit to GitHub repo ─────────────────────────────────────────
     try:
         import re as _re
-        slug = _re.sub(r'[^a-z0-9]+', '_', topic.lower().strip())[:50]
+
+        slug = _re.sub(r"[^a-z0-9]+", "_", topic.lower().strip())[:50]
         file_path = f"{slug}.md"
         _commit_to_github(target_repo, file_path, output, f"research: {topic}")
         on_progress(f"Report committed to {target_repo}/{file_path}")
@@ -205,8 +218,10 @@ def run_research(
 def _commit_to_github(repo: str, path: str, content: str, message: str) -> None:
     """Commit a file to a GitHub repo via the Contents API."""
     import base64
-    import httpx
     import os
+
+    import httpx
+
     token = os.getenv("TRUESIGHT_DAO_AUTOPILOT", "")
     if not token:
         raise RuntimeError("TRUESIGHT_DAO_AUTOPILOT not set")
@@ -248,6 +263,7 @@ def run_research_background(
     on_done: Callable[[str], None],
 ) -> None:
     """Run research in a background thread, calling callbacks for progress and completion."""
+
     def _run():
         try:
             result = run_research(role, topic, target_repo, on_progress)

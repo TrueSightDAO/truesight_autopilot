@@ -10,6 +10,7 @@ Safety:
 - Never merges unless CI is verified green.
 - B5 = one-tap confirm; B6 (`BETA_AUTO_MERGE`) skips the tap when CI is green.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,7 @@ logger = logging.getLogger("autopilot.beta_deploy")
 
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
 
+
 def beta_repos() -> list[str]:
     return list(settings.beta_deploy_repos)
 
@@ -34,7 +36,7 @@ def is_beta_repo(repo: str) -> bool:
 def parse_ship_target(text: str) -> tuple[str, int] | None:
     """Parse `/ship`, `/ship dapp_beta#12`, `/ship dapp_beta 12`, `/ship #12`.
     Returns (repo, pr) or None when no PR number is given (→ list mode)."""
-    body = text[len("/ship"):].strip() if text.startswith("/ship") else text.strip()
+    body = text[len("/ship") :].strip() if text.startswith("/ship") else text.strip()
     if not body:
         return None
     m = re.match(r"^([A-Za-z0-9_.-]+)?\s*#?\s*(\d+)$", body)
@@ -54,13 +56,18 @@ def parse_callback_data(data: str) -> tuple[str, str | None, int | None]:
 
 
 def build_ship_keyboard(repo: str, pr: int) -> dict:
-    return {"inline_keyboard": [[
-        {"text": f"🚀 Ship #{pr} → {repo}", "callback_data": f"ship:{repo}:{pr}"},
-        {"text": "✕ Cancel", "callback_data": "cancel"},
-    ]]}
+    return {
+        "inline_keyboard": [
+            [
+                {"text": f"🚀 Ship #{pr} → {repo}", "callback_data": f"ship:{repo}:{pr}"},
+                {"text": "✕ Cancel", "callback_data": "cancel"},
+            ]
+        ]
+    }
 
 
 # ── GitHub-backed (mocked in tests) ────────────────────────────────────────
+
 
 def check_ci_green(repo: str, pr_number: int) -> tuple[bool, str]:
     """True only if every check on the PR head has completed successfully."""
@@ -71,8 +78,11 @@ def check_ci_green(repo: str, pr_number: int) -> tuple[bool, str]:
         commit = r.get_commit(pull.head.sha)
         runs = list(commit.get_check_runs())
         pending = [cr.name for cr in runs if cr.status != "completed"]
-        failed = [cr.name for cr in runs
-                  if cr.status == "completed" and cr.conclusion not in ("success", "neutral", "skipped")]
+        failed = [
+            cr.name
+            for cr in runs
+            if cr.status == "completed" and cr.conclusion not in ("success", "neutral", "skipped")
+        ]
         state = commit.get_combined_status().state  # success / pending / failure
         if pending:
             return False, f"CI still running: {', '.join(pending)}"
@@ -93,15 +103,20 @@ def ship_pr(repo: str, pr_number: int) -> dict:
     if not settings.beta_deploy_gate_enabled:
         return {"ok": False, "message": "Beta-deploy gate is disabled (set BETA_DEPLOY_GATE_ENABLED=true)."}
     if not is_beta_repo(repo):
-        return {"ok": False,
-                "message": f"'{repo}' is not a beta repo (allowed: {', '.join(beta_repos())}). Prod is manual-promote."}
+        return {
+            "ok": False,
+            "message": f"'{repo}' is not a beta repo (allowed: {', '.join(beta_repos())}). Prod is manual-promote.",
+        }
     green, summary = check_ci_green(repo, pr_number)
     if not green:
         return {"ok": False, "message": f"Not shipping {repo}#{pr_number} — {summary}."}
     res = GitHubClient().merge_pr(repo, pr_number, merge_method="squash")
     if res.get("merged"):
-        return {"ok": True, "sha": res.get("sha", ""),
-                "message": f"✅ Merged {repo}#{pr_number} (CI green) — beta is deploying."}
+        return {
+            "ok": True,
+            "sha": res.get("sha", ""),
+            "message": f"✅ Merged {repo}#{pr_number} (CI green) — beta is deploying.",
+        }
     return {"ok": False, "message": f"Merge failed: {res.get('message', 'unknown error')}"}
 
 
@@ -112,8 +127,9 @@ def list_open_beta_prs() -> list[dict]:
     for repo in beta_repos():
         try:
             for pr in gh.list_prs(repo, state="open", limit=10):
-                out.append({"repo": repo, "number": pr.get("number"),
-                            "title": pr.get("title", ""), "url": pr.get("url", "")})
+                out.append(
+                    {"repo": repo, "number": pr.get("number"), "title": pr.get("title", ""), "url": pr.get("url", "")}
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning("list_open_beta_prs failed for %s: %s", repo, e)
     return out

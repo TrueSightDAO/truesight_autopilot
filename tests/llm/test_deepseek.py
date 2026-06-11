@@ -1,4 +1,5 @@
 """Tests for DeepSeekProvider — XML/DSML tool-call fallback, normal completion, cost estimation."""
+
 from __future__ import annotations
 
 import json
@@ -24,22 +25,26 @@ def _make_client(body: dict, status: int = 200) -> httpx.Client:
 
 def test_normal_completion_with_tool_calls():
     body = {
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": "Let me look that up.",
-                "tool_calls": [{
-                    "id": "call_001",
-                    "type": "function",
-                    "function": {
-                        "name": "lookup_qr_code",
-                        "arguments": '{"qr_code": "2024OSCAR_20260330_21"}',
-                    },
-                }],
-            },
-            "finish_reason": "tool_calls",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Let me look that up.",
+                    "tool_calls": [
+                        {
+                            "id": "call_001",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup_qr_code",
+                                "arguments": '{"qr_code": "2024OSCAR_20260330_21"}',
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
         "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
     }
     p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
@@ -62,21 +67,23 @@ def test_normal_completion_with_tool_calls():
 def test_xml_tool_calls_in_content():
     """DeepSeek sometimes emits tool calls as XML in content — parser should extract them."""
     body = {
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": (
-                    "I'll scan the file.\n\n"
-                    "<function_calls>"
-                    "<invoke name=\"scan_qr_from_file\">"
-                    "<parameter name=\"file_path\">/tmp/test.jpg</parameter>"
-                    "</invoke>"
-                    "</function_calls>"
-                ),
-            },
-            "finish_reason": "tool_calls",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "I'll scan the file.\n\n"
+                        "<function_calls>"
+                        '<invoke name="scan_qr_from_file">'
+                        '<parameter name="file_path">/tmp/test.jpg</parameter>'
+                        "</invoke>"
+                        "</function_calls>"
+                    ),
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
         "usage": {"prompt_tokens": 200, "completion_tokens": 30, "total_tokens": 230},
     }
     p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")
@@ -100,22 +107,24 @@ def test_xml_tool_calls_in_content():
 def test_dsml_tool_calls():
     """DeepSeek sometimes prefixes XML with <||DSML||> — parser should handle both."""
     body = {
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": (
-                    "Here is the result.\n\n"
-                    "<||DSML||tool_calls>"
-                    "<||DSML||invoke name=\"submit_contribution\">"
-                    "<||DSML||parameter name=\"event_name\" string=\"true\">INVENTORY MOVEMENT</||DSML||parameter>"
-                    "<||DSML||parameter name=\"qr_code\" string=\"true\">2024OSCAR_20260330_22</||DSML||parameter>"
-                    "</||DSML||invoke>"
-                    "</||DSML||tool_calls>"
-                ),
-            },
-            "finish_reason": "tool_calls",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "Here is the result.\n\n"
+                        "<||DSML||tool_calls>"
+                        '<||DSML||invoke name="submit_contribution">'
+                        '<||DSML||parameter name="event_name" string="true">INVENTORY MOVEMENT</||DSML||parameter>'
+                        '<||DSML||parameter name="qr_code" string="true">2024OSCAR_20260330_22</||DSML||parameter>'
+                        "</||DSML||invoke>"
+                        "</||DSML||tool_calls>"
+                    ),
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
         "usage": {"prompt_tokens": 300, "completion_tokens": 40, "total_tokens": 340},
     }
     p = DeepSeekProvider(api_key="test", base_url="https://api.deepseek.com", default_model="deepseek-chat")

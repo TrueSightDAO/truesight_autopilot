@@ -1,10 +1,8 @@
 """Tests for the capability manifest / tool registry."""
+
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.tool_registry import (
     ToolSpec,
@@ -21,17 +19,37 @@ def test_discover_finds_known_tools():
     names = {s.name for s in discover_tools()}
     # Sanity-check a representative slice across modules.
     for tool in (
-        "read_google_sheet", "read_google_doc", "read_drive_file",
-        "list_drive_folder", "http_fetch", "aws_query", "generate_pdf",
-        "gmail_search", "gmail_send", "merge_pr", "mark_pr_ready_for_review",
-        "upload_file_to_github", "upload_local_file_to_github",
-        "list_org_repos", "list_prs", "read_repo_file", "read_context_file",
-        "scan_qr_from_file", "lookup_qr_code", "register_identity",
-        "web_search", "web_extract", "list_directory", "read_local_file",
-        "read_oracle_logs", "deploy_autopilot",
+        "read_google_sheet",
+        "read_google_doc",
+        "read_drive_file",
+        "list_drive_folder",
+        "http_fetch",
+        "aws_query",
+        "generate_pdf",
+        "gmail_search",
+        "gmail_send",
+        "merge_pr",
+        "mark_pr_ready_for_review",
+        "upload_file_to_github",
+        "upload_local_file_to_github",
+        "list_org_repos",
+        "list_prs",
+        "read_repo_file",
+        "read_context_file",
+        "scan_qr_from_file",
+        "lookup_qr_code",
+        "register_identity",
+        "web_search",
+        "web_extract",
+        "list_directory",
+        "read_local_file",
+        "read_oracle_logs",
+        "deploy_autopilot",
         # Orchestration tools that have schemas in the manifest but stay
         # inline-dispatched:
-        "submit_contribution", "create_dao_submission", "open_fix_pr",
+        "submit_contribution",
+        "create_dao_submission",
+        "open_fix_pr",
     ):
         assert tool in names, f"manifest missing {tool}"
 
@@ -45,8 +63,13 @@ def test_orchestration_tools_have_handler_none():
 def test_simple_tools_have_handler_set():
     by_name = {s.name: s for s in discover_tools()}
     for tool in (
-        "read_google_sheet", "gmail_search", "aws_query", "http_fetch",
-        "generate_pdf", "merge_pr", "mark_pr_ready_for_review",
+        "read_google_sheet",
+        "gmail_search",
+        "aws_query",
+        "http_fetch",
+        "generate_pdf",
+        "merge_pr",
+        "mark_pr_ready_for_review",
         "upload_local_file_to_github",
     ):
         assert by_name[tool].handler is not None, f"{tool} should have a handler"
@@ -55,6 +78,7 @@ def test_simple_tools_have_handler_set():
 def test_get_tool_schemas_matches_registry():
     """The legacy entrypoint must return the same name set as the registry."""
     from app.llm_client import get_tool_schemas
+
     schema_names = {t["function"]["name"] for t in get_tool_schemas()}
     registry_names = get_tool_names()
     assert schema_names == registry_names
@@ -108,6 +132,7 @@ def test_validate_role_tool_names_catches_typo():
 
 def test_validate_role_tool_names_passes_real_roles():
     from app.roles import ROLES
+
     role_tools = {key: list(role.tools) for key, role in ROLES.items() if role.tools}
     errors = validate_role_tool_names(role_tools)
     assert errors == [], f"role validation failed: {errors}"

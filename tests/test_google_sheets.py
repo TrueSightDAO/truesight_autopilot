@@ -1,10 +1,9 @@
 """Unit tests for the Google Sheets tool (Sheets API mocked)."""
+
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.tools import google_sheets as gs
 

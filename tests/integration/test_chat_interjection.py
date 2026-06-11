@@ -15,6 +15,7 @@ The presence of FOLLOWUP_NOTICED in the response confirms the LLM actually
 saw the interjected message in-context (not just that the queue plumbing
 fired).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,15 +31,11 @@ from _autopilot_client import (
     stream_chat,
 )
 
-
 INITIAL = (
     "Run these in order: list_org_repos, then read_repo_file repo=truesight_autopilot "
     "path=README.md, then reply with a single line `count: <number_of_repos>`."
 )
-INTERJECTION = (
-    "INTERJECTION TEST: reply NOW with the literal string FOLLOWUP_NOTICED on "
-    "its own line, then continue."
-)
+INTERJECTION = "INTERJECTION TEST: reply NOW with the literal string FOLLOWUP_NOTICED on its own line, then continue."
 INTERJECT_AFTER_S = 6.0
 
 
@@ -72,7 +69,7 @@ async def run() -> int:
 
     # Belt-and-suspenders: also accept FOLLOWUP_NOTICED in the final response
     # in case the token chunk boundary swallowed the substring above.
-    final = (result["final_response"] or "")
+    final = result["final_response"] or ""
     if "FOLLOWUP_NOTICED" in final:
         seen_followup_token = True
 

@@ -13,6 +13,7 @@ Usage:
 Output:
     JSON with status, extracted text, confidence, and quality flags.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,7 @@ MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 def preprocess_image(image):
     """Apply preprocessing to improve OCR accuracy."""
-    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+    from PIL import ImageEnhance, ImageFilter, ImageOps
 
     # Convert to grayscale
     if image.mode != "L":
@@ -59,6 +60,7 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
         Dict with status, extracted text, confidence, and quality info.
     """
     import time
+
     start_time = time.time()
     p = Path(path)
     if not p.exists():
@@ -76,15 +78,22 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
         import pytesseract
         from PIL import Image
     except ImportError:
-        return {"status": "error", "message": "pytesseract or Pillow not installed. Run: pip install pytesseract Pillow"}
+        return {
+            "status": "error",
+            "message": "pytesseract or Pillow not installed. Run: pip install pytesseract Pillow",
+        }
 
     try:
         # Check if tesseract is installed
         from pytesseract import pytesseract as pyt
+
         try:
             pyt.get_tesseract_version()
         except Exception:
-            return {"status": "error", "message": "Tesseract OCR engine not found. Install: apt-get install tesseract-ocr"}
+            return {
+                "status": "error",
+                "message": "Tesseract OCR engine not found. Install: apt-get install tesseract-ocr",
+            }
 
         # Open and preprocess
         try:
@@ -123,6 +132,7 @@ def ocr_image(path: str, lang: str = "eng") -> dict:
             quality = "fair"
 
         import time
+
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         return {

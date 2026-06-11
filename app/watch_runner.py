@@ -20,6 +20,7 @@ Usage
         --expect-status 200 [--expect-substring ok] --chat-id -100123 \
         --thread-id 5 --label "Edgar deploy"
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,24 +36,40 @@ from app.ci_pingback import send_telegram
 # state_path is resolved by _extract_aws_state below (instances nest differently).
 _AWS_KINDS: dict[str, dict] = {
     "ami": {
-        "service": "ec2", "operation": "DescribeImages", "ids_key": "ImageIds",
-        "list_key": "Images", "state_field": "State",
-        "done": {"available"}, "failed": {"failed", "error", "invalid", "deregistered"},
+        "service": "ec2",
+        "operation": "DescribeImages",
+        "ids_key": "ImageIds",
+        "list_key": "Images",
+        "state_field": "State",
+        "done": {"available"},
+        "failed": {"failed", "error", "invalid", "deregistered"},
     },
     "snapshot": {
-        "service": "ec2", "operation": "DescribeSnapshots", "ids_key": "SnapshotIds",
-        "list_key": "Snapshots", "state_field": "State",
-        "done": {"completed"}, "failed": {"error"},
+        "service": "ec2",
+        "operation": "DescribeSnapshots",
+        "ids_key": "SnapshotIds",
+        "list_key": "Snapshots",
+        "state_field": "State",
+        "done": {"completed"},
+        "failed": {"error"},
     },
     "instance_running": {
-        "service": "ec2", "operation": "DescribeInstances", "ids_key": "InstanceIds",
-        "list_key": None, "state_field": "State.Name",   # Reservations[].Instances[]
-        "done": {"running"}, "failed": {"terminated", "stopped", "shutting-down"},
+        "service": "ec2",
+        "operation": "DescribeInstances",
+        "ids_key": "InstanceIds",
+        "list_key": None,
+        "state_field": "State.Name",  # Reservations[].Instances[]
+        "done": {"running"},
+        "failed": {"terminated", "stopped", "shutting-down"},
     },
     "volume": {
-        "service": "ec2", "operation": "DescribeVolumes", "ids_key": "VolumeIds",
-        "list_key": "Volumes", "state_field": "State",
-        "done": {"available", "in-use"}, "failed": {"error", "deleting", "deleted"},
+        "service": "ec2",
+        "operation": "DescribeVolumes",
+        "ids_key": "VolumeIds",
+        "list_key": "Volumes",
+        "state_field": "State",
+        "done": {"available", "in-use"},
+        "failed": {"error", "deleting", "deleted"},
     },
 }
 
@@ -100,10 +117,14 @@ def _classify_aws(kind: str, resp: dict) -> tuple[str, str | None]:
 def _probe_aws(kind: str, resource_id: str, account: str, region: str | None) -> tuple[str, str | None]:
     # Imported lazily so unit tests of the pure logic don't require boto3/creds.
     from app.tools.aws_tools import aws_query
+
     spec = _resource_spec(kind)
     raw = aws_query(
-        account=account, service=spec["service"], operation=spec["operation"],
-        parameters={spec["ids_key"]: [resource_id]}, region=region,
+        account=account,
+        service=spec["service"],
+        operation=spec["operation"],
+        parameters={spec["ids_key"]: [resource_id]},
+        region=region,
     )
     try:
         resp = json.loads(raw)
@@ -120,8 +141,9 @@ def _probe_aws(kind: str, resource_id: str, account: str, region: str | None) ->
 
 
 def _probe_http(url: str, expect_status: int, expect_substring: str | None) -> tuple[str, str | None]:
+    from urllib.error import HTTPError, URLError
     from urllib.request import urlopen
-    from urllib.error import URLError, HTTPError
+
     try:
         with urlopen(url, timeout=15) as resp:  # noqa: S310 — operator-supplied health URL
             code = resp.getcode()
@@ -158,21 +180,29 @@ def run(args: argparse.Namespace) -> int:
         last_state = state or last_state
         if status == "done":
             target = getattr(args, "resource_id", "") or args.url
-            _notify(args.chat_id, args.thread_id,
-                    f"✅ <b>{label}</b> is ready — {target}"
-                    + (f" reached state <code>{state}</code>." if state else "."))
+            _notify(
+                args.chat_id,
+                args.thread_id,
+                f"✅ <b>{label}</b> is ready — {target}" + (f" reached state <code>{state}</code>." if state else "."),
+            )
             return 0
         if status == "failed":
-            _notify(args.chat_id, args.thread_id,
-                    f"❌ <b>{label}</b> failed — {args.resource_id} reached state <code>{state}</code>.")
+            _notify(
+                args.chat_id,
+                args.thread_id,
+                f"❌ <b>{label}</b> failed — {args.resource_id} reached state <code>{state}</code>.",
+            )
             return 0
         time.sleep(args.interval)
 
     mins = round(args.timeout / 60)
-    _notify(args.chat_id, args.thread_id,
-            f"⏳ <b>{label}</b> still not done after {mins}m"
-            + (f" (last state: <code>{last_state}</code>)" if last_state else "")
-            + ". Stopping watch — ping me to re-check.")
+    _notify(
+        args.chat_id,
+        args.thread_id,
+        f"⏳ <b>{label}</b> still not done after {mins}m"
+        + (f" (last state: <code>{last_state}</code>)" if last_state else "")
+        + ". Stopping watch — ping me to re-check.",
+    )
     return 0
 
 

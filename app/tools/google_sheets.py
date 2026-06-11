@@ -9,6 +9,7 @@ points at (typically ``cypher_defense_gdrive_key.json``, which has Viewer on
 the Main Ledger). Pass ``service_account_name`` to switch — e.g. ``"tdg_scoring"``
 for sheets only the scoring SA can see.
 """
+
 from __future__ import annotations
 
 import json
@@ -47,12 +48,7 @@ def read_google_sheet(
 
     try:
         service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-        resp = (
-            service.spreadsheets()
-            .values()
-            .get(spreadsheetId=spreadsheet_id, range=range_a1)
-            .execute()
-        )
+        resp = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_a1).execute()
     except Exception as e:
         logger.warning("read_google_sheet failed: %s", e)
         return _err(str(e), spreadsheet_id=spreadsheet_id, range=range_a1)
@@ -77,16 +73,21 @@ def read_google_sheet(
 
     logger.info(
         "read_google_sheet ok: sheet=%s range=%s rows=%d truncated=%s",
-        spreadsheet_id, range_a1, len(values), truncated,
+        spreadsheet_id,
+        range_a1,
+        len(values),
+        truncated,
     )
-    return json.dumps({
-        "status": "ok",
-        "spreadsheet_id": spreadsheet_id,
-        "range": resp.get("range", range_a1),
-        "row_count": len(values),
-        "values": values,
-        "truncated": truncated,
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "spreadsheet_id": spreadsheet_id,
+            "range": resp.get("range", range_a1),
+            "row_count": len(values),
+            "values": values,
+            "truncated": truncated,
+        }
+    )
 
 
 # ── capability manifest entry ─────────────────────────────────────────────
@@ -107,9 +108,18 @@ TOOL_SPEC = ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "spreadsheet_id": {"type": "string", "description": "The Google Sheet ID (the long string between /d/ and /edit in the URL)."},
-            "range_a1": {"type": "string", "description": "A1 notation range, e.g. 'Sheet1!A1:E100' or 'Contributors!A:Z'."},
-            "service_account_name": {"type": "string", "description": "Optional SA to use: 'cypher_defense' (default), 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', 'agroverse_market_research'."},
+            "spreadsheet_id": {
+                "type": "string",
+                "description": "The Google Sheet ID (the long string between /d/ and /edit in the URL).",
+            },
+            "range_a1": {
+                "type": "string",
+                "description": "A1 notation range, e.g. 'Sheet1!A1:E100' or 'Contributors!A:Z'.",
+            },
+            "service_account_name": {
+                "type": "string",
+                "description": "Optional SA to use: 'cypher_defense' (default), 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', 'agroverse_market_research'.",
+            },
         },
         "required": ["spreadsheet_id", "range_a1"],
     },

@@ -16,6 +16,7 @@ Guardrails:
 This is an SRE power tool: prefer reading logs / checking services; for code
 changes still go through git_push_changes / open_fix_pr + PR review.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,63 +42,79 @@ FLEET: dict[str, dict[str, str]] = {
         # add sophia_infra.pub to this box's own authorized_keys. ubuntu has
         # passwordless sudo, so this is how Sophia installs packages / runs
         # sudo on the machine she runs on (e.g. tesseract-ocr for attachments).
-        "ip": "127.0.0.1", "user": "ubuntu",
+        "ip": "127.0.0.1",
+        "user": "ubuntu",
         "desc": "THIS autopilot box itself (Sophia's own host) — loopback self-exec for package installs / sudo on her own machine",
     },
     "krake_nginx": {
-        "ip": "54.226.114.186", "user": "ubuntu", "port": "2202",
+        "ip": "54.226.114.186",
+        "user": "ubuntu",
+        "port": "2202",
         "desc": "Nginx reverse proxy — terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
     },
     "seni_ror": {
-        "ip": "54.211.179.126", "user": "ubuntu",
+        "ip": "54.211.179.126",
+        "user": "ubuntu",
         "desc": "Edgar (Rails sentiment_importer) — DAO API server (Nelanco, seni_ror_200250915)",
     },
     "dao_protocol": {
-        "ip": "98.93.94.86", "user": "ubuntu",
+        "ip": "98.93.94.86",
+        "user": "ubuntu",
         "desc": "dao_protocol FastAPI server, port 8010 (Nelanco)",
     },
     "seni_sk": {
-        "ip": "34.234.193.80", "user": "ubuntu",
+        "ip": "34.234.193.80",
+        "user": "ubuntu",
         "desc": "Sidekiq worker for Edgar (Nelanco, seni_sk_auto)",
     },
     "seni_sql": {
-        "ip": "44.193.55.205", "user": "ubuntu",
+        "ip": "44.193.55.205",
+        "user": "ubuntu",
         "desc": "PostgreSQL for Edgar (Nelanco, seni_sql_2026)",
     },
     "seni_redis": {
-        "ip": "54.234.59.188", "user": "ubuntu",
+        "ip": "54.234.59.188",
+        "user": "ubuntu",
         "desc": "Redis for Edgar Sidekiq/cache (Nelanco, seni_redis_2)",
     },
     "krake_ror": {
-        "ip": "18.205.20.43", "user": "ubuntu",
+        "ip": "18.205.20.43",
+        "user": "ubuntu",
         "desc": "Krake Rails backend, getdata.io (Nelanco)",
     },
     "krake_sk": {
-        "ip": "54.227.147.20", "user": "ubuntu",
+        "ip": "54.227.147.20",
+        "user": "ubuntu",
         "desc": "Krake Sidekiq worker (Nelanco)",
     },
     "krake_sk_webhook": {
-        "ip": "52.207.88.236", "user": "ubuntu",
+        "ip": "52.207.88.236",
+        "user": "ubuntu",
         "desc": "Krake webhook worker (Nelanco)",
     },
     "krake_sk_crawler": {
-        "ip": "52.91.57.12", "user": "ubuntu",
+        "ip": "52.91.57.12",
+        "user": "ubuntu",
         "desc": "Krake crawler worker (Nelanco)",
     },
     "krake_sk_scaler": {
-        "ip": "100.25.41.96", "user": "ubuntu",
+        "ip": "100.25.41.96",
+        "user": "ubuntu",
         "desc": "Krake autoscaling worker (Nelanco)",
     },
     "krake_data": {
-        "ip": "52.5.179.48", "user": "ubuntu",
+        "ip": "52.5.179.48",
+        "user": "ubuntu",
         "desc": "Krake data processing (Nelanco)",
     },
     "getdata_redis": {
-        "ip": "52.1.162.134", "user": "ubuntu",
+        "ip": "52.1.162.134",
+        "user": "ubuntu",
         "desc": "Redis for Krake (Nelanco, GETDATA_REDIS)",
     },
     "getdata_cache": {
-        "ip": "98.84.169.188", "user": "ubuntu",
+        "ip": "98.84.169.188",
+        "user": "ubuntu",
         "desc": "Krake cache worker (Nelanco, GETDATA_CACHE)",
     },
 }
@@ -161,11 +178,16 @@ def ssh_run(host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS) 
     port = spec.get("port", "22")
     cmd = [
         "ssh",
-        "-i", str(key),
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=10",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-p", port,
+        "-i",
+        str(key),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-p",
+        port,
         f"{spec['user']}@{spec['ip']}",
         command,
     ]
@@ -221,10 +243,13 @@ TOOL_SPEC = ToolSpec(
         },
         "required": ["host", "command"],
     },
-    handler=lambda args, ctx: json.dumps(ssh_run(
-        host=args.get("host", ""),
-        command=args.get("command", ""),
-        timeout_secs=args.get("timeout_secs", _DEFAULT_TIMEOUT_SECS),
-    ), indent=2),
+    handler=lambda args, ctx: json.dumps(
+        ssh_run(
+            host=args.get("host", ""),
+            command=args.get("command", ""),
+            timeout_secs=args.get("timeout_secs", _DEFAULT_TIMEOUT_SECS),
+        ),
+        indent=2,
+    ),
     default_roles=frozenset({"infrastructure"}),
 )

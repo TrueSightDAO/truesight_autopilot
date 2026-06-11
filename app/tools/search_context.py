@@ -6,6 +6,7 @@ a term that appears 10+ times inside GROWTH_MODEL.md — and the agent reported
 Filename listings are not a search. This tool greps file CONTENTS so a
 governor's vocabulary can be resolved before declaring something unknown.
 """
+
 from __future__ import annotations
 
 import json
@@ -86,7 +87,7 @@ def search_context(query: str, max_results: int = 30) -> dict[str, Any]:
                         if len(snippet) > _SNIPPET_LEN:
                             cut = pattern.search(snippet)
                             start = max(0, (cut.start() if cut else 0) - 60)
-                            snippet = ("…" if start else "") + snippet[start:start + _SNIPPET_LEN] + "…"
+                            snippet = ("…" if start else "") + snippet[start : start + _SNIPPET_LEN] + "…"
                         matches.append({"file": rel, "line": lineno, "snippet": snippet})
                     else:
                         truncated = True

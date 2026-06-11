@@ -23,6 +23,7 @@ Security model: the trust boundary is the Telegram user-ID allowlist. The
 adapter runs on the same host as the FastAPI service and holds JWT_SECRET, so
 minting its own JWT is equivalent to any other trusted server-side code.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -42,16 +43,16 @@ from .auth import create_jwt
 from .config import settings
 from .governor_registry import load_governors
 from .voice import transcribe_voice
-from .voice_output import synthesize_voice, detect_language
+from .voice_output import detect_language, synthesize_voice
 
 logger = logging.getLogger("autopilot.telegram")
 
 _TELEGRAM_API = "https://api.telegram.org"
-_MESSAGE_LIMIT = 4096          # Telegram hard cap per message
-_CHAT_TIMEOUT = 180.0          # /chat-blocking can run tools + multiple LLM calls
-_POLL_TIMEOUT = 30             # long-poll seconds
-_TYPING_INTERVAL = 4.0         # Telegram's "typing…" lasts ~5s; refresh under that
-_ATTACH_DIR = "/tmp/tg_attachments"   # adapter + autopilot share the EC2 box / user
+_MESSAGE_LIMIT = 4096  # Telegram hard cap per message
+_CHAT_TIMEOUT = 180.0  # /chat-blocking can run tools + multiple LLM calls
+_POLL_TIMEOUT = 30  # long-poll seconds
+_TYPING_INTERVAL = 4.0  # Telegram's "typing…" lasts ~5s; refresh under that
+_ATTACH_DIR = "/tmp/tg_attachments"  # adapter + autopilot share the EC2 box / user
 
 # Per-thread dispatch locks. The handler pool (max_workers=10) runs messages
 # concurrently, so without this two messages for the SAME topic would dispatch
@@ -91,6 +92,7 @@ def _ack_queued_if_busy(chat_id: int, thread_id: int | None, lock: threading.Loc
 
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
 
+
 def parse_allowed_ids(raw: str) -> set[int]:
     """Parse 'TELEGRAM_ALLOWED_USER_IDS' into a set of ints. Ignores blanks/junk."""
     out: set[int] = set()
@@ -112,9 +114,7 @@ def build_session_id(chat_id: int, thread_id: int | None) -> str:
 
 
 _HANDOFF_PLAN_RE = re.compile(r"`([^`]+\.md)`")
-_HANDOFF_REGISTRY_RAW = (
-    "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/SOPHIA_HANDOFFS.md"
-)
+_HANDOFF_REGISTRY_RAW = "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/SOPHIA_HANDOFFS.md"
 
 
 def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
@@ -159,10 +159,7 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
         if not line.lstrip().startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        matched = any(
-            c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}")
-            for c in cells
-        )
+        matched = any(c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}") for c in cells)
         if not matched:
             continue
         if not any("active" in c.lower() for c in cells):
@@ -182,9 +179,9 @@ def _handoff_prefix(thread_id: int | None) -> str:
         return (
             f"[Handoff context — auto-injected from SOPHIA_HANDOFFS.md: this Telegram "
             f"topic (thread {thread_id}) is the active handoff for `{plan}`. Before "
-            f"responding, read it with read_context_file(\"{plan}\") and resume from its "
-            f"RESUME HERE marker. Treat a short go-signal in this topic (\"go for it\", "
-            f"\"go\", \"proceed\", \"ship it\") as the governor's full authorization to "
+            f'responding, read it with read_context_file("{plan}") and resume from its '
+            f'RESUME HERE marker. Treat a short go-signal in this topic ("go for it", '
+            f'"go", "proceed", "ship it") as the governor\'s full authorization to '
             f"execute that plan through its gates, reporting progress in this topic.]\n\n"
         )
     # Generic fallback — registry lookup missed (unregistered topic, parse/format
@@ -193,8 +190,8 @@ def _handoff_prefix(thread_id: int | None) -> str:
     # let it answer "I have no context."
     return (
         f"[Handoff context — this Telegram topic (thread {thread_id}) may be an "
-        f"execution handoff. If the governor gives a go-signal (\"go for it\", \"go\", "
-        f"\"proceed\") or references a plan/mission, find this thread in "
+        f'execution handoff. If the governor gives a go-signal ("go for it", "go", '
+        f'"proceed") or references a plan/mission, find this thread in '
         f"agentic_ai_context/HANDOFF_MANIFEST.md + SOPHIA_HANDOFFS.md via "
         f"read_context_file, open the referenced `*_PLAN.md`, and resume from its "
         f"RESUME HERE. Do NOT reply that you lack context without checking the "
@@ -246,7 +243,7 @@ def markdown_to_telegram_html(md: str) -> str:
 
     text = _FENCE_RE.sub(lambda m: _store(m.group(1).rstrip("\n"), "pre"), md)
     text = _INLINE_CODE_RE.sub(lambda m: _store(m.group(1), "code"), text)
-    text = html.escape(text, quote=False)                       # escape remaining &<>
+    text = html.escape(text, quote=False)  # escape remaining &<>
     text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
 
     lines: list[str] = []
@@ -275,6 +272,7 @@ def markdown_to_telegram_html(md: str) -> str:
 
 # ── URL extraction ─────────────────────────────────────────────────────────
 
+
 def extract_urls(text: str) -> list[str]:
     """Extract all HTTP/HTTPS URLs from text. Returns unique, ordered list."""
     if not text:
@@ -290,6 +288,7 @@ def extract_urls(text: str) -> list[str]:
 
 
 # ── Telegram + chat I/O ────────────────────────────────────────────────────
+
 
 def _api(method: str) -> str:
     return f"{_TELEGRAM_API}/bot{settings.telegram_bot_api_key}/{method}"
@@ -400,7 +399,8 @@ def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bo
             if resp.status_code == 200:
                 logger.info(
                     "Sent voice message (%d bytes) to chat %s",
-                    os.path.getsize(file_path), chat_id,
+                    os.path.getsize(file_path),
+                    chat_id,
                 )
                 return True
             else:
@@ -559,8 +559,7 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
     return text
 
 
-def call_chat_with_progress(chat_id: int, thread_id: int | None,
-                             message: str, session_id: str, public_key: str) -> str:
+def call_chat_with_progress(chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str) -> str:
     """POST to /chat (SSE) and send styled interim progress updates to Telegram.
 
     Flow:
@@ -577,13 +576,26 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
         return call_chat(message, session_id, public_key)
 
     tool_emoji: dict[str, str] = {
-        "web_search": "🔍", "web_extract": "📄", "read_context_file": "📚",
-        "read_repo_file": "📖", "read_local_file": "📂", "list_directory": "📁",
-        "list_org_repos": "🗂", "list_prs": "📋", "scan_qr_from_file": "📸",
-        "scan_qr_batch": "📸", "lookup_qr_code": "🔎", "lookup_qr_batch": "🔎",
-        "submit_contribution": "📝", "open_fix_pr": "🔧", "create_dao_submission": "📝",
-        "upload_file_to_github": "📤", "merge_pr": "✅", "register_identity": "🆔",
-        "deploy_autopilot": "🚀", "read_oracle_logs": "🔮",
+        "web_search": "🔍",
+        "web_extract": "📄",
+        "read_context_file": "📚",
+        "read_repo_file": "📖",
+        "read_local_file": "📂",
+        "list_directory": "📁",
+        "list_org_repos": "🗂",
+        "list_prs": "📋",
+        "scan_qr_from_file": "📸",
+        "scan_qr_batch": "📸",
+        "lookup_qr_code": "🔎",
+        "lookup_qr_batch": "🔎",
+        "submit_contribution": "📝",
+        "open_fix_pr": "🔧",
+        "create_dao_submission": "📝",
+        "upload_file_to_github": "📤",
+        "merge_pr": "✅",
+        "register_identity": "🆔",
+        "deploy_autopilot": "🚀",
+        "read_oracle_logs": "🔮",
     }
 
     def _label_tool(name: str) -> str:
@@ -620,7 +632,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                 etype = event.get("type", "")
 
                 if etype == "heartbeat":
-                    phase = event.get("phase", "llm")
+                    event.get("phase", "llm")
                     r = event.get("round", 0)
                     if r != round_num:
                         round_num = r
@@ -635,7 +647,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
                         else:
                             _msg = "🔄 Thinking…"
                     else:
-                        _msg = f"🔄 Thinking…"  # fallback, tool label takes over
+                        _msg = "🔄 Thinking…"  # fallback, tool label takes over
                     if time.time() - last_edit > 3:
                         edit_message_text(chat_id, status_id, _msg, thread_id)
                         last_edit = time.time()
@@ -670,7 +682,9 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
 
             # Replace status message with final response
             if final_response:
-                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(chat_id, status_id, final_response, thread_id):
+                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(
+                    chat_id, status_id, final_response, thread_id
+                ):
                     return final_response
                 delete_message(chat_id, status_id)
                 send_message(chat_id, final_response, thread_id)
@@ -688,8 +702,7 @@ def call_chat_with_progress(chat_id: int, thread_id: int | None,
         return f"⚠️ Error: {e}"
 
 
-def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str,
-                          session_id: str, public_key: str) -> str:
+def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str) -> str:
     """Run call_chat in a worker thread, re-sending the 'typing…' action every
     few seconds so the indicator stays alive for the whole (often 30-60s+)
     multi-round generation instead of vanishing after ~5s."""
@@ -704,6 +717,7 @@ def call_chat_with_typing(chat_id: int, thread_id: int | None, message: str,
 
 
 # ── Voice reply helpers ────────────────────────────────────────────────────
+
 
 def _handle_voice_reply(
     chat_id: int,
@@ -732,7 +746,9 @@ def _handle_voice_reply(
         send_voice(chat_id, mp3_path, thread_id)
         logger.info(
             "Sent voice reply: lang=%s voice=%s text_len=%d",
-            lang, voice_name, len(assistant_response),
+            lang,
+            voice_name,
+            len(assistant_response),
         )
     else:
         # Fallback: send as text if synthesis fails
@@ -750,6 +766,7 @@ def _handle_voice_reply(
 
 
 # ── Update handling + loop ─────────────────────────────────────────────────
+
 
 def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | None, session_id: str) -> str | None:
     """Auto-detect file type, extract content, persist to transcript, return summary.
@@ -779,7 +796,9 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
         try:
             result = subprocess.run(
                 [sys.executable, str(script_path), *args],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
             if result.returncode != 0:
                 return {"status": "error", "message": f"Script exited {result.returncode}: {result.stderr[:500]}"}
@@ -815,7 +834,7 @@ def _auto_process_attachment(local_path: str, chat_id: int, thread_id: int | Non
         # If scanned PDF, run OCR too
         ocr_text = ""
         if is_scanned:
-            _update_status(f"📄 PDF appears scanned — running OCR…")
+            _update_status("📄 PDF appears scanned — running OCR…")
             ocr_result = _run_script("ocr_image.py", local_path, "eng")
             if ocr_result.get("status") == "success":
                 ocr_text = ocr_result.get("text", "")
@@ -894,10 +913,11 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         if not allowed:
             # Bootstrap: no allowlist configured yet — reveal the sender's own ID.
             logger.warning("Unconfigured allowlist; message from user_id=%s", user_id)
-            send_message(chat_id,
-                         f"Your Telegram user ID is {user_id}.\n"
-                         f"Add it to TELEGRAM_ALLOWED_USER_IDS and restart to enable me.",
-                         thread_id)
+            send_message(
+                chat_id,
+                f"Your Telegram user ID is {user_id}.\nAdd it to TELEGRAM_ALLOWED_USER_IDS and restart to enable me.",
+                thread_id,
+            )
         else:
             logger.warning("Rejected message from non-allowlisted user_id=%s", user_id)
             send_message(chat_id, "⛔ Not authorized.", thread_id)
@@ -916,7 +936,8 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
 
     # Lightweight commands (skip voice reply for commands)
     if text in ("/start", "/help"):
-        send_message(chat_id,
+        send_message(
+            chat_id,
             "**TrueSight Autopilot** — your private DAO assistant.\n\n"
             "**Topics & Roles**\n"
             "Each Telegram topic can have its own role. On a new topic, I'll ask you to pick one:\n"
@@ -935,7 +956,8 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
             "**Chat**\n"
             "Just type your request. I can search the web, read repos, "
             "scan QR codes, open PRs, and more — scoped to my active role.",
-            thread_id)
+            thread_id,
+        )
         return
 
     if text in ("/reset",):
@@ -973,10 +995,12 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
         if attachment_summary:
             msg_text += f"\n\n{attachment_summary}"
         else:
-            msg_text += (f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
-                         f"scan_qr_batch for QR images, extract_pdf_text for PDFs, "
-                         f"ocr_image for text extraction from images, or read_local_file for text. "
-                         f"After processing, use append_to_transcript to persist the extracted content.]")
+            msg_text += (
+                f"\n\n[Attachment saved at {local_path} — use scan_qr_from_file / "
+                f"scan_qr_batch for QR images, extract_pdf_text for PDFs, "
+                f"ocr_image for text extraction from images, or read_local_file for text. "
+                f"After processing, use append_to_transcript to persist the extracted content.]"
+            )
 
         try:
             # Prep (download + extraction above) ran in parallel; the turn itself
@@ -997,7 +1021,10 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
     # and knows its reply is spoken back. Not part of the transcript shown to the user.
     dispatch_text = text
     if is_voice:
-        dispatch_text = text + ' [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]'
+        dispatch_text = (
+            text
+            + " [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]"
+        )
     dispatch_text = _handoff_prefix(thread_id) + dispatch_text
 
     # Prepend Telegram context so the LLM can reference chat_id and thread_id
@@ -1022,13 +1049,15 @@ def handle_message(msg: dict[str, Any], allowed: set[int], public_key: str | Non
 
 def _handle_research_command(chat_id: int, thread_id: int | None, text: str, public_key: str) -> None:
     """Handle /research command — spawn autonomous CrewAI research."""
-    topic = text[len("/research"):].strip()
+    topic = text[len("/research") :].strip()
     if not topic:
-        send_message(chat_id,
-                     "Usage: `/research <topic>`\n\n"
-                     "Example: `/research ceremonial cacao consumer demographics USA 2025`\n\n"
-                     "You must have a research-enabled role set first (e.g. Content Marketing Researcher).",
-                     thread_id)
+        send_message(
+            chat_id,
+            "Usage: `/research <topic>`\n\n"
+            "Example: `/research ceremonial cacao consumer demographics USA 2025`\n\n"
+            "You must have a research-enabled role set first (e.g. Content Marketing Researcher).",
+            thread_id,
+        )
         return
 
     # Check current role via session
@@ -1040,7 +1069,9 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
             timeout=10.0,
         )
         if resp.status_code != 200:
-            send_message(chat_id, "⚠️ Could not check current role. Set a role first by chatting in this topic.", thread_id)
+            send_message(
+                chat_id, "⚠️ Could not check current role. Set a role first by chatting in this topic.", thread_id
+            )
             return
         session_data = resp.json()
         history = session_data.get("messages", [])
@@ -1050,16 +1081,19 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
 
     # Find role from history
     from .roles import find_role_in_history
+
     role = find_role_in_history(history)
     if role is None:
         send_message(chat_id, "⚠️ No role set in this topic. Send any message first to pick a role.", thread_id)
         return
 
     if not role.crewai_enabled:
-        send_message(chat_id,
-                     f"⚠️ The **{role.name}** role doesn't support autonomous research.\n"
-                     f"Switch to a research-enabled role like Content Marketing Researcher.",
-                     thread_id)
+        send_message(
+            chat_id,
+            f"⚠️ The **{role.name}** role doesn't support autonomous research.\n"
+            f"Switch to a research-enabled role like Content Marketing Researcher.",
+            thread_id,
+        )
         return
 
     # Determine target repo
@@ -1068,7 +1102,9 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
         target_repo = "market_research"
 
     # Start autonomous research with progress
-    status_id = send_message(chat_id, f"🚀 Starting autonomous research on:\n*{topic[:100]}*…\n\nInitialising CrewAI…", thread_id)
+    status_id = send_message(
+        chat_id, f"🚀 Starting autonomous research on:\n*{topic[:100]}*…\n\nInitialising CrewAI…", thread_id
+    )
     if status_id is None:
         return
 
@@ -1081,7 +1117,12 @@ def _handle_research_command(chat_id: int, thread_id: int | None, text: str, pub
     def on_done(result: str) -> None:
         preview = result[:3000]
         more = "\n\n…(truncated — report committed to repo)" if len(result) > 3000 else ""
-        edit_message_text(chat_id, status_id, f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}", thread_id)
+        edit_message_text(
+            chat_id,
+            status_id,
+            f"📄 **Research complete!**\n\nTopic: {topic[:100]}\nRepo: `{target_repo}`\n\n---\n{preview}{more}",
+            thread_id,
+        )
 
     run_research_background(role.key, topic, target_repo, on_progress, on_done)
 
@@ -1102,7 +1143,8 @@ def _handle_reset(chat_id: int, thread_id: int | None, session_id: str, public_k
         send_message(chat_id, "⚠️ Could not reach autopilot server.", thread_id)
         return
 
-    from .roles import find_role_in_history, archive_old_history, set_role_in_history, tag_to_role
+    from .roles import find_role_in_history
+
     role = find_role_in_history(history)
     # Build fresh history with just the role tag
     fresh: list[dict] = []
@@ -1132,8 +1174,11 @@ def _handle_reset(chat_id: int, thread_id: int | None, session_id: str, public_k
 def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict, thread_id: int | None = None) -> None:
     """Send a message with an inline keyboard (HTML). Falls back to plain on error."""
     payload: dict[str, Any] = {
-        "chat_id": chat_id, "text": markdown_to_telegram_html(text), "parse_mode": "HTML",
-        "disable_web_page_preview": True, "reply_markup": keyboard,
+        "chat_id": chat_id,
+        "text": markdown_to_telegram_html(text),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": keyboard,
     }
     if thread_id:
         payload["message_thread_id"] = thread_id
@@ -1148,8 +1193,9 @@ def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict, thread_i
 
 def answer_callback(callback_query_id: str, text: str = "") -> None:
     try:
-        httpx.post(_api("answerCallbackQuery"),
-                   json={"callback_query_id": callback_query_id, "text": text}, timeout=10.0)
+        httpx.post(
+            _api("answerCallbackQuery"), json={"callback_query_id": callback_query_id, "text": text}, timeout=10.0
+        )
     except Exception:  # noqa: BLE001
         pass
 
@@ -1157,21 +1203,30 @@ def answer_callback(callback_query_id: str, text: str = "") -> None:
 def _handle_ship_command(chat_id: int, thread_id: int | None, text: str) -> None:
     """B5/B6: /ship a beta PR. Lists open beta PRs, or confirms/ships a target."""
     from . import beta_deploy
+
     if not settings.beta_deploy_gate_enabled:
-        send_message(chat_id, "🚦 Beta-deploy gate is **disabled**. Enable with "
-                              "`BETA_DEPLOY_GATE_ENABLED=true` to ship PRs to beta from here.", thread_id)
+        send_message(
+            chat_id,
+            "🚦 Beta-deploy gate is **disabled**. Enable with "
+            "`BETA_DEPLOY_GATE_ENABLED=true` to ship PRs to beta from here.",
+            thread_id,
+        )
         return
     target = beta_deploy.parse_ship_target(text)
     if target is None:
         prs = beta_deploy.list_open_beta_prs()
         if not prs:
-            send_message(chat_id, "No open PRs on the beta repos. Ask me to make a change "
-                                  "(I'll open a PR on a beta repo), then `/ship`.", thread_id)
+            send_message(
+                chat_id,
+                "No open PRs on the beta repos. Ask me to make a change (I'll open a PR on a beta repo), then `/ship`.",
+                thread_id,
+            )
             return
         for pr in prs[:5]:
             kb = beta_deploy.build_ship_keyboard(pr["repo"], pr["number"])
             send_message_with_keyboard(
-                chat_id, f"**{pr['repo']}#{pr['number']}** — {pr['title']}\n{pr['url']}", kb, thread_id)
+                chat_id, f"**{pr['repo']}#{pr['number']}** — {pr['title']}\n{pr['url']}", kb, thread_id
+            )
         return
     repo, pr = target
     if settings.beta_auto_merge:  # B6 — no tap
@@ -1179,13 +1234,13 @@ def _handle_ship_command(chat_id: int, thread_id: int | None, text: str) -> None
         send_message(chat_id, result["message"], thread_id)
         return
     kb = beta_deploy.build_ship_keyboard(repo, pr)  # B5 — one-tap confirm
-    send_message_with_keyboard(chat_id, f"Ship **{repo}#{pr}** to beta? I'll verify CI is green first.",
-                               kb, thread_id)
+    send_message_with_keyboard(chat_id, f"Ship **{repo}#{pr}** to beta? I'll verify CI is green first.", kb, thread_id)
 
 
 def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
     """Handle an inline-button tap (the beta-deploy 'Ship' / 'Cancel' buttons)."""
     from . import beta_deploy
+
     cb_id = cb.get("id", "")
     user_id = (cb.get("from") or {}).get("id")
     data = cb.get("data") or ""
@@ -1238,15 +1293,22 @@ def run() -> None:
 
     allowed = parse_allowed_ids(settings.telegram_allowed_user_ids)
     public_key = resolve_governor_public_key()
-    logger.info("Telegram adapter starting: allowlist=%s governor=%s key_resolved=%s",
-                sorted(allowed) or "(BOOTSTRAP — none set)", settings.telegram_governor_name,
-                public_key is not None)
+    logger.info(
+        "Telegram adapter starting: allowlist=%s governor=%s key_resolved=%s",
+        sorted(allowed) or "(BOOTSTRAP — none set)",
+        settings.telegram_governor_name,
+        public_key is not None,
+    )
     if not allowed:
-        logger.warning("No TELEGRAM_ALLOWED_USER_IDS set — running in bootstrap mode "
-                       "(replies with the sender's ID; does not call autopilot).")
+        logger.warning(
+            "No TELEGRAM_ALLOWED_USER_IDS set — running in bootstrap mode "
+            "(replies with the sender's ID; does not call autopilot)."
+        )
     if public_key is None:
-        logger.warning("Could not resolve a public key for governor '%s' — chat calls will be refused.",
-                       settings.telegram_governor_name)
+        logger.warning(
+            "Could not resolve a public key for governor '%s' — chat calls will be refused.",
+            settings.telegram_governor_name,
+        )
 
     offset: int | None = None
     with concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="tg-handle") as executor:

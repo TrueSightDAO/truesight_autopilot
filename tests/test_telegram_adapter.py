@@ -1,4 +1,5 @@
 """Unit tests for the Telegram adapter's pure logic + the security gate (httpx mocked)."""
+
 from __future__ import annotations
 
 import time
@@ -28,7 +29,7 @@ def test_markdown_to_telegram_html_escapes_and_codeblocks():
     # raw < > & in text must be escaped so Telegram HTML parses
     assert h("a < b & c > d") == "a &lt; b &amp; c &gt; d"
     # fenced code becomes <pre> with escaped inner
-    out = h("```json\n{\"a\": 1 < 2}\n```")
+    out = h('```json\n{"a": 1 < 2}\n```')
     assert out.startswith("<pre>") and out.endswith("</pre>")
     assert "&lt;" in out and "@@TGCODE" not in out  # escaped + placeholder restored
 
@@ -68,6 +69,7 @@ def test_call_chat_with_typing_refreshes_indicator(monkeypatch):
 
 # ── parse_allowed_ids ──
 
+
 def test_parse_allowed_ids_variants():
     assert ta.parse_allowed_ids("123, 456 ;789") == {123, 456, 789}
     assert ta.parse_allowed_ids("") == set()
@@ -78,6 +80,7 @@ def test_parse_allowed_ids_variants():
 
 # ── is_allowed (the security gate) ──
 
+
 def test_is_allowed_requires_configured_allowlist():
     # Empty allowlist => nobody is "allowed" (bootstrap path handles those separately)
     assert ta.is_allowed(123, set()) is False
@@ -87,6 +90,7 @@ def test_is_allowed_requires_configured_allowlist():
 
 # ── build_session_id (topic => context) ──
 
+
 def test_build_session_id():
     assert ta.build_session_id(555, None) == "tg:555:0"
     assert ta.build_session_id(555, 42) == "tg:555:42"
@@ -95,6 +99,7 @@ def test_build_session_id():
 
 
 # ── chunk_text ──
+
 
 def test_chunk_text_short_passthrough():
     assert ta.chunk_text("hello") == ["hello"]
@@ -119,7 +124,7 @@ def test_call_chat_whitespace_response_falls_back(monkeypatch):
 
 
 def test_chunk_text_splits_long_on_newlines():
-    block = ("line\n" * 2000)  # ~10k chars, well over 4096
+    block = "line\n" * 2000  # ~10k chars, well over 4096
     chunks = ta.chunk_text(block)
     assert len(chunks) >= 2
     assert all(len(c) <= ta._MESSAGE_LIMIT for c in chunks)
@@ -133,11 +138,15 @@ def test_chunk_text_splits_without_newlines():
 
 # ── handle_message: gate behaviour (capture outbound sends) ──
 
+
 @pytest.fixture
 def sent(monkeypatch):
     calls: list[dict] = []
-    monkeypatch.setattr(ta, "send_message", lambda chat_id, text, thread_id=None: calls.append(
-        {"chat_id": chat_id, "text": text, "thread_id": thread_id}))
+    monkeypatch.setattr(
+        ta,
+        "send_message",
+        lambda chat_id, text, thread_id=None: calls.append({"chat_id": chat_id, "text": text, "thread_id": thread_id}),
+    )
     monkeypatch.setattr(ta, "send_typing", lambda *a, **k: None)
     return calls
 
@@ -167,13 +176,17 @@ def test_handle_message_rejects_non_allowlisted(sent):
 def test_handle_message_allowed_calls_chat(monkeypatch, sent):
     # handle_message now routes to call_chat_with_progress (which sends its own reply)
     captured = {}
-    monkeypatch.setattr(ta, "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key:
-            captured.update(chat_id=chat_id, thread_id=thread_id, message=message,
-                            session_id=session_id, public_key=public_key))
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key: captured.update(
+            chat_id=chat_id, thread_id=thread_id, message=message, session_id=session_id, public_key=public_key
+        ),
+    )
     # real forum topic (is_topic_message=True) => threaded session + threaded routing
-    ta.handle_message(_msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True),
-                      allowed={111}, public_key="PK")
+    ta.handle_message(
+        _msg(user_id=111, chat_id=555, text="what shipped?", thread_id=7, is_topic=True), allowed={111}, public_key="PK"
+    )
     assert "what shipped?" in captured["message"]
     assert captured["session_id"] == "tg:555:7"
     assert captured["thread_id"] == 7
@@ -184,11 +197,14 @@ def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
     # thread_id present but is_topic_message False (a reply-thread) => no thread routing,
     # session falls back to :0 (avoids the 400 on threaded sends).
     captured = {}
-    monkeypatch.setattr(ta, "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key:
-            captured.update(session_id=session_id, thread_id=thread_id))
-    ta.handle_message(_msg(user_id=111, chat_id=555, text="hi", thread_id=4242),
-                      allowed={111}, public_key="PK")
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key: captured.update(
+            session_id=session_id, thread_id=thread_id
+        ),
+    )
+    ta.handle_message(_msg(user_id=111, chat_id=555, text="hi", thread_id=4242), allowed={111}, public_key="PK")
     assert captured["session_id"] == "tg:555:0"
     assert captured["thread_id"] is None
 
@@ -197,10 +213,17 @@ def test_handle_message_photo_routes_with_path(monkeypatch, sent):
     # B4: a photo message downloads the file and injects its path for the QR/fs tools
     monkeypatch.setattr(ta, "download_telegram_file", lambda fid: "/tmp/tg_attachments/x.jpg")
     captured = {}
-    monkeypatch.setattr(ta, "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: captured.update(message=message))
-    msg = {"chat": {"id": 555}, "from": {"id": 111},
-           "photo": [{"file_id": "small"}, {"file_id": "big"}], "caption": "scan this"}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key: captured.update(message=message),
+    )
+    msg = {
+        "chat": {"id": 555},
+        "from": {"id": 111},
+        "photo": [{"file_id": "small"}, {"file_id": "big"}],
+        "caption": "scan this",
+    }
     ta.handle_message(msg, allowed={111}, public_key="PK")
     assert "scan this" in captured["message"]
     assert "/tmp/tg_attachments/x.jpg" in captured["message"]

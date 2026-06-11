@@ -1,9 +1,9 @@
 """Authentication layer: RSA signature verification + JWT sessions."""
+
 from __future__ import annotations
 
 import base64
 import json
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -25,8 +25,8 @@ def _base64_to_bytes(b64: str) -> bytes:
 
 def _import_spki_key(b64_spki: str):
     """Import an RSA SPKI public key for verification using cryptography."""
-    from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
 
     der = _base64_to_bytes(b64_spki)
     public_key = serialization.load_der_public_key(der, backend=default_backend())
@@ -70,7 +70,7 @@ def verify_payload(payload: dict, signature: str, public_key_b64: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid timestamp format.",
-        )
+        ) from None
     now = datetime.now(timezone.utc)
     skew = abs((now - ts).total_seconds())
     if skew > settings.timestamp_skew_seconds:
@@ -145,4 +145,4 @@ def verify_jwt(request: Request) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session token.",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None

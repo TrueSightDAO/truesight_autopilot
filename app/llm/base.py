@@ -2,6 +2,7 @@
 
 Matches the field set in truesight_autopilot_transcript/SCHEMA.md §3 (usage.jsonl).
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

@@ -11,6 +11,7 @@ Strategy:
 This validates both the cancel-flag plumbing AND the next-round / next-
 heartbeat detection in `_run_tool_round_loop`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +26,6 @@ from _autopilot_client import (
     require_running_autopilot,
     stream_chat,
 )
-
 
 INITIAL = (
     "Run these in order, one tool call each — DO NOT batch: "
@@ -51,7 +51,10 @@ async def run() -> int:
         if t == "cancelled":
             saw_cancelled = True
             cancel_reason = data.get("reason")
-            print(f"  → cancelled at round={data.get('round')} phase={data.get('phase')} reason={cancel_reason}", flush=True)
+            print(
+                f"  → cancelled at round={data.get('round')} phase={data.get('phase')} reason={cancel_reason}",
+                flush=True,
+            )
         elif t == "tool":
             print(f"  → tool {data.get('tool')} {data.get('status')}", flush=True)
 

@@ -31,6 +31,7 @@ First-time setup: ``scripts/telethon_login.py`` performs the one-time
 interactive login that creates the session file; this service refuses to
 start without an authorized session (deploy.sh gates on the file existing).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,7 +39,7 @@ import json
 import logging
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -46,10 +47,10 @@ from .config import settings
 
 logger = logging.getLogger("autopilot.watchdog")
 
-_POLL_SECONDS = 300          # nudge/digest evaluation cadence
-_PENDING_TTL_DAYS = 7        # drop unanswered items after a week (stale)
+_POLL_SECONDS = 300  # nudge/digest evaluation cadence
+_PENDING_TTL_DAYS = 7  # drop unanswered items after a week (stale)
 _SNIPPET_CHARS = 160
-_RENUDGE_HOURS = 24.0        # max one nudge per chat per day
+_RENUDGE_HOURS = 24.0  # max one nudge per chat per day
 
 # ── Ask heuristics (pure, unit-tested) ──────────────────────────────────────
 
@@ -59,13 +60,13 @@ _MONTHS = (
 )
 _WEEKDAYS = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
 DATE_RE = re.compile(
-    rf"\b(?:{_MONTHS})\b\.?\s*\d{{0,2}}"          # "June 12", "Jun.", "September"
-    rf"|\b(?:{_WEEKDAYS})\b"                       # "Friday"
+    rf"\b(?:{_MONTHS})\b\.?\s*\d{{0,2}}"  # "June 12", "Jun.", "September"
+    rf"|\b(?:{_WEEKDAYS})\b"  # "Friday"
     r"|\b(?:tomorrow|tonight|today|next week|this week(?:end)?)\b"
-    r"|\b\d{1,2}(?:st|nd|rd|th)\b"                 # "the 12th"
-    r"|\b\d{1,2}[:.]\d{2}\s*(?:am|pm)?\b"          # "3:30pm", "15.00"
-    r"|\b\d{1,2}\s*(?:am|pm)\b"                    # "3pm"
-    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b",          # "6/12"
+    r"|\b\d{1,2}(?:st|nd|rd|th)\b"  # "the 12th"
+    r"|\b\d{1,2}[:.]\d{2}\s*(?:am|pm)?\b"  # "3:30pm", "15.00"
+    r"|\b\d{1,2}\s*(?:am|pm)\b"  # "3pm"
+    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b",  # "6/12"
     re.IGNORECASE,
 )
 _QUESTIONY_RE = re.compile(
@@ -91,8 +92,12 @@ def classify_text(text: str) -> tuple[bool, bool]:
 
 
 def should_track(
-    *, is_private: bool, mentioned: bool, sender_is_bot: bool,
-    is_broadcast: bool, text: str,
+    *,
+    is_private: bool,
+    mentioned: bool,
+    sender_is_bot: bool,
+    is_broadcast: bool,
+    text: str,
 ) -> tuple[bool, bool]:
     """(track, dated) — the full gate, pure so tests can sweep it."""
     if sender_is_bot or is_broadcast:
@@ -108,12 +113,13 @@ def chat_deep_link(chat_id: int, msg_id: int, username: str | None) -> str:
     if username:
         return f"https://t.me/{username}/{msg_id}"
     s = str(chat_id)
-    if s.startswith("-100"):                       # supergroup internal form
+    if s.startswith("-100"):  # supergroup internal form
         return f"https://t.me/c/{s[4:]}/{msg_id}"
-    return ""                                      # plain DMs: title is enough
+    return ""  # plain DMs: title is enough
 
 
 # ── Persistent state ────────────────────────────────────────────────────────
+
 
 class State:
     """pending[chat_id] = {chat_title, sender, snippet, msg_id, link,
@@ -133,10 +139,16 @@ class State:
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({
-            "pending": self.pending,
-            "last_digest_date": self.last_digest_date,
-        }, indent=1), encoding="utf-8")
+        self.path.write_text(
+            json.dumps(
+                {
+                    "pending": self.pending,
+                    "last_digest_date": self.last_digest_date,
+                },
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
 
 
 def _now() -> datetime:
@@ -153,8 +165,7 @@ def _age_hours(iso: str) -> float:
 def _fmt_item(item: dict) -> str:
     age = _age_hours(item["detected_at"])
     flag = " 📅" if item.get("dated") else ""
-    line = (f"• {item['chat_title']}{flag} — {item['sender']}, "
-            f"{age:.1f}h ago: “{item['snippet']}”")
+    line = f"• {item['chat_title']}{flag} — {item['sender']}, {age:.1f}h ago: “{item['snippet']}”"
     if item.get("link"):
         line += f"\n  {item['link']}"
     return line
@@ -162,14 +173,14 @@ def _fmt_item(item: dict) -> str:
 
 # ── Service ─────────────────────────────────────────────────────────────────
 
+
 async def run() -> int:
     # Imported here so the pure helpers above stay importable in test envs
     # that don't install Telethon.
     from telethon import TelegramClient, events
 
     if not settings.telegram_api_id or not settings.telegram_api_hash:
-        logger.error("TELEGRAM_API_ID / TELEGRAM_API_HASH not set — see "
-                     "scripts/telethon_login.py docstring. Exiting.")
+        logger.error("TELEGRAM_API_ID / TELEGRAM_API_HASH not set — see scripts/telethon_login.py docstring. Exiting.")
         return 1
 
     client = TelegramClient(
@@ -179,8 +190,7 @@ async def run() -> int:
     )
     await client.connect()
     if not await client.is_user_authorized():
-        logger.error("Telethon session not authorized — run "
-                     ".venv/bin/python scripts/telethon_login.py once. Exiting.")
+        logger.error("Telethon session not authorized — run .venv/bin/python scripts/telethon_login.py once. Exiting.")
         await client.disconnect()
         return 1
 
@@ -207,14 +217,24 @@ async def run() -> int:
                 return
             chat = await event.get_chat()
             chat_key = str(event.chat_id)
-            title = (getattr(chat, "title", None)
-                     or " ".join(filter(None, [getattr(chat, "first_name", None),
-                                               getattr(chat, "last_name", None)]))
-                     or chat_key)
-            sender_name = " ".join(filter(None, [
-                getattr(sender, "first_name", None),
-                getattr(sender, "last_name", None),
-            ])) or getattr(sender, "username", None) or "someone"
+            title = (
+                getattr(chat, "title", None)
+                or " ".join(filter(None, [getattr(chat, "first_name", None), getattr(chat, "last_name", None)]))
+                or chat_key
+            )
+            sender_name = (
+                " ".join(
+                    filter(
+                        None,
+                        [
+                            getattr(sender, "first_name", None),
+                            getattr(sender, "last_name", None),
+                        ],
+                    )
+                )
+                or getattr(sender, "username", None)
+                or "someone"
+            )
             existing = state.pending.get(chat_key)
             if existing:
                 # Keep the earliest detection (the SLA clock), refresh snippet,
@@ -227,8 +247,7 @@ async def run() -> int:
                     "sender": sender_name,
                     "snippet": (msg.message or "")[:_SNIPPET_CHARS],
                     "msg_id": msg.id,
-                    "link": chat_deep_link(event.chat_id, msg.id,
-                                           getattr(chat, "username", None)),
+                    "link": chat_deep_link(event.chat_id, msg.id, getattr(chat, "username", None)),
                     "detected_at": _now().isoformat(),
                     "dated": dated,
                     "last_nudge_at": "",
@@ -261,8 +280,7 @@ async def run() -> int:
                         state.pending.pop(chat_key)
                         changed = True
                         continue
-                    due_h = (settings.watchdog_urgent_nudge_hours
-                             if item.get("dated") else settings.watchdog_nudge_hours)
+                    due_h = settings.watchdog_urgent_nudge_hours if item.get("dated") else settings.watchdog_nudge_hours
                     last = item.get("last_nudge_at", "")
                     nudge_ok = (not last) or _age_hours(last) >= _RENUDGE_HOURS
                     if age_h >= due_h and nudge_ok:
@@ -275,15 +293,15 @@ async def run() -> int:
                         changed = True
                         logger.info("nudged: %s", item["chat_title"])
                 local = now.astimezone(tz)
-                if (local.hour == settings.watchdog_digest_hour
-                        and state.last_digest_date != str(local.date())
-                        and state.pending):
-                    items = sorted(state.pending.values(),
-                                   key=lambda i: i["detected_at"])
+                if (
+                    local.hour == settings.watchdog_digest_hour
+                    and state.last_digest_date != str(local.date())
+                    and state.pending
+                ):
+                    items = sorted(state.pending.values(), key=lambda i: i["detected_at"])
                     await client.send_message(
                         "me",
-                        f"🌅 Waiting on you ({len(items)}):\n\n"
-                        + "\n\n".join(_fmt_item(i) for i in items),
+                        f"🌅 Waiting on you ({len(items)}):\n\n" + "\n\n".join(_fmt_item(i) for i in items),
                         link_preview=False,
                     )
                     state.last_digest_date = str(local.date())

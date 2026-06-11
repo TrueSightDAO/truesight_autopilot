@@ -17,13 +17,13 @@ Requires:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
-import json
 
 
 def fetch_run(repo: str, run_id: int, token: str) -> dict:
@@ -33,7 +33,7 @@ def fetch_run(repo: str, run_id: int, token: str) -> dict:
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github.v3+json")
     req.add_header("User-Agent", "truesight-autopilot-ci-pingback")
-    
+
     try:
         with urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
@@ -60,12 +60,12 @@ def send_telegram(
     }
     if thread_id:
         payload["message_thread_id"] = int(thread_id)
-    
+
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     data = json.dumps(payload).encode()
     req = Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
-    
+
     try:
         with urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read().decode())
@@ -97,7 +97,7 @@ def build_message(run: dict) -> str:
     started = run.get("run_started_at", "")
     completed = run.get("updated_at", "")
     duration = format_duration(started, completed)
-    
+
     if conclusion == "success":
         emoji = "✅"
         status_text = "succeeded"
@@ -110,10 +110,10 @@ def build_message(run: dict) -> str:
     else:
         emoji = "⚠️"
         status_text = conclusion
-    
+
     lines = [
         f"{emoji} CI <b>{name}</b> {status_text}",
-        f"",
+        "",
         f"Duration: {duration}",
         f"<a href='{html_url}'>View run →</a>" if html_url else "",
     ]
@@ -128,50 +128,50 @@ def main():
     parser.add_argument("--thread-id", help="Telegram thread/topic ID")
     parser.add_argument("--poll-interval", type=int, default=30, help="Poll interval in seconds")
     args = parser.parse_args()
-    
+
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         print("ERROR: GITHUB_TOKEN or GH_TOKEN env var required", file=sys.stderr)
         sys.exit(1)
-    
+
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         print("ERROR: TELEGRAM_BOT_TOKEN env var required", file=sys.stderr)
         sys.exit(1)
-    
+
     print(f"[ci_pingback] Monitoring {args.repo}/actions/runs/{args.run_id}...")
     print(f"[ci_pingback] Polling every {args.poll_interval}s, will notify chat {args.chat_id}")
-    
+
     last_status = None
-    
+
     while True:
         run = fetch_run(args.repo, args.run_id, token)
         status = run.get("status", "")
-        
+
         if not status:
-            print(f"[ci_pingback] Could not fetch run status, retrying...")
+            print("[ci_pingback] Could not fetch run status, retrying...")
             time.sleep(args.poll_interval)
             continue
-        
+
         if status != last_status:
             print(f"[ci_pingback] Status: {status}")
             last_status = status
-        
+
         if status == "completed":
             conclusion = run.get("conclusion", "unknown")
             print(f"[ci_pingback] Run completed: {conclusion}")
-            
+
             message = build_message(run)
             ok = send_telegram(bot_token, args.chat_id, message, args.thread_id)
-            
+
             if ok:
-                print(f"[ci_pingback] Notification sent ✓")
+                print("[ci_pingback] Notification sent ✓")
             else:
-                print(f"[ci_pingback] Failed to send notification", file=sys.stderr)
+                print("[ci_pingback] Failed to send notification", file=sys.stderr)
                 sys.exit(1)
-            
+
             sys.exit(0 if conclusion == "success" else 1)
-        
+
         time.sleep(args.poll_interval)
 
 

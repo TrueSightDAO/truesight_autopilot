@@ -19,6 +19,7 @@ Guardrails:
 - the PAT is fed to git via an inline credential helper reading an env var —
   it never lands in argv or on disk.
 """
+
 from __future__ import annotations
 
 import json
@@ -60,10 +61,21 @@ def _git(args: list[str], cwd: str | Path, timeout: int = 60) -> subprocess.Comp
     env["GIT_PAT"] = settings.github_pat or ""
     env["GIT_TERMINAL_PROMPT"] = "0"  # fail fast instead of hanging on a prompt
     return subprocess.run(
-        ["git", "-c", f"credential.helper={_CREDENTIAL_HELPER}",
-         "-c", f"user.name={_GIT_AUTHOR_NAME}", "-c", f"user.email={_GIT_AUTHOR_EMAIL}",
-         *args],
-        cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout,
+        [
+            "git",
+            "-c",
+            f"credential.helper={_CREDENTIAL_HELPER}",
+            "-c",
+            f"user.name={_GIT_AUTHOR_NAME}",
+            "-c",
+            f"user.email={_GIT_AUTHOR_EMAIL}",
+            *args,
+        ],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -113,7 +125,8 @@ def git_push_changes(
             "with read_repo_file or its raw.githubusercontent.com URLs; write "
             "single files with upload_file_to_github. See "
             "GITHUB_AGENTIC_AI_SSH.md § 'API-only repos'.",
-            repo=repo, api_only=settings.api_only_repos,
+            repo=repo,
+            api_only=settings.api_only_repos,
         )
     if repo in settings.prod_repos:
         return _err(
@@ -121,7 +134,8 @@ def git_push_changes(
             f"'{settings.prod_repos[repo]}' instead, let the governor review "
             "the beta deploy, then promote with sync_beta_to_prod only on "
             "the governor's explicit approval. Never push to prod directly.",
-            repo=repo, beta_repo=settings.prod_repos[repo],
+            repo=repo,
+            beta_repo=settings.prod_repos[repo],
         )
     if not (writes or edits or deletes):
         return _err("nothing to do: provide writes, edits, and/or deletes")
@@ -148,9 +162,9 @@ def git_push_changes(
         default_branch = head.stdout.strip() or "main"
         if branch in {default_branch, "main", "master"}:
             return _err(
-                "refusing to push to a default branch — pick a feature branch; "
-                "merges go through a PR + merge_pr",
-                branch=branch, default_branch=default_branch,
+                "refusing to push to a default branch — pick a feature branch; merges go through a PR + merge_pr",
+                branch=branch,
+                default_branch=default_branch,
             )
 
         r = _git(["checkout", "-b", branch], cwd=clone)
@@ -179,16 +193,14 @@ def git_push_changes(
             text = target.read_text(encoding="utf-8")
             count = text.count(search)
             if count == 0:
-                return _err("search string not found in file", path=path,
-                            search_preview=search[:120])
+                return _err("search string not found in file", path=path, search_preview=search[:120])
             if count > 1 and not e.get("replace_all"):
                 return _err(
-                    f"search string occurs {count} times; make it more specific "
-                    "or pass replace_all=true", path=path,
+                    f"search string occurs {count} times; make it more specific or pass replace_all=true",
+                    path=path,
                 )
             target.write_text(
-                text.replace(search, replace) if e.get("replace_all")
-                else text.replace(search, replace, 1),
+                text.replace(search, replace) if e.get("replace_all") else text.replace(search, replace, 1),
                 encoding="utf-8",
             )
             applied.append(f"edit {path}")
@@ -207,13 +219,11 @@ def git_push_changes(
         _git(["add", "-A"], cwd=clone)
         r = _git(["commit", "-m", commit_message], cwd=clone)
         if r.returncode != 0:
-            return _err("git commit failed (no effective changes?)",
-                        stderr=(r.stderr or r.stdout)[-_MAX_ERR_CHARS:])
+            return _err("git commit failed (no effective changes?)", stderr=(r.stderr or r.stdout)[-_MAX_ERR_CHARS:])
         commit_sha = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
 
         try:
-            r = _git(["push", "origin", f"HEAD:refs/heads/{branch}"],
-                     cwd=clone, timeout=_PUSH_TIMEOUT)
+            r = _git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=clone, timeout=_PUSH_TIMEOUT)
         except subprocess.TimeoutExpired:
             return _err(f"git push timed out after {_PUSH_TIMEOUT}s")
         if r.returncode != 0:
@@ -250,14 +260,14 @@ def git_push_changes(
                 result["pr_url"] = resp.json().get("html_url", "")
             except httpx.HTTPStatusError as exc:
                 result["pr_error"] = (
-                    f"branch pushed but PR creation failed "
-                    f"({exc.response.status_code}): {exc.response.text[:300]}"
+                    f"branch pushed but PR creation failed ({exc.response.status_code}): {exc.response.text[:300]}"
                 )
             except httpx.RequestError as exc:
                 result["pr_error"] = f"branch pushed but PR creation failed: {exc}"
 
-        logger.info("git_push_changes: %s -> %s (%d changes, pr=%s)",
-                    repo, branch, len(applied), result.get("pr_url", "-"))
+        logger.info(
+            "git_push_changes: %s -> %s (%d changes, pr=%s)", repo, branch, len(applied), result.get("pr_url", "-")
+        )
         return result
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -282,8 +292,14 @@ TOOL_SPEC = ToolSpec(
         "type": "object",
         "properties": {
             "repo": {"type": "string", "description": "Repo name under TrueSightDAO (must be in the allowed list)."},
-            "branch": {"type": "string", "description": "Feature branch to create/push, e.g. 'fix/partner-page-hero'. Must not be the default branch."},
-            "commit_message": {"type": "string", "description": "Commit message (used as PR title when pr_title is omitted)."},
+            "branch": {
+                "type": "string",
+                "description": "Feature branch to create/push, e.g. 'fix/partner-page-hero'. Must not be the default branch.",
+            },
+            "commit_message": {
+                "type": "string",
+                "description": "Commit message (used as PR title when pr_title is omitted).",
+            },
             "writes": {
                 "type": "array",
                 "description": "Full-content file writes: [{path, content}]. Creates parent dirs; overwrites existing files.",
@@ -315,24 +331,30 @@ TOOL_SPEC = ToolSpec(
                 "description": "Repo-relative paths to delete.",
                 "items": {"type": "string"},
             },
-            "base_branch": {"type": "string", "description": "Branch to base the work on (default: the repo's default branch)."},
+            "base_branch": {
+                "type": "string",
+                "description": "Branch to base the work on (default: the repo's default branch).",
+            },
             "pr_title": {"type": "string", "description": "PR title (default: commit_message)."},
             "pr_body": {"type": "string", "description": "PR body — explain goal, changes, testing."},
             "open_pr": {"type": "boolean", "description": "Open a PR after pushing (default true).", "default": True},
         },
         "required": ["repo", "branch", "commit_message"],
     },
-    handler=lambda args, ctx: json.dumps(git_push_changes(
-        repo=args.get("repo", ""),
-        branch=args.get("branch", ""),
-        commit_message=args.get("commit_message", ""),
-        writes=args.get("writes"),
-        edits=args.get("edits"),
-        deletes=args.get("deletes"),
-        base_branch=args.get("base_branch", ""),
-        pr_title=args.get("pr_title", ""),
-        pr_body=args.get("pr_body", ""),
-        open_pr=args.get("open_pr", True),
-    ), indent=2),
+    handler=lambda args, ctx: json.dumps(
+        git_push_changes(
+            repo=args.get("repo", ""),
+            branch=args.get("branch", ""),
+            commit_message=args.get("commit_message", ""),
+            writes=args.get("writes"),
+            edits=args.get("edits"),
+            deletes=args.get("deletes"),
+            base_branch=args.get("base_branch", ""),
+            pr_title=args.get("pr_title", ""),
+            pr_body=args.get("pr_body", ""),
+            open_pr=args.get("open_pr", True),
+        ),
+        indent=2,
+    ),
     default_roles=frozenset({"infrastructure"}),
 )
