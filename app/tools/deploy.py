@@ -321,7 +321,23 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     return json.dumps(result)
 
 
-def deploy_autopilot() -> str:
+def _other_threads_busy(caller_session: str | None = None) -> list[str]:
+    """Sessions (other than the deployer's own turn) with an in-flight turn right
+    now, per main._active_streams. Stale entries from a prior hard-kill (>180s, no
+    cleanup) are ignored so they can't block deploys forever."""
+    try:
+        from ..main import _active_streams
+    except Exception:
+        return []
+    now = time.time()
+    return [
+        sid
+        for sid, last in list(_active_streams.items())
+        if sid != caller_session and (now - last) < 180
+    ]
+
+
+def deploy_autopilot(caller_session: str | None = None) -> str:
     """Deploy truesight_autopilot to EC2.
 
     Auto-detects whether we're running on the EC2 instance itself (uses subprocess)
@@ -333,6 +349,34 @@ def deploy_autopilot() -> str:
     """
     steps: list[dict] = []
     start = time.time()
+
+    # ── Idle-drain guard ────────────────────────────────────────────────────
+    # NEVER restart while another thread is mid-turn: a restart severs in-flight
+    # turns and wedges the adapter (the repeated self-brick on 2026-06-12). Wait a
+    # short window for them to drain; if still busy, DEFER rather than brick. Only
+    # in phase one (the running app has the real _active_streams; the phase-two
+    # re-exec subprocess doesn't, and the decision was already made here).
+    if os.environ.get(_PHASE_ENV) != _PHASE_TWO:
+        drain = int(os.getenv("DEPLOY_DRAIN_WAIT_SEC", "30"))
+        deadline = time.time() + drain
+        while time.time() < deadline and _other_threads_busy(caller_session):
+            time.sleep(3)
+        busy = _other_threads_busy(caller_session)
+        if busy:
+            logger.warning(
+                "Deploy DEFERRED — %d thread(s) mid-turn: %s", len(busy), busy
+            )
+            return json.dumps(
+                {
+                    "status": "deferred",
+                    "reason": "other threads are mid-turn",
+                    "busy_threads": busy,
+                    "message": (
+                        f"Deploy DEFERRED: {len(busy)} thread(s) still running a turn. "
+                        "I did NOT restart — your active threads are safe. Retry when idle."
+                    ),
+                }
+            )
 
     # ── Local path ────────────────────────────────────────────────────────
     if _is_local():
@@ -548,5 +592,7 @@ TOOL_SPEC = ToolSpec(
     name="deploy_autopilot",
     description="Deploy the latest version of truesight_autopilot to EC2. Auto-detects local vs remote.",
     parameters={"type": "object", "properties": {}},
-    handler=lambda args, ctx: deploy_autopilot(),
+    handler=lambda args, ctx: deploy_autopilot(
+        caller_session=(ctx or {}).get("session_id")
+    ),
 )
