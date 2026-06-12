@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import logging
 
-from .deploy_watcher import heartbeat as _track_heartbeat, register_track as _register_track, unregister_track as _unregister_track
 import os
 from datetime import datetime, timedelta, timezone
 

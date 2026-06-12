@@ -40,7 +40,11 @@ def sample_open_followups() -> list[dict]:
             "title": "Test follow-up 1",
             "created_at": "2026-06-11",
             "condition": {"kind": "elapsed_days"},
-            "schedule": {"check": "daily", "escalate_after_days": 1, "on_escalate": "ping_thread"},
+            "schedule": {
+                "check": "daily",
+                "escalate_after_days": 1,
+                "on_escalate": "ping_thread",
+            },
             "status": "open",
         },
         {
@@ -50,7 +54,11 @@ def sample_open_followups() -> list[dict]:
             "title": "Test follow-up 2 (different thread)",
             "created_at": "2026-06-11",
             "condition": {"kind": "gmail_reply", "from": "test@example.com"},
-            "schedule": {"check": "daily", "escalate_after_days": 2, "on_escalate": "ping_thread"},
+            "schedule": {
+                "check": "daily",
+                "escalate_after_days": 2,
+                "on_escalate": "ping_thread",
+            },
             "status": "open",
         },
         {
@@ -60,7 +68,11 @@ def sample_open_followups() -> list[dict]:
             "title": "Test follow-up 3 (same thread)",
             "created_at": "2026-06-11",
             "condition": {"kind": "elapsed_days"},
-            "schedule": {"check": "weekly", "escalate_after_days": 7, "on_escalate": "ping_thread"},
+            "schedule": {
+                "check": "weekly",
+                "escalate_after_days": 7,
+                "on_escalate": "ping_thread",
+            },
             "status": "open",
         },
     ]
@@ -93,18 +105,23 @@ class TestAddFollowup:
         from app.tools.followup_tools import add_followup
 
         with (
-            patch("app.tools.followup_tools._read_md", return_value="# Test\n\n## Pending\n\n"),
+            patch(
+                "app.tools.followup_tools._read_md",
+                return_value="# Test\n\n## Pending\n\n",
+            ),
             patch("app.tools.followup_tools._write_md"),
             patch("app.tools.followup_tools.upsert_state"),
         ):
-            result = json.loads(add_followup(
-                tg_ctx,
-                "test-id",
-                "Test follow-up",
-                condition_kind="elapsed_days",
-                escalate_after_days=3,
-                check="weekly",
-            ))
+            result = json.loads(
+                add_followup(
+                    tg_ctx,
+                    "test-id",
+                    "Test follow-up",
+                    condition_kind="elapsed_days",
+                    escalate_after_days=3,
+                    check="weekly",
+                )
+            )
             assert result["status"] == "ok"
             assert result["followup"]["id"] == "test-id"
             assert result["followup"]["title"] == "Test follow-up"
@@ -115,20 +132,25 @@ class TestAddFollowup:
         from app.tools.followup_tools import add_followup
 
         with (
-            patch("app.tools.followup_tools._read_md", return_value="# Test\n\n## Pending\n\n"),
+            patch(
+                "app.tools.followup_tools._read_md",
+                return_value="# Test\n\n## Pending\n\n",
+            ),
             patch("app.tools.followup_tools._write_md"),
             patch("app.tools.followup_tools.upsert_state"),
         ):
-            result = json.loads(add_followup(
-                tg_ctx,
-                "email-test",
-                "Wait for email reply",
-                condition_kind="gmail_reply",
-                escalate_after_days=2,
-                check="daily",
-                from_="partner@example.com",
-                subject_contains="Quote",
-            ))
+            result = json.loads(
+                add_followup(
+                    tg_ctx,
+                    "email-test",
+                    "Wait for email reply",
+                    condition_kind="gmail_reply",
+                    escalate_after_days=2,
+                    check="daily",
+                    from_="partner@example.com",
+                    subject_contains="Quote",
+                )
+            )
             assert result["status"] == "ok"
             assert result["followup"]["condition"] == "gmail_reply"
 
@@ -137,15 +159,20 @@ class TestAddFollowup:
         from app.tools.followup_tools import add_followup
 
         with (
-            patch("app.tools.followup_tools._read_md", return_value="# Test\n\n## Pending\n\n"),
+            patch(
+                "app.tools.followup_tools._read_md",
+                return_value="# Test\n\n## Pending\n\n",
+            ),
             patch("app.tools.followup_tools._write_md"),
             patch("app.tools.followup_tools.upsert_state"),
         ):
-            result = json.loads(add_followup(
-                tg_ctx,
-                "auto-thread",
-                "Auto-derived thread",
-            ))
+            result = json.loads(
+                add_followup(
+                    tg_ctx,
+                    "auto-thread",
+                    "Auto-derived thread",
+                )
+            )
             assert result["status"] == "ok"
 
 
@@ -167,19 +194,25 @@ class TestListFollowups:
         from app.tools.followup_tools import list_followups
 
         with (
-            patch("app.tools.followup_tools.list_open", return_value=sample_open_followups),
+            patch(
+                "app.tools.followup_tools.list_open", return_value=sample_open_followups
+            ),
             patch("app.tools.followup_tools.get_state", return_value=None),
         ):
             result = json.loads(list_followups(tg_ctx))
             assert result["status"] == "ok"
             assert result["count"] == 3
 
-    def test_filters_by_this_thread(self, tg_ctx: MagicMock, sample_open_followups: list[dict]):
+    def test_filters_by_this_thread(
+        self, tg_ctx: MagicMock, sample_open_followups: list[dict]
+    ):
         """list_followups with this_thread=True filters to current thread."""
         from app.tools.followup_tools import list_followups
 
         with (
-            patch("app.tools.followup_tools.list_open", return_value=sample_open_followups),
+            patch(
+                "app.tools.followup_tools.list_open", return_value=sample_open_followups
+            ),
             patch("app.tools.followup_tools.get_state", return_value=None),
         ):
             result = json.loads(list_followups(tg_ctx, this_thread=True))
@@ -190,14 +223,22 @@ class TestListFollowups:
             assert "test-followup-3" in ids
             assert "test-followup-2" not in ids
 
-    def test_enriches_with_state(self, tg_ctx: MagicMock, sample_open_followups: list[dict]):
+    def test_enriches_with_state(
+        self, tg_ctx: MagicMock, sample_open_followups: list[dict]
+    ):
         """list_followups enriches entries with sidecar state."""
         from app.tools.followup_tools import list_followups
 
-        mock_state = {"attempts": 5, "last_checked": "2026-06-11T12:00:00+00:00", "next_check": "2026-06-12T12:00:00+00:00"}
+        mock_state = {
+            "attempts": 5,
+            "last_checked": "2026-06-11T12:00:00+00:00",
+            "next_check": "2026-06-12T12:00:00+00:00",
+        }
 
         with (
-            patch("app.tools.followup_tools.list_open", return_value=sample_open_followups),
+            patch(
+                "app.tools.followup_tools.list_open", return_value=sample_open_followups
+            ),
             patch("app.tools.followup_tools.get_state", return_value=mock_state),
         ):
             result = json.loads(list_followups(tg_ctx))

@@ -65,11 +65,6 @@ from .tools.qr_scanner import (
     scan_qr_from_file,
 )
 from .vault_routes import router as vault_router
-from .deploy_watcher import (
-    heartbeat as _track_heartbeat,
-    register_track as _register_track,
-    unregister_track as _unregister_track,
-)
 from .policy import (
     ActionClass as _ActionClass,
     classify_action as _classify_action,
@@ -1243,14 +1238,11 @@ _FIELD_ALIASES: dict[str, str] = {
     "attached_filename": "Attached Filename",
     "filename": "Attached Filename",
     "attachment": "Attached Filename",
-    # QR Code Registration
-    "qr_code": "QR Code",
     "landing_page": "Landing Page",
     "landing": "Landing Page",
     "page": "Landing Page",
     "farm_name": "Farm Name",
     "farm": "Farm Name",
-    "manager": "Manager",
     "creation_date": "Creation Date",
     "date": "Creation Date",
     # Sales

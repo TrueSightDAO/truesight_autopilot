@@ -11,17 +11,14 @@ Tools:
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from typing import Any
 
 from app.followups import (
-    _FOLLOWUPS_MD,
     _read_md,
     _write_md,
     get_state,
     list_open,
-    parse_all,
     set_status,
     upsert_state,
 )
@@ -114,21 +111,25 @@ def add_followup(
     """
     # Refuse non-Telegram sessions
     if not _is_telegram_session(ctx):
-        return json.dumps({
-            "status": "error",
-            "message": "add_followup requires a Telegram session. "
-                       "Cannot create a thread-less silent follow-up.",
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "message": "add_followup requires a Telegram session. "
+                "Cannot create a thread-less silent follow-up.",
+            }
+        )
 
     # Derive thread_id from session if not provided
     if not thread_id:
         thread_id = _derive_thread_id(ctx)
     if not thread_id:
-        return json.dumps({
-            "status": "error",
-            "message": "thread_id is required. Cannot create a follow-up "
-                       "without a thread to report back to.",
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "message": "thread_id is required. Cannot create a follow-up "
+                "without a thread to report back to.",
+            }
+        )
 
     # Derive chat_id from session if not provided
     if not chat_id:
@@ -174,7 +175,9 @@ def add_followup(
     if pending_idx >= 0:
         # Insert after the Pending section header
         insert_point = pending_idx + len(pending_marker)
-        new_content = content[:insert_point] + "\n" + block + "\n\n" + content[insert_point:]
+        new_content = (
+            content[:insert_point] + "\n" + block + "\n\n" + content[insert_point:]
+        )
     else:
         # No Pending section — append at end
         new_content = content.rstrip() + "\n\n## Pending\n\n" + block + "\n"
@@ -184,17 +187,19 @@ def add_followup(
     # Seed sidecar state
     upsert_state(id, next_check=now, last_checked=None, attempts=0)
 
-    return json.dumps({
-        "status": "ok",
-        "message": f"Follow-up '{id}' created and tracked.",
-        "followup": {
-            "id": id,
-            "title": title,
-            "thread_id": thread_id,
-            "condition": condition_kind,
-            "escalate_after_days": escalate_after_days,
-        },
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "message": f"Follow-up '{id}' created and tracked.",
+            "followup": {
+                "id": id,
+                "title": title,
+                "thread_id": thread_id,
+                "condition": condition_kind,
+                "escalate_after_days": escalate_after_days,
+            },
+        }
+    )
 
 
 def list_followups(ctx: Any, this_thread: bool = False) -> str:
@@ -207,28 +212,35 @@ def list_followups(ctx: Any, this_thread: bool = False) -> str:
     open_fups = list_open()
 
     if not open_fups:
-        return json.dumps({
-            "status": "ok",
-            "message": "No open follow-ups.",
-            "followups": [],
-        })
+        return json.dumps(
+            {
+                "status": "ok",
+                "message": "No open follow-ups.",
+                "followups": [],
+            }
+        )
 
     current_thread = _derive_thread_id(ctx)
     current_chat = _derive_chat_id(ctx)
 
     if this_thread and current_thread:
         open_fups = [
-            f for f in open_fups
+            f
+            for f in open_fups
             if str(f.get("thread_id", "")) == current_thread
             and str(f.get("chat_id", "")) == (current_chat or "")
         ]
 
     if not open_fups:
-        return json.dumps({
-            "status": "ok",
-            "message": "No open follow-ups in this thread." if this_thread else "No open follow-ups.",
-            "followups": [],
-        })
+        return json.dumps(
+            {
+                "status": "ok",
+                "message": "No open follow-ups in this thread."
+                if this_thread
+                else "No open follow-ups.",
+                "followups": [],
+            }
+        )
 
     # Enrich with sidecar state
     enriched = []
@@ -247,15 +259,19 @@ def list_followups(ctx: Any, this_thread: bool = False) -> str:
             "this_thread": (
                 str(f.get("thread_id", "")) == current_thread
                 and str(f.get("chat_id", "")) == (current_chat or "")
-            ) if current_thread else False,
+            )
+            if current_thread
+            else False,
         }
         enriched.append(entry)
 
-    return json.dumps({
-        "status": "ok",
-        "count": len(enriched),
-        "followups": enriched,
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "count": len(enriched),
+            "followups": enriched,
+        }
+    )
 
 
 def close_followup(ctx: Any, id: str, status: str = "resolved") -> str:
@@ -267,19 +283,25 @@ def close_followup(ctx: Any, id: str, status: str = "resolved") -> str:
         status: 'resolved' or 'aborted'.
     """
     if status not in ("resolved", "aborted"):
-        return json.dumps({
-            "status": "error",
-            "message": f"Invalid status '{status}'. Use 'resolved' or 'aborted'.",
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Invalid status '{status}'. Use 'resolved' or 'aborted'.",
+            }
+        )
 
     result = set_status(id, status)
     if not result:
-        return json.dumps({
-            "status": "error",
-            "message": f"Follow-up '{id}' not found.",
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Follow-up '{id}' not found.",
+            }
+        )
 
-    return json.dumps({
-        "status": "ok",
-        "message": f"Follow-up '{id}' marked as {status}.",
-    })
+    return json.dumps(
+        {
+            "status": "ok",
+            "message": f"Follow-up '{id}' marked as {status}.",
+        }
+    )

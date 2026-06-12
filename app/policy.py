@@ -20,8 +20,7 @@ from __future__ import annotations
 import enum
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +83,16 @@ def _load_governor_telegram_ids() -> set[int]:
                 try:
                     ids.add(int(part))
                 except ValueError:
-                    logger.warning("Non-numeric TELEGRAM_ALLOWED_USER_IDS entry: %r", part)
+                    logger.warning(
+                        "Non-numeric TELEGRAM_ALLOWED_USER_IDS entry: %r", part
+                    )
         _GOVERNOR_TELEGRAM_IDS = ids
     return _GOVERNOR_TELEGRAM_IDS
 
 
 def refresh_governor_cache() -> None:
     """Force-reload governor config from env (e.g. after a deploy).
-    
+
     Only nulls the caches — does NOT pre-load, so the next call to
     _load_governor_names() / _load_governor_telegram_ids() picks up
     whatever env is current at that point (important for test isolation
@@ -152,7 +153,9 @@ def resolve_identity(
     return Identity(
         telegram_id=telegram_id,
         role=Role.GUEST,
-        name=display_name or telegram_username or str(telegram_id) if telegram_id else None,
+        name=display_name or telegram_username or str(telegram_id)
+        if telegram_id
+        else None,
     )
 
 
