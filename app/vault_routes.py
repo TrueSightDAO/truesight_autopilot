@@ -106,6 +106,7 @@ async def vault_page(request: Request):
             error = "Could not load credential vault. It may not be initialized."
 
     return _templates.TemplateResponse(
+        request,
         "index.html",
         {
             "request": request,
@@ -121,8 +122,9 @@ async def vault_page(request: Request):
 async def vault_login_page(request: Request):
     """Login page — explains the email→RSA auth flow."""
     return _templates.TemplateResponse(
+        request,
         "login.html",
-        {"request": request},
+        {},
     )
 
 
