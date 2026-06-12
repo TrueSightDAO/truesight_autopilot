@@ -1009,19 +1009,47 @@ async def auth_challenge(request: Request) -> JSONResponse:
     return response
 
 
+@app.post("/auth/send-challenge")
+async def send_challenge(request: Request) -> JSONResponse:
+    """Send a verification code to the user's email."""
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+
+    # Generate a 6-digit code
+    import random
+    code = str(random.randint(100000, 999999))
+
+    # Store the code in memory (replace with Redis in production)
+    _challenge_codes[email] = code
+
+    # Send the email via Gmail
+    try:
+        from .tools.gmail_tools import gmail_send as _gmail_send
+        result = _gmail_send(
+            to=email,
+            subject="Your TrueSight DAO Vault verification code",
+            body=f"Your verification code is: {code}\n\nThis code expires in 10 minutes.\n\nIf you did not request this code, please ignore this email.\n\n- TrueSight DAO Autopilot",
+            account="admin",
+        )
+        logger.info("Challenge code sent to %s (rc=%s)", email, result.get("returncode"))
+    except Exception as e:
+        logger.error("Failed to send challenge email to %s: %s", email, e)
+        # Don't reveal to the user whether sending failed (anti-phishing)
+        pass
+
+    return JSONResponse({"sent": True, "message": "If this email is registered, a verification code has been sent."})
+
+
+# In-memory challenge code store (replace with Redis in production)
+_challenge_codes: dict[str, str] = {}
+
+
 @app.post("/auth/verify-code")
 async def verify_code(request: Request) -> JSONResponse:
-    """Verify an email challenge code and issue a JWT.
-
-    This is a simplified v0 of the email→RSA auth flow for the vault
-    web page. Phase 1 will replace this with the full challenge mint +
-    consume pipeline (hash in Column G, etc.).
-
-    For v0, we accept any code that matches the format (6+ alphanumeric
-    chars) and issue a JWT for the email address. The actual verification
-    is done by the Edgar email-verification flow — this endpoint is a
-    bridge that lets the vault page reuse the existing auth infrastructure.
-    """
+    """Verify an email challenge code and issue a JWT."""
     body = await request.json()
     email = (body.get("email") or "").strip().lower()
     code = (body.get("code") or "").strip()
@@ -1029,12 +1057,18 @@ async def verify_code(request: Request) -> JSONResponse:
     if not email or not code:
         raise HTTPException(status_code=400, detail="Email and code are required.")
 
-    if len(code) < 6:
-        raise HTTPException(status_code=400, detail="Invalid verification code.")
+    # Check the stored code
+    stored = _challenge_codes.get(email)
+    if not stored:
+        raise HTTPException(status_code=400, detail="No verification code sent to this email. Please request a new code.")
 
-    # For v0, we issue a limited-scope JWT for vault access.
-    # The code is verified by the Edgar email-verification flow separately.
-    # This endpoint creates a session for the vault web page.
+    if code != stored:
+        raise HTTPException(status_code=400, detail="Invalid verification code. Please try again.")
+
+    # Code verified - remove it so it can't be reused
+    del _challenge_codes[email]
+
+    # Issue a limited-scope JWT for vault access
     from .auth import create_jwt as _create_jwt
 
     # Use a synthetic public key derived from the email for the JWT subject

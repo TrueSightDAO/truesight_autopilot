@@ -41,9 +41,23 @@ async function sendChallenge() {
     document.getElementById('step-email').style.display = 'none';
     document.getElementById('step-code').style.display = 'block';
     currentEmail = email;
-    // The actual challenge is sent via the Edgar email-verification flow.
-    // For now, show the code input — the user pastes the code they received.
     document.getElementById('code').focus();
+    // Send the challenge code via email
+    try {
+        const resp = await fetch('/auth/send-challenge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email })
+        });
+        if (!resp.ok) {
+            const data = await resp.json();
+            errorEl.textContent = data.detail || 'Failed to send verification code.';
+            errorEl.style.display = 'block';
+        }
+    } catch (e) {
+        // Network error - user can still try a code if they got it via another channel
+        console.error('Failed to send challenge:', e);
+    }
 }
 
 async function verifyCode() {
