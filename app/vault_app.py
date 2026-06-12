@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .vault_routes import router as vault_router
+from .auth_routes import router as auth_router
 
 logger = logging.getLogger("autopilot.vault_app")
 
@@ -32,6 +33,9 @@ app.add_middleware(
 
 # Mount vault routes at /vault
 app.include_router(vault_router)
+
+# Mount auth routes
+app.include_router(auth_router)
 
 # Also mount at root for direct access
 from .vault_routes import router as vault_router_root
