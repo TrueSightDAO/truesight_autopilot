@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}System Status{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h2>System Status — Active Tracks</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1rem;">
+        Shows all active Telegram threads, background loops, and operations currently running.
+        Tracks that exceed their expected max duration are marked as stale.
+    </p>
+    <div id="system-status">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
+    </div>
+    <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem;">
+        <button class="btn btn-outline btn-sm" onclick="refreshSystemStatus()">Refresh</button>
+        <button class="btn btn-primary btn-sm" id="deploy-btn" onclick="triggerDeploy(false)" style="display:none;">Deploy now</button>
+        <button class="btn btn-danger btn-sm" id="force-deploy-btn" onclick="triggerDeploy(true)" style="display:none;">Force deploy</button>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Vault Health</h2>
+    <div id="vault-health">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
+    </div>
+</div>
+
+<script>
+function refreshSystemStatus() {
+    document.getElementById('system-status').innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">Refreshing…</p>';
+    location.reload();
+}
+
+// Load system status
+fetch('/vault/api/system-status')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+        const el = document.getElementById('system-status');
+        if (!data) {
+            el.innerHTML = '<p style="color: var(--danger);">Could not reach system status. <a href="/vault/login">Sign in</a> to view.</p>';
+            return;
+        }
+        let html = '<p><strong>Can deploy:</strong> ' + (data.can_deploy ? '✅ Yes' : '❌ No') + '</p>';
+        html += '<p><strong>Active tracks:</strong> ' + data.total_tracks + '</p>';
+        if (data.active_tracks && data.active_tracks.length > 0) {
+            html += '<table><thead><tr><th>Track ID</th><th>Label</th><th>Type</th><th>Status</th><th>Elapsed</th><th>Max</th><th>Started</th></tr></thead><tbody>';
+            data.active_tracks.forEach(t => {
+                const statusClass = t.status === 'active' ? '' : 'style="color: var(--text-muted);"';
+                html += '<tr ' + statusClass + '><td><code>' + t.id + '</code></td><td>' + t.label + '</td><td>' + t.track_type + '</td><td>' + t.status + '</td><td>' + t.elapsed_s + 's</td><td>' + t.max_duration_s + 's</td><td>' + (t.started_at || '').slice(0, 19) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        } else {
+            html += '<p style="color: var(--text-muted); font-size: 0.85rem;">No active tracks.</p>';
+        }
+        el.innerHTML = html;
+
+        document.getElementById('deploy-btn').style.display = data.can_deploy ? 'inline-block' : 'none';
+        document.getElementById('force-deploy-btn').style.display = 'inline-block';
+    })
+    .catch(() => {
+        document.getElementById('system-status').innerHTML = '<p style="color: var(--danger);">Failed to load system status. <a href="/vault/login">Sign in</a> to view.</p>';
+    });
+
+// Load vault health
+fetch('/vault/api/health')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+        const el = document.getElementById('vault-health');
+        if (!data) {
+            el.innerHTML = '<p style="color: var(--danger);">Could not reach vault health.</p>';
+            return;
+        }
+        el.innerHTML = '<p><strong>Initialized:</strong> ' + (data.initialized ? '✅ Yes' : '❌ No') + '</p>' +
+            '<p><strong>Credentials stored:</strong> ' + data.credential_count + '</p>' +
+            '<p><strong>Status:</strong> ' + data.status + '</p>';
+    })
+    .catch(() => {
+        document.getElementById('vault-health').innerHTML = '<p style="color: var(--danger);">Failed to load vault health.</p>';
+    });
+
+async function triggerDeploy(force) {
+    const btn = document.getElementById(force ? 'force-deploy-btn' : 'deploy-btn');
+    btn.textContent = 'Deploying…';
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/vault/api/deploy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            alert('Deploy triggered. Service will restart shortly.');
+        } else {
+            alert('Deploy blocked: ' + (data.blocking_tracks || []).map(t => t.label).join(', '));
+        }
+    } catch (e) {
+        alert('Failed to trigger deploy.');
+    }
+    btn.textContent = force ? 'Force deploy' : 'Deploy now';
+    btn.disabled = false;
+}
+</script>
+{% endblock %}

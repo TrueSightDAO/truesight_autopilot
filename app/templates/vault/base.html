@@ -127,6 +127,26 @@
             color: var(--text-muted);
         }
         .empty-state p { margin-bottom: 1rem; }
+        .nav-bar {
+            background: var(--saffron-dark);
+            padding: 0.5rem 2rem;
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+        }
+        .nav-link {
+            color: white;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            transition: background 0.2s;
+        }
+        .nav-link:hover {
+            background: rgba(255,255,255,0.15);
+            text-decoration: none;
+        }
         .nudge-card {
             text-align: center;
             padding: 3rem 2rem;
@@ -147,15 +167,18 @@
                 {% else %}
                     <span class="badge badge-guest">Contributor</span>
                 {% endif %}
-                &middot;
-                <a href="/vault">Vault</a>
-                &middot;
-                <a href="/logout">Sign out</a>
-            {% else %}
-                <a href="/vault/login">Sign in</a>
             {% endif %}
         </div>
     </div>
+    <nav class="nav-bar">
+        <a href="/vault" class="nav-link">Vault</a>
+        <a href="/vault/status" class="nav-link">System Status</a>
+        {% if identity %}
+            <a href="/logout" class="nav-link" style="margin-left: auto;">Sign out</a>
+        {% else %}
+            <a href="/vault/login" class="nav-link" style="margin-left: auto;">Sign in</a>
+        {% endif %}
+    </nav>
     <div class="container">
         {% block content %}{% endblock %}
     </div>
