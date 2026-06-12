@@ -218,8 +218,28 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
     return None
 
 
-def _handoff_prefix(thread_id: int | None) -> str:
-    """Context block to prepend so a bare go-signal in a handoff topic resolves."""
+_GO_SIGNAL_RE = re.compile(
+    r"(\bgo for it\b|\bgo ahead\b|\bproceed\b|\bship it\b|\bexecute\b|\bresume\b|"
+    r"\bcontinue\b|\bpick (it|this) up\b|\bkick (it )?off\b|\blet'?s go\b|"
+    r"\bplan\b|\bhandoff\b|\bmission\b|RESUME HERE|^\s*go\s*$)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_go_signal(text: str | None) -> bool:
+    """A go-signal or plan/handoff reference — the ONLY case where an *unregistered*
+    thread should still get the generic handoff fallback. Ordinary chat (e.g. a
+    Stream-of-consciousness thread) → no handoff prefix, so the model isn't pushed
+    to 'go find a plan' on a normal message (2026-06-12)."""
+    if not text:
+        return False
+    return bool(_GO_SIGNAL_RE.search(text))
+
+
+def _handoff_prefix(thread_id: int | None, text: str = "") -> str:
+    """Context block to prepend so a bare go-signal in a handoff topic resolves.
+    Registered handoffs always get their plan context; an *unregistered* thread only
+    gets the generic fallback when the message looks like a go-signal/plan reference."""
     if not thread_id:
         return ""
     plan = _handoff_plan_for_thread(thread_id)
@@ -233,9 +253,12 @@ def _handoff_prefix(thread_id: int | None) -> str:
             f"execute that plan through its gates, reporting progress in this topic.]\n\n"
         )
     # Generic fallback — registry lookup missed (unregistered topic, parse/format
-    # change, or both clone AND GitHub unreachable). Never leave a forum-topic
-    # message context-less: tell the brain HOW to find its mission rather than
-    # let it answer "I have no context."
+    # change, or both clone AND GitHub unreachable). Only inject it when the message
+    # looks like a go-signal / plan reference: a normal chat message on a non-handoff
+    # thread should NOT be told "this may be a handoff, go find a plan" (that noise
+    # confused the model on the Stream-of-consciousness thread, 2026-06-12).
+    if not _looks_like_go_signal(text):
+        return ""
     return (
         f"[Handoff context — this Telegram topic (thread {thread_id}) may be an "
         f'execution handoff. If the governor gives a go-signal ("go for it", "go", '
@@ -1108,7 +1131,7 @@ def handle_message(
 
         # Build the message for the LLM
         msg_text = caption or text or "Please inspect the attached file."
-        msg_text = _handoff_prefix(thread_id) + msg_text
+        msg_text = _handoff_prefix(thread_id, msg_text) + msg_text
         if attachment_summary:
             msg_text += f"\n\n{attachment_summary}"
         else:
@@ -1144,7 +1167,7 @@ def handle_message(
             text
             + " [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]"
         )
-    dispatch_text = _handoff_prefix(thread_id) + dispatch_text
+    dispatch_text = _handoff_prefix(thread_id, dispatch_text) + dispatch_text
 
     # Prepend Telegram context so the LLM can reference chat_id and thread_id
     if thread_id:

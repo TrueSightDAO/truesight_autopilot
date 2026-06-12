@@ -65,7 +65,11 @@ from .tools.qr_scanner import (
     scan_qr_from_file,
 )
 from .vault_routes import router as vault_router
-from .deploy_watcher import heartbeat as _track_heartbeat, register_track as _register_track, unregister_track as _unregister_track
+from .deploy_watcher import (
+    heartbeat as _track_heartbeat,
+    register_track as _register_track,
+    unregister_track as _unregister_track,
+)
 from .policy import (
     ActionClass as _ActionClass,
     classify_action as _classify_action,
@@ -174,7 +178,7 @@ def _render_progress(session_id: str) -> str | None:
     # Instruction excerpt
     instr = (rec.get("instruction") or "")[:80]
     if instr:
-        parts.append(f"\"{instr}...\"")
+        parts.append(f'"{instr}..."')
     # Round + elapsed
     rnd = rec.get("round", 0)
     elapsed = time.time() - rec.get("started_at", time.time())
@@ -184,7 +188,9 @@ def _render_progress(session_id: str) -> str | None:
     ca = rec.get("current_arg", "")
     if ct:
         arg_snippet = (str(ca) or "")[:60]
-        parts.append("running `" + ct + "`" + (f" ({arg_snippet})" if arg_snippet else ""))
+        parts.append(
+            "running `" + ct + "`" + (f" ({arg_snippet})" if arg_snippet else "")
+        )
     # Done so far
     done = rec.get("done", [])
     if done:
@@ -1038,6 +1044,7 @@ async def verify_code(request: Request) -> JSONResponse:
 
     # Use a synthetic public key derived from the email for the JWT subject
     import hashlib
+
     synthetic_key = f"vault:email:{hashlib.sha256(email.encode()).hexdigest()[:16]}"
     token = _create_jwt(synthetic_key)
 
@@ -1341,28 +1348,38 @@ async def _run_tool(
         if not governor_name:
             logger.warning(
                 "POLICY BLOCK: %s called without governor identity (action_class=%s)",
-                func_name, action_class.value,
+                func_name,
+                action_class.value,
             )
-            return json.dumps({
-                "status": "blocked",
-                "message": "This action requires governor privileges. "
-                           "Please authenticate with your DAO identity first.",
-            })
+            return json.dumps(
+                {
+                    "status": "blocked",
+                    "message": "This action requires governor privileges. "
+                    "Please authenticate with your DAO identity first.",
+                }
+            )
         # Resolve identity from governor_name
         identity = _resolve_identity(display_name=governor_name)
         decision = _policy_evaluate(identity, func_name)
         if not decision.allowed:
             logger.warning(
                 "POLICY BLOCK: %s by %s (role=%s, reason=%s)",
-                func_name, governor_name, identity.role.value, decision.reason,
+                func_name,
+                governor_name,
+                identity.role.value,
+                decision.reason,
             )
-            return json.dumps({
-                "status": "blocked",
-                "message": decision.reason,
-            })
+            return json.dumps(
+                {
+                    "status": "blocked",
+                    "message": decision.reason,
+                }
+            )
         logger.info(
             "POLICY ALLOW: %s by %s (role=%s)",
-            func_name, governor_name, identity.role.value,
+            func_name,
+            governor_name,
+            identity.role.value,
         )
 
     # First try the capability-manifest registry. Tools whose TOOL_SPEC carries
@@ -1576,15 +1593,15 @@ async def _run_tool(
                 command += f' --creation-date "{creation_date}"'
 
         proposal = {
-                "status": "pending_approval",
-                "proposal": {
-                    "action": "submit_contribution",
-                    "title": f"{event_name}: {qr}" if qr else event_name,
-                    "summary": summary,
-                    "command": command,
-                    "tool_args": {"event_name": event_name, "attributes": attributes},
-                },
-                "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
+            "status": "pending_approval",
+            "proposal": {
+                "action": "submit_contribution",
+                "title": f"{event_name}: {qr}" if qr else event_name,
+                "summary": summary,
+                "command": command,
+                "tool_args": {"event_name": event_name, "attributes": attributes},
+            },
+            "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
         }
 
         # Persist pending approval to server + GitHub for durability
@@ -2121,7 +2138,11 @@ async def _run_tool_round_loop(
 
     # Populate live-progress record
     _live_progress[session_id] = {
-        "instruction": (history[-1]["content"] if history and history[-1].get("role") == "user" else "")[:200],
+        "instruction": (
+            history[-1]["content"]
+            if history and history[-1].get("role") == "user"
+            else ""
+        )[:200],
         "started_at": time.time(),
         "round": 0,
         "elapsed": 0.0,
@@ -2143,7 +2164,9 @@ async def _run_tool_round_loop(
     while round_num < MAX_TOOL_ROUNDS:
         round_num += 1
         _live_progress[session_id]["round"] = round_num
-        _live_progress[session_id]["elapsed"] = time.time() - _live_progress[session_id]["started_at"]
+        _live_progress[session_id]["elapsed"] = (
+            time.time() - _live_progress[session_id]["started_at"]
+        )
 
         if _cancel_flags.get(session_id):
             logger.info(
@@ -3943,6 +3966,39 @@ def _sanitise_tool_messages(history: list[dict]) -> None:
                 )
                 i = j + len(stubs)
                 continue
+        i += 1
+
+    # Pass 3 — collapse runs of consecutive `user` messages into one. They pile up
+    # when turns fail to produce an assistant reply (e.g. an outage + repeated
+    # pokes), and DeepSeek returns an EMPTY response when fed a wall of consecutive
+    # user turns — which makes the pile self-perpetuate ("Autopilot produced an
+    # empty response"). Merging them (dedup, order-preserving) keeps every message's
+    # content but restores well-formed user→assistant alternation, so a degenerate
+    # thread self-heals instead of needing a manual session repair (2026-06-12).
+    i = 0
+    while i < len(history):
+        if history[i].get("role") == "user":
+            j = i + 1
+            while j < len(history) and history[j].get("role") == "user":
+                j += 1
+            if j - i > 1:
+                run = history[i:j]
+                seen: set = set()
+                parts: list[str] = []
+                for m in run:
+                    c = m.get("content", "")
+                    if isinstance(c, str) and c.strip() and c.strip() not in seen:
+                        seen.add(c.strip())
+                        parts.append(c)
+                merged = (
+                    "\n\n---\n\n".join(parts)
+                    if len(parts) > 1
+                    else (parts[0] if parts else run[-1].get("content", ""))
+                )
+                history[i:j] = [{"role": "user", "content": merged}]
+                logger.info(
+                    "Collapsed %d consecutive user messages at index %d", j - i, i
+                )
         i += 1
 
 

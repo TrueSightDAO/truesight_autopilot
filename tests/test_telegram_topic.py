@@ -26,10 +26,12 @@ def test_parse_handoff_plan_unknown_thread_is_none():
 
 
 def test_handoff_prefix_generic_fallback_when_no_plan(monkeypatch):
-    # Registry lookup misses -> non-empty generic hint, never empty.
+    # Registry lookup misses: the generic hint now fires ONLY on a go-signal /
+    # plan reference (2026-06-12) — a normal chat message gets no handoff noise.
     monkeypatch.setattr(ta, "_handoff_plan_for_thread", lambda tid: None)
-    out = ta._handoff_prefix(777)
-    assert out and "HANDOFF_MANIFEST.md" in out and "lack context" in out
+    go = ta._handoff_prefix(777, "go for it")
+    assert go and "HANDOFF_MANIFEST.md" in go and "lack context" in go
+    assert ta._handoff_prefix(777, "just chatting") == ""  # normal chat → no prefix
 
 
 def test_handoff_prefix_empty_outside_topic():
