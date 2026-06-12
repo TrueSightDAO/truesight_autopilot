@@ -65,11 +65,6 @@ from .tools.qr_scanner import (
     scan_qr_from_file,
 )
 from .vault_routes import router as vault_router
-from .deploy_watcher import (
-    heartbeat as _track_heartbeat,
-    register_track as _register_track,
-    unregister_track as _unregister_track,
-)
 from .policy import (
     ActionClass as _ActionClass,
     classify_action as _classify_action,
@@ -2310,7 +2305,7 @@ async def _run_tool_round_loop(
                         **({"queue_msg_id": queue_msg_id} if queue_msg_id else {}),
                     ):
                         yield hb
-                    result_text = await tool_task
+                    result_text = _truncate_tool_result(await tool_task)
                 except asyncio.CancelledError:
                     logger.info(
                         "[%d] %sTool %s cancelled by user",
@@ -3728,8 +3723,8 @@ async def _chat_blocking_turn(
                     )
                 except (json.JSONDecodeError, TypeError):
                     func_args = {}
-                result_text = await _run_tool(
-                    func_name, func_args, history, session_id, gov_name
+                result_text = _truncate_tool_result(
+                    await _run_tool(func_name, func_args, history, session_id, gov_name)
                 )
                 tool_trace.append(
                     {"name": func_name, "args": func_args, "result": result_text}
@@ -3894,6 +3889,23 @@ def _looks_base64(s: str) -> bool:
 _RECOVERED_TOOL_RESULT = (
     "[tool result lost to a concurrent-write race; session auto-recovered]"
 )
+
+# Cap a single tool result before it goes into the transcript. Big/binary outputs
+# (DOCX dumps, long ssh stdout) otherwise accumulate until a thread's context
+# bloats past the point DeepSeek returns an EMPTY response — a self-inflicted brick
+# (proven on threads 780 + 2622, 2026-06-12). The model rarely needs more than this
+# to act on a result; the full output is still in the live tool's own logs.
+_MAX_TOOL_RESULT_CHARS = 8000
+
+
+def _truncate_tool_result(text):
+    if not isinstance(text, str) or len(text) <= _MAX_TOOL_RESULT_CHARS:
+        return text
+    omitted = len(text) - _MAX_TOOL_RESULT_CHARS
+    return (
+        text[:_MAX_TOOL_RESULT_CHARS]
+        + f"\n…[truncated {omitted} chars to keep the thread context from bloating]"
+    )
 
 
 def _sanitise_tool_messages(history: list[dict]) -> None:
