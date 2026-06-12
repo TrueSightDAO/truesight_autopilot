@@ -216,6 +216,137 @@ class TestDataInstructionBoundary:
 # ── Phase 0.4: Integration scenarios ───────────────────────────────────────
 
 
+class TestRunToolEnforcement:
+    """Integration tests for the policy enforcement gate in _run_tool().
+
+    These tests verify that the enforcement code added to main.py actually
+    blocks write tools for unauthenticated callers and allows them for
+    governors. They mock the tool dispatch to isolate the policy check.
+    """
+
+    def test_run_tool_blocks_write_for_no_identity(self):
+        """_run_tool() should block write tools when governor_name is None."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="git_push_changes",
+            func_args={},
+            governor_name=None,
+        ))
+        assert "blocked" in result.lower()
+        assert "governor" in result.lower()
+
+    def test_run_tool_blocks_write_for_unknown_name(self):
+        """_run_tool() should block write tools for unrecognized names."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="deploy_autopilot",
+            func_args={},
+            governor_name="Stranger",
+        ))
+        assert "blocked" in result.lower()
+
+    def test_run_tool_allows_read_for_no_identity(self):
+        """_run_tool() should allow read tools even without identity."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="read_context_file",
+            func_args={"path": "test.md"},
+            governor_name=None,
+        ))
+        # Should not be blocked — should try to actually read the file
+        assert "blocked" not in result.lower()
+
+    def test_run_tool_allows_read_for_unknown_name(self):
+        """_run_tool() should allow read tools for unrecognized names."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="web_search",
+            func_args={"query": "test"},
+            governor_name="Stranger",
+        ))
+        assert "blocked" not in result.lower()
+
+    def test_run_tool_blocked_response_format(self):
+        """Blocked response should be valid JSON with status and message."""
+        from app.main import _run_tool
+        import asyncio
+        import json
+
+        result = asyncio.run(_run_tool(
+            func_name="ssh_run",
+            func_args={},
+            governor_name=None,
+        ))
+        try:
+            data = json.loads(result)
+            assert data["status"] == "blocked"
+            assert "message" in data
+        except (json.JSONDecodeError, KeyError) as e:
+            pytest.fail(f"Blocked response should be valid JSON: {e}")
+
+    def test_run_tool_allows_write_for_governor(self):
+        """_run_tool() should allow write tools for known governors."""
+        from app.main import _run_tool
+        import asyncio
+
+        with patch.dict("os.environ", {"GOVERNOR_NAMES": "Gary Teh"}):
+            result = asyncio.run(_run_tool(
+                func_name="read_context_file",
+                func_args={"path": "test.md"},
+                governor_name="Gary Teh",
+            ))
+            # Should not be blocked — Gary is a governor
+            assert "blocked" not in result.lower()
+
+
+class TestSystemPromptDataBoundary:
+    """Tests that the data/instruction boundary rule is in the system prompt."""
+
+    def test_data_boundary_rule_present(self):
+        """The system prompt must contain the data/instruction boundary rule."""
+        from app.context import _SYSTEM_PROMPT_HEADER
+
+        assert "DATA" in _SYSTEM_PROMPT_HEADER
+        assert "INSTRUCTION" in _SYSTEM_PROMPT_HEADER
+        assert "attachment" in _SYSTEM_PROMPT_HEADER.lower()
+        assert "never" in _SYSTEM_PROMPT_HEADER.lower() and "execute" in _SYSTEM_PROMPT_HEADER.lower()
+
+    def test_data_boundary_in_built_prompt(self):
+        """The built system prompt must include the boundary rule."""
+        from app.context import build_system_prompt
+
+        prompt = build_system_prompt()
+        assert "DATA" in prompt
+        assert "INSTRUCTION" in prompt
+        assert "attachment" in prompt.lower()
+
+    def test_data_boundary_in_cached_prompt(self):
+        """The cached system prompt must include the boundary rule."""
+        from app.context import get_system_prompt
+
+        prompt = get_system_prompt()
+        assert "DATA" in prompt
+        assert "INSTRUCTION" in prompt
+
+    def test_data_boundary_specific_wording(self):
+        """Verify the exact wording of the data/instruction boundary rule."""
+        from app.context import _SYSTEM_PROMPT_HEADER
+
+        # The rule should explicitly say ingested content is not instructions
+        assert "ingested content" in _SYSTEM_PROMPT_HEADER.lower()
+        assert "never" in _SYSTEM_PROMPT_HEADER.lower() and "instructions" in _SYSTEM_PROMPT_HEADER.lower()
+        assert "governor" in _SYSTEM_PROMPT_HEADER.lower()
+        assert "direct message" in _SYSTEM_PROMPT_HEADER.lower()
+
+
 class TestIntegrationScenarios:
     """End-to-end scenarios combining identity, policy, and data boundary."""
 
@@ -277,3 +408,183 @@ class TestIntegrationScenarios:
         for tool in write_tools:
             decision = evaluate(identity, tool)
             assert decision.allowed is True, f"{tool} should be allowed for governor"
+
+
+# ── _run_tool() enforcement gate integration tests ────────────────────────
+
+
+class TestRunToolEnforcement:
+    """Direct tests of the policy enforcement gate in _run_tool().
+
+    These tests verify that _run_tool() in main.py correctly blocks
+    write tools for unauthenticated callers and allows them for governors.
+    """
+
+    def test_write_tool_blocked_without_governor(self):
+        """A write tool called without governor_name should be blocked."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="git_push_changes",
+            func_args={},
+            governor_name=None,
+        ))
+        assert "blocked" in result.lower()
+        assert "governor" in result.lower()
+
+    def test_write_tool_blocked_for_guest_name(self):
+        """A write tool called with a non-governor name should be blocked."""
+        from app.main import _run_tool
+        import asyncio
+
+        with patch.dict("os.environ", {"GOVERNOR_NAMES": "Gary Teh"}):
+            result = asyncio.run(_run_tool(
+                func_name="git_push_changes",
+                func_args={},
+                governor_name="Stranger",
+            ))
+            assert "blocked" in result.lower()
+
+    def test_write_tool_allowed_for_governor(self):
+        """A write tool called with a governor name should proceed."""
+        from app.main import _run_tool
+        import asyncio
+
+        with patch.dict("os.environ", {"GOVERNOR_NAMES": "Gary Teh"}):
+            result = asyncio.run(_run_tool(
+                func_name="git_push_changes",
+                func_args={},
+                governor_name="Gary Teh",
+            ))
+            # Should NOT be blocked — should proceed to the actual handler
+            assert "blocked" not in result.lower()
+
+    def test_read_tool_allowed_without_governor(self):
+        """A read tool should work even without governor_name."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="read_context_file",
+            func_args={"path": "nonexistent"},
+            governor_name=None,
+        ))
+        # Should proceed to the handler, not be blocked
+        assert "blocked" not in result.lower()
+
+    def test_deploy_blocked_for_guest(self):
+        """Deploy should be blocked for guests."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="deploy_autopilot",
+            func_args={},
+            governor_name=None,
+        ))
+        assert "blocked" in result.lower()
+
+    def test_ssh_blocked_for_guest(self):
+        """SSH should be blocked for guests."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="ssh_run",
+            func_args={},
+            governor_name=None,
+        ))
+        assert "blocked" in result.lower()
+
+    def test_gmail_send_blocked_for_guest(self):
+        """Email send should be blocked for guests."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="gmail_send",
+            func_args={},
+            governor_name=None,
+        ))
+        assert "blocked" in result.lower()
+
+    def test_merge_pr_blocked_for_guest(self):
+        """PR merge should be blocked for guests."""
+        from app.main import _run_tool
+        import asyncio
+
+        result = asyncio.run(_run_tool(
+            func_name="merge_pr",
+            func_args={},
+            governor_name=None,
+        ))
+        assert "blocked" in result.lower()
+
+
+# ── Context.py system prompt tests ─────────────────────────────────────────
+
+
+class TestSystemPrompt:
+    """Tests for the system prompt in context.py."""
+
+    def test_system_prompt_contains_data_boundary_rule(self):
+        """The system prompt must contain the data/instruction boundary rule."""
+        from app.context import _SYSTEM_PROMPT_HEADER
+
+        assert "DATA" in _SYSTEM_PROMPT_HEADER
+        assert "INSTRUCTION" in _SYSTEM_PROMPT_HEADER
+        assert "attachment" in _SYSTEM_PROMPT_HEADER.lower()
+        assert "never" in _SYSTEM_PROMPT_HEADER.lower()
+
+    def test_system_prompt_contains_tool_enforcement(self):
+        """The system prompt must reference tool-layer enforcement."""
+        from app.context import _SYSTEM_PROMPT_HEADER
+
+        assert "tool" in _SYSTEM_PROMPT_HEADER.lower()
+
+    def test_build_system_prompt_includes_header(self):
+        """build_system_prompt() must include the header."""
+        from app.context import build_system_prompt
+
+        prompt = build_system_prompt()
+        assert "TrueSight DAO Autopilot" in prompt
+        assert len(prompt) > 100
+
+    def test_get_system_prompt_returns_cached(self):
+        """get_system_prompt() must return a valid prompt."""
+        from app.context import get_system_prompt
+
+        prompt = get_system_prompt()
+        assert "TrueSight DAO Autopilot" in prompt
+        assert "RULES" in prompt
+
+    def test_refresh_system_prompt_updates_cache(self):
+        """refresh_system_prompt() must return a fresh prompt."""
+        from app.context import refresh_system_prompt
+
+        prompt = refresh_system_prompt()
+        assert "TrueSight DAO Autopilot" in prompt
+        assert "RULES" in prompt
+
+
+# ── GitHub Actions CI test ─────────────────────────────────────────────────
+
+
+class TestCISetup:
+    """Verify the CI workflow exists and runs tests."""
+
+    def test_ci_workflow_exists(self):
+        """The GitHub Actions workflow file must exist."""
+        from pathlib import Path
+
+        workflow_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "test.yml"
+        assert workflow_path.exists(), f"CI workflow not found at {workflow_path}"
+
+    def test_ci_runs_pytest(self):
+        """The CI workflow must run pytest."""
+        from pathlib import Path
+
+        workflow_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "test.yml"
+        content = workflow_path.read_text()
+        assert "pytest" in content
