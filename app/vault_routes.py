@@ -241,6 +241,54 @@ async def get_audit_log(request: Request, identity: dict = Depends(_require_vaul
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/system-status")
+async def system_status(request: Request, identity: dict = Depends(_require_vault_governor)):
+    """Get system status including active tracks and deploy readiness."""
+    from .deploy_watcher import get_system_status as _get_status
+    return JSONResponse(_get_status())
+
+
+@router.post("/api/deploy")
+async def trigger_deploy(request: Request, identity: dict = Depends(_require_vault_governor)):
+    """Trigger a deploy, optionally forcing it."""
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    force = body.get("force", False)
+    
+    from .deploy_watcher import can_deploy as _can_deploy
+    ok, blocking = _can_deploy(force=force)
+    
+    if not ok:
+        return JSONResponse({
+            "success": False,
+            "message": "Deploy blocked by active tracks.",
+            "blocking_tracks": blocking,
+        }, status_code=409)
+    
+    # Trigger the deploy
+    import asyncio
+    asyncio.create_task(_run_deploy())
+    
+    return JSONResponse({
+        "success": True,
+        "message": "Deploy triggered. Service will restart shortly.",
+    })
+
+
+async def _run_deploy():
+    """Run the deploy in the background."""
+    import subprocess
+    import sys
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.deploy"],
+            capture_output=True, text=True, timeout=300,
+        )
+        logger.info("Deploy result: rc=%d, stdout=%s", result.returncode, result.stdout[-500:])
+    except Exception as e:
+        logger.error("Deploy failed: %s", e)
+
+
 @router.get("/api/health")
 async def vault_health():
     """Check if the vault is initialized and healthy."""
