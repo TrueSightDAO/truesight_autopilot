@@ -66,7 +66,10 @@ def _load_state() -> dict[str, Any]:
     raw = _STATE_FILE.read_text(encoding="utf-8")
     if not raw.strip():
         return {}
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
 
 
 def _write_state(state: dict[str, Any]) -> None:
