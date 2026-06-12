@@ -66,6 +66,12 @@ from .tools.qr_scanner import (
 )
 from .vault_routes import router as vault_router
 from .deploy_watcher import heartbeat as _track_heartbeat, register_track as _register_track, unregister_track as _unregister_track
+from .policy import (
+    ActionClass as _ActionClass,
+    classify_action as _classify_action,
+    evaluate as _policy_evaluate,
+    resolve_identity as _resolve_identity,
+)
 
 
 def _gov_name_for_key(public_key_b64: str) -> str | None:
@@ -1323,6 +1329,39 @@ async def _run_tool(
     session_id: str | None = None,
     governor_name: str | None = None,
 ) -> str:
+    # Phase 0.2: Policy enforcement gate.
+    # Every tool invocation is checked against the requester's identity.
+    # Write/admin tools require governor privileges. Read tools are open.
+    # This is the tool-layer enforcement point (Security invariant #1).
+    action_class = _classify_action(func_name)
+    if action_class in (_ActionClass.WRITE, _ActionClass.ADMIN):
+        if not governor_name:
+            logger.warning(
+                "POLICY BLOCK: %s called without governor identity (action_class=%s)",
+                func_name, action_class.value,
+            )
+            return json.dumps({
+                "status": "blocked",
+                "message": "This action requires governor privileges. "
+                           "Please authenticate with your DAO identity first.",
+            })
+        # Resolve identity from governor_name
+        identity = _resolve_identity(display_name=governor_name)
+        decision = _policy_evaluate(identity, func_name)
+        if not decision.allowed:
+            logger.warning(
+                "POLICY BLOCK: %s by %s (role=%s, reason=%s)",
+                func_name, governor_name, identity.role.value, decision.reason,
+            )
+            return json.dumps({
+                "status": "blocked",
+                "message": decision.reason,
+            })
+        logger.info(
+            "POLICY ALLOW: %s by %s (role=%s)",
+            func_name, governor_name, identity.role.value,
+        )
+
     # First try the capability-manifest registry. Tools whose TOOL_SPEC carries
     # a handler (the ~30 simple wrappers + the new google/gmail/aws/pdf tools)
     # dispatch here and we never reach the legacy if-branches below.
