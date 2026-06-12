@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,19 @@ _DEFAULT_KEY_PATH = "~/.ssh/sophia_infra"
 _DEFAULT_TIMEOUT_SECS = 60
 _MAX_TIMEOUT_SECS = 300
 _MAX_OUTPUT_CHARS = 8000
+
+# Commands that restart/kill the autopilot itself. These bypass deploy_autopilot's
+# idle-drain guard and sever in-flight turns + wedge the adapter — the repeated
+# self-brick on 2026-06-12. The ONLY sanctioned restart path is deploy_autopilot
+# (which waits for threads to drain). Block raw self-restart here so the guard
+# can't be bypassed. (deploy_autopilot uses its own subprocess path, not ssh_run,
+# so it is unaffected.)
+_SELF_RESTART_RE = re.compile(
+    r"(systemctl|service)\s+(restart|stop|kill|reload)\b[^\n]*truesight[-_]autopilot"
+    r"|(pkill|killall)\b[^\n]*(uvicorn|app\.main|truesight[-_]autopilot)"
+    r"|kill\b[^\n]*\b(uvicorn|app\.main)\b",
+    re.IGNORECASE,
+)
 
 # Mirrors AWS_DIGITAL_INFRASTRUCTURE.md §2 — running hosts only.
 # label → (public IP, user, what it is)
@@ -156,6 +170,14 @@ def ssh_run(
     """Run ``command`` on a fleet host over SSH; return rc/stdout/stderr."""
     if not host or not command:
         return _err("host and command are required")
+    if _SELF_RESTART_RE.search(command):
+        return _err(
+            "BLOCKED: restarting or killing the autopilot bypasses the idle-drain guard "
+            "and bricks active threads (severs in-flight turns + wedges the adapter). "
+            "Use the deploy_autopilot tool instead — it waits for threads to be idle, then "
+            "restarts safely. Never restart the autopilot service by hand.",
+            command=command[:200],
+        )
     spec = FLEET.get(host)
     if spec is None:
         return _err(
