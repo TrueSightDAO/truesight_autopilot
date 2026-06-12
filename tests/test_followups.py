@@ -166,7 +166,7 @@ class TestParseAll:
 
             results = parse_all()
             chocolate = [r for r in results if r["id"] == "chocolate-subscription-phase2"][0]
-            assert chocolate["chat_id"] == "-1003919341801"
+            assert str(chocolate["chat_id"]) == "-1003919341801"
             assert chocolate["thread_id"] == 1939
             assert chocolate["title"] == "Revisit Chocolate Subscription Phase 2 (fulfillment automation)"
             assert chocolate["status"] == "open"
@@ -308,62 +308,54 @@ class TestStateSidecar:
 class TestSetStatus:
     def test_set_status_updates_block(self, sample_md: str, tmp_path: Path):
         """set_status updates the status in the .md block."""
-        from app.followups import set_status, _FOLLOWUPS_MD, _STATE_FILE, _STATE_DIR
+        from app.followups import set_status, _STATE_FILE, _STATE_DIR
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch("app.followups._write_md") as mock_write,
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             result = set_status("matheus-nota-fiscal", "resolved")
             assert result is True
 
-            updated = md_path.read_text(encoding="utf-8")
-            # The block should now be under ## Recently shipped
-            assert "## Recently shipped" in updated
-            assert "matheus-nota-fiscal" in updated
-            assert "status: resolved" in updated
+            written = mock_write.call_args[0][0]
+            assert "## Recently shipped" in written
+            assert "matheus-nota-fiscal" in written
+            assert "status: resolved" in written
 
     def test_set_status_aborted(self, sample_md: str, tmp_path: Path):
         """set_status with aborted moves to Closed without shipping."""
-        from app.followups import set_status, _FOLLOWUPS_MD, _STATE_FILE, _STATE_DIR
+        from app.followups import set_status, _STATE_FILE, _STATE_DIR
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch("app.followups._write_md") as mock_write,
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             result = set_status("matheus-nota-fiscal", "aborted")
             assert result is True
 
-            updated = md_path.read_text(encoding="utf-8")
-            assert "## Closed without shipping" in updated
-            assert "matheus-nota-fiscal" in updated
-            assert "status: aborted" in updated
+            written = mock_write.call_args[0][0]
+            assert "## Closed without shipping" in written
+            assert "matheus-nota-fiscal" in written
+            assert "status: aborted" in written
 
     def test_set_status_nonexistent(self, sample_md: str, tmp_path: Path):
         """set_status returns False for unknown id."""
-        from app.followups import set_status, _FOLLOWUPS_MD, _STATE_FILE, _STATE_DIR
+        from app.followups import set_status, _STATE_FILE, _STATE_DIR
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             result = set_status("nonexistent", "resolved")
             assert result is False
@@ -377,24 +369,22 @@ class TestSetStatus:
 
     def test_set_status_preserves_prose(self, sample_md: str, tmp_path: Path):
         """set_status leaves non-followup prose intact."""
-        from app.followups import set_status, _FOLLOWUPS_MD, _STATE_FILE, _STATE_DIR
+        from app.followups import set_status, _STATE_FILE, _STATE_DIR
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch("app.followups._write_md") as mock_write,
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             set_status("matheus-nota-fiscal", "resolved")
-            updated = md_path.read_text(encoding="utf-8")
+            written = mock_write.call_args[0][0]
             # Prose should still be there
-            assert "Some prose about how this file works." in updated
-            assert "### Some other prose entry" in updated
-            assert "This is a regular markdown entry" in updated
+            assert "Some prose about how this file works." in written
+            assert "### Some other prose entry" in written
+            assert "This is a regular markdown entry" in written
 
 
 # ── next_due tests ───────────────────────────────────────────────────────
@@ -403,18 +393,15 @@ class TestSetStatus:
 class TestNextDue:
     def test_never_checked_is_due(self, sample_md: str, tmp_path: Path):
         """Follow-ups never checked are due immediately."""
-        from app.followups import next_due, _FOLLOWUPS_MD, _STATE_FILE, _STATE_DIR
+        from app.followups import next_due, _STATE_FILE, _STATE_DIR
         from datetime import datetime, timezone
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             now = datetime.now(timezone.utc)
             due = next_due(now)
@@ -426,21 +413,17 @@ class TestNextDue:
         from app.followups import (
             next_due,
             upsert_state,
-            _FOLLOWUPS_MD,
             _STATE_FILE,
             _STATE_DIR,
         )
         from datetime import datetime, timezone, timedelta
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             future = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
             upsert_state("chocolate-subscription-phase2", next_check=future)
@@ -455,21 +438,17 @@ class TestNextDue:
         from app.followups import (
             next_due,
             upsert_state,
-            _FOLLOWUPS_MD,
             _STATE_FILE,
             _STATE_DIR,
         )
         from datetime import datetime, timezone, timedelta
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
             upsert_state("chocolate-subscription-phase2", next_check=past)
@@ -481,18 +460,15 @@ class TestNextDue:
 
     def test_resolved_not_included(self, sample_md: str, tmp_path: Path):
         """Resolved follow-ups are never due."""
-        from app.followups import next_due, _FOLLOWUPS_MD, _STATE_FILE, _STATE_DIR
+        from app.followups import next_due, _STATE_FILE, _STATE_DIR
         from datetime import datetime, timezone
 
-        md_path = tmp_path / "OPEN_FOLLOWUPS.md"
-        md_path.write_text(sample_md, encoding="utf-8")
-
-        with patch.object(
-            _FOLLOWUPS_MD.__class__, "resolve", return_value=md_path
-        ), patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch("app.followups._read_md", return_value=sample_md),
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             now = datetime.now(timezone.utc)
             due = next_due(now)
