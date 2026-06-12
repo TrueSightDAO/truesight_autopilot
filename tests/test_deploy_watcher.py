@@ -59,16 +59,16 @@ class TestRegisterTrack:
 class TestHeartbeat:
     def test_heartbeat_updates_timestamp(self):
         register_track("hb-track", "Heartbeat test", "followup_monitor")
-        t1 = get_active_tracks()[0]["last_heartbeat"]
-        # Force a different timestamp by writing directly
+        # Force a known old timestamp by writing directly
         import app.deploy_watcher as dw
         state = json.loads(dw.STATE_PATH.read_text())
-        state["tracks"][0]["last_heartbeat"] = "2020-01-01T00:00:00Z"
+        old_ts = "2020-01-01T00:00:00Z"
+        state["tracks"][0]["last_heartbeat"] = old_ts
         dw.STATE_PATH.write_text(json.dumps(state))
         heartbeat("hb-track")
         t2 = get_active_tracks()[0]["last_heartbeat"]
-        assert t2 > t1
-        assert t2 != "2020-01-01T00:00:00Z"  # Actually updated
+        assert t2 > old_ts  # New timestamp is after the forced old one
+        assert t2 != old_ts  # Actually updated
 
     def test_heartbeat_unknown_track_does_not_error(self):
         # Should not raise
