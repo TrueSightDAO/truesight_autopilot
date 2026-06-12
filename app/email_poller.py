@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+
+from .deploy_watcher import heartbeat as _track_heartbeat, register_track as _register_track, unregister_track as _unregister_track
 import re
 from datetime import datetime, timezone
 from pathlib import Path

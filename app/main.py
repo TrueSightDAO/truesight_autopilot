@@ -65,6 +65,7 @@ from .tools.qr_scanner import (
     scan_qr_from_file,
 )
 from .vault_routes import router as vault_router
+from .deploy_watcher import heartbeat as _track_heartbeat, register_track as _register_track, unregister_track as _unregister_track
 
 
 def _gov_name_for_key(public_key_b64: str) -> str | None:
