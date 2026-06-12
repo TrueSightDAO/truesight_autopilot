@@ -416,6 +416,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount vault routes
+app.include_router(vault_router)
+
 
 # ── In-memory rate limiter: max 1 req per 10s per IP ──
 _oracle_rate_limit: dict[str, float] = {}
