@@ -2329,6 +2329,9 @@ async def _run_tool_round_loop(
                         "content": result_text,
                     }
                 )
+            # Sanitise after each tool round — catches corruption from
+            # concurrent session saves during the round
+            _sanitise_tool_messages(history)
         else:
             assistant_text = client.extract_text(completion)
             break  # no more tool calls — exit loop
@@ -3653,6 +3656,9 @@ async def _chat_blocking_turn(
     tools = get_tool_schemas_for_role(role)
     client = LLMClient()
 
+    # Sanitise orphaned tool messages before the first LLM call
+    _sanitise_tool_messages(history)
+
     # Multi-round tool loop (the streaming path loops; this one used to run a
     # single round, which truncated multi-step answers and could leak an
     # unexecuted tool call as text). Keep running tool rounds until the model
@@ -3705,6 +3711,9 @@ async def _chat_blocking_turn(
                 history.append(
                     {"role": "tool", "tool_call_id": tc["id"], "content": result_text}
                 )
+            # Sanitise after each tool round — catches corruption from
+            # concurrent session saves during the round
+            _sanitise_tool_messages(history)
 
         # Force a clean text-only answer if we exhausted the budget, came back
         # blank, or the model leaked a text-format tool call instead of executing it.
