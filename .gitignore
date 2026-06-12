@@ -32,3 +32,4 @@ data/attention_watchdog_state.json
 sessions/
 context/
 oracle/
+worktrees/
