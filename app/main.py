@@ -1010,20 +1010,8 @@ async def auth_challenge(request: Request) -> JSONResponse:
 
 
 from .auth_routes import router as auth_router
-app.include_router(auth_router)
 
-    response = JSONResponse(
-        {"token": token, "expires_in": settings.jwt_expiry_minutes * 60}
-    )
-    response.set_cookie(
-        key="governor_chat_session",
-        value=token,
-        httponly=True,
-        secure=not settings.debug,
-        samesite="lax",
-        max_age=settings.jwt_expiry_minutes * 60,
-    )
-    return response
+app.include_router(auth_router)
 
 
 @app.get("/logout")
