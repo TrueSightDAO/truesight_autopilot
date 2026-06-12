@@ -73,7 +73,11 @@ class TestGenerateCode:
 class TestMintChallenge:
     def test_mint_creates_pending_challenge(self):
         with patch("app.identity_binding._find_contributor_row") as mock_find:
-            mock_find.return_value = ("Contributors Digital Signatures", 3, ["", "", "", "test@example.com"])
+            mock_find.return_value = (
+                "Contributors Digital Signatures",
+                3,
+                ["", "", "", "test@example.com"],
+            )
             with patch("app.identity_binding._send_challenge_email"):
                 result = mint_challenge("test@example.com")
                 assert result["success"] is True
@@ -90,7 +94,11 @@ class TestMintChallenge:
 
     def test_mint_rate_limited(self):
         with patch("app.identity_binding._find_contributor_row") as mock_find:
-            mock_find.return_value = ("Contributors Digital Signatures", 3, ["", "", "", "test@example.com"])
+            mock_find.return_value = (
+                "Contributors Digital Signatures",
+                3,
+                ["", "", "", "test@example.com"],
+            )
             with patch("app.identity_binding._send_challenge_email"):
                 # Exhaust rate limit
                 for _ in range(3):
@@ -107,9 +115,13 @@ class TestMintChallenge:
 class TestConsumeChallenge:
     def test_happy_path(self):
         with patch("app.identity_binding._find_contributor_row") as mock_find:
-            mock_find.return_value = ("Contributors contact information", 3, ["Gary", "", "", "gary@test.com"])
+            mock_find.return_value = (
+                "Contributors contact information",
+                3,
+                ["Gary", "", "", "gary@test.com"],
+            )
             with patch("app.identity_binding._send_challenge_email"):
-                with patch("app.identity_binding._update_sheet_cell") as mock_update:
+                with patch("app.identity_binding._update_sheet_cell"):
                     with patch("app.identity_binding._emit_identity_binding_event"):
                         # Mint first
                         mint_result = mint_challenge("gary@test.com")
@@ -123,17 +135,25 @@ class TestConsumeChallenge:
                         # by trying a wrong code first, then the right one.
 
                         # Wrong code should fail
-                        consume_result = consume_challenge("gary@test.com", "WRONG123", 12345)
+                        consume_result = consume_challenge(
+                            "gary@test.com", "WRONG123", 12345
+                        )
                         assert consume_result["success"] is False
 
                         # We can't easily get the plaintext code from the hash,
                         # so let's just verify the challenge was created
                         assert challenge is not None
-                        assert challenge.attempts_remaining == MAX_ATTEMPTS - 1  # one attempt used
+                        assert (
+                            challenge.attempts_remaining == MAX_ATTEMPTS - 1
+                        )  # one attempt used
 
     def test_consume_expired_code(self):
         with patch("app.identity_binding._find_contributor_row") as mock_find:
-            mock_find.return_value = ("Contributors Digital Signatures", 3, ["", "", "", "test@test.com"])
+            mock_find.return_value = (
+                "Contributors Digital Signatures",
+                3,
+                ["", "", "", "test@test.com"],
+            )
             with patch("app.identity_binding._send_challenge_email"):
                 mint_challenge("test@test.com")
 
@@ -151,7 +171,11 @@ class TestConsumeChallenge:
 
     def test_consume_exhausted_attempts(self):
         with patch("app.identity_binding._find_contributor_row") as mock_find:
-            mock_find.return_value = ("Contributors Digital Signatures", 3, ["", "", "", "test@test.com"])
+            mock_find.return_value = (
+                "Contributors Digital Signatures",
+                3,
+                ["", "", "", "test@test.com"],
+            )
             with patch("app.identity_binding._send_challenge_email"):
                 mint_challenge("test@test.com")
 
@@ -161,7 +185,10 @@ class TestConsumeChallenge:
 
                 # Last attempt should say exhausted
                 assert result["success"] is False
-                assert "attempt" in result.get("error", "").lower() or "request" in result.get("error", "").lower()
+                assert (
+                    "attempt" in result.get("error", "").lower()
+                    or "request" in result.get("error", "").lower()
+                )
 
 
 # ── Revocation ─────────────────────────────────────────────────────────────
@@ -170,8 +197,12 @@ class TestConsumeChallenge:
 class TestRevokeBinding:
     def test_revoke_clears_binding(self):
         with patch("app.identity_binding._find_contributor_row") as mock_find:
-            mock_find.return_value = ("Contributors contact information", 3, ["Gary", "", "", "gary@test.com"])
-            with patch("app.identity_binding._update_sheet_cell") as mock_update:
+            mock_find.return_value = (
+                "Contributors contact information",
+                3,
+                ["Gary", "", "", "gary@test.com"],
+            )
+            with patch("app.identity_binding._update_sheet_cell"):
                 result = revoke_binding("gary@test.com", "Admin")
                 assert result["success"] is True
 

@@ -28,7 +28,7 @@ import secrets
 import string
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -41,12 +41,12 @@ RATE_LIMIT_WINDOW_SECONDS = 60  # 1 minute
 MAX_REQUESTS_PER_WINDOW = 3
 
 # Google Sheet column indices (0-based)
-COL_EMAIL = 3        # D — email address
+COL_EMAIL = 3  # D — email address
 COL_TELEGRAM_ID = 7  # H — Telegram ID (numeric)
-COL_DIGITAL_SIG = 17 # R — Digital Signature (public key)
-COL_VERIFIED = 3     # D in Digital Signatures sheet — Status
+COL_DIGITAL_SIG = 17  # R — Digital Signature (public key)
+COL_VERIFIED = 3  # D in Digital Signatures sheet — Status
 COL_VERIFICATION_KEY = 6  # G — Verification Key (hash)
-COL_KEY_CONSUMED = 7      # H — Verification Key Consumed
+COL_KEY_CONSUMED = 7  # H — Verification Key Consumed
 
 SHEET_CONTACT = "Contributors contact information"
 SHEET_SIGNATURES = "Contributors Digital Signatures"
@@ -113,7 +113,9 @@ def _generate_code() -> tuple[str, str]:
     """
     alphabet = string.ascii_uppercase + string.digits
     # Exclude ambiguous characters
-    alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
+    alphabet = (
+        alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
+    )
     code = "".join(secrets.choice(alphabet) for _ in range(8))
     return code, _hash_code(code)
 
@@ -150,10 +152,15 @@ def _find_contributor_row(email: str) -> tuple[str, int, list[Any]] | None:
         if service is None:
             return None
         # Check contact sheet first
-        result = service.spreadsheets().values().get(
-            spreadsheetId=LEDGER_SPREADSHEET_ID,
-            range=f"{SHEET_CONTACT}!A:Z",
-        ).execute()
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=LEDGER_SPREADSHEET_ID,
+                range=f"{SHEET_CONTACT}!A:Z",
+            )
+            .execute()
+        )
         rows = result.get("values", [])
 
         for i, row in enumerate(rows):
@@ -161,10 +168,15 @@ def _find_contributor_row(email: str) -> tuple[str, int, list[Any]] | None:
                 return (SHEET_CONTACT, i, row)
 
         # Check signatures sheet
-        result = service.spreadsheets().values().get(
-            spreadsheetId=LEDGER_SPREADSHEET_ID,
-            range=f"{SHEET_SIGNATURES}!A:Z",
-        ).execute()
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=LEDGER_SPREADSHEET_ID,
+                range=f"{SHEET_SIGNATURES}!A:Z",
+            )
+            .execute()
+        )
         rows = result.get("values", [])
 
         for i, row in enumerate(rows):
@@ -177,7 +189,9 @@ def _find_contributor_row(email: str) -> tuple[str, int, list[Any]] | None:
         return None
 
 
-def _update_sheet_cell(sheet_name: str, row_index: int, col_index: int, value: str) -> bool:
+def _update_sheet_cell(
+    sheet_name: str, row_index: int, col_index: int, value: str
+) -> bool:
     """Update a single cell in a Google Sheet."""
     try:
         service = _get_sheets_service()
@@ -192,7 +206,11 @@ def _update_sheet_cell(sheet_name: str, row_index: int, col_index: int, value: s
         ).execute()
         return True
     except Exception as e:
-        logger.error("Failed to update sheet cell %s: %s", f"{sheet_name}!{_col_letter(col_index)}{row_index + 1}", e)
+        logger.error(
+            "Failed to update sheet cell %s: %s",
+            f"{sheet_name}!{_col_letter(col_index)}{row_index + 1}",
+            e,
+        )
         return False
 
 
@@ -216,10 +234,16 @@ def mint_challenge(email: str, telegram_id: int | None = None) -> dict[str, Any]
     """
     # Rate limit
     if telegram_id and not _check_rate_limit(f"telegram:{telegram_id}"):
-        return {"success": False, "error": "Too many requests. Please wait before trying again."}
+        return {
+            "success": False,
+            "error": "Too many requests. Please wait before trying again.",
+        }
 
     if not _check_rate_limit(f"email:{email}"):
-        return {"success": False, "error": "Too many requests for this email. Please wait."}
+        return {
+            "success": False,
+            "error": "Too many requests for this email. Please wait.",
+        }
 
     # Check if email exists in the ledger
     contributor = _find_contributor_row(email)
@@ -250,7 +274,9 @@ def mint_challenge(email: str, telegram_id: int | None = None) -> dict[str, Any]
     # Send email with the plaintext code
     _send_challenge_email(email, code)
 
-    logger.info("Challenge minted for %s (expires in %ds)", email, CHALLENGE_EXPIRY_SECONDS)
+    logger.info(
+        "Challenge minted for %s (expires in %ds)", email, CHALLENGE_EXPIRY_SECONDS
+    )
 
     return {
         "success": True,
@@ -312,28 +338,43 @@ def consume_challenge(
         # Check Column G in the sheet directly
         contributor = _find_contributor_row(email)
         if contributor is None:
-            return {"success": False, "error": "Verification failed. Please request a new code."}
+            return {
+                "success": False,
+                "error": "Verification failed. Please request a new code.",
+            }
 
         sheet_name, row_idx, row = contributor
         if sheet_name != SHEET_SIGNATURES:
-            return {"success": False, "error": "Verification failed. Please request a new code."}
+            return {
+                "success": False,
+                "error": "Verification failed. Please request a new code.",
+            }
 
         # Check if already verified
         if len(row) > COL_VERIFIED and row[COL_VERIFIED].strip().upper() == "VERIFIED":
             return {"success": False, "error": "This email is already verified."}
 
         # No pending challenge
-        return {"success": False, "error": "No pending verification. Please request a new code."}
+        return {
+            "success": False,
+            "error": "No pending verification. Please request a new code.",
+        }
 
     # Check expiry
     if time.time() > challenge.expires_at:
         del _pending_challenges[email_lower]
-        return {"success": False, "error": "Verification code has expired. Please request a new one."}
+        return {
+            "success": False,
+            "error": "Verification code has expired. Please request a new one.",
+        }
 
     # Check attempts
     if challenge.attempts_remaining <= 0:
         del _pending_challenges[email_lower]
-        return {"success": False, "error": "Too many failed attempts. Please request a new code."}
+        return {
+            "success": False,
+            "error": "Too many failed attempts. Please request a new code.",
+        }
 
     # Verify code
     expected_hash = challenge.code_hash
@@ -343,7 +384,8 @@ def consume_challenge(
         challenge.attempts_remaining -= 1
         logger.warning(
             "Failed verification for %s (%d attempts remaining)",
-            email, challenge.attempts_remaining,
+            email,
+            challenge.attempts_remaining,
         )
         return {
             "success": False,
@@ -374,7 +416,9 @@ def consume_challenge(
 
     logger.info(
         "Identity bound: telegram_id=%s → email=%s (username=%s)",
-        telegram_id, email, telegram_username,
+        telegram_id,
+        email,
+        telegram_username,
     )
 
     return {
@@ -386,7 +430,9 @@ def consume_challenge(
 
 
 def _emit_identity_binding_event(
-    email: str, telegram_id: int, telegram_username: str | None = None,
+    email: str,
+    telegram_id: int,
+    telegram_username: str | None = None,
 ) -> None:
     """Emit an [IDENTITY BINDING EVENT] for the audit trail."""
     try:
@@ -463,14 +509,21 @@ def check_binding_status(telegram_id: int) -> dict[str, Any]:
         service = _get_sheets_service()
 
         # Check contact sheet for Telegram ID
-        result = service.spreadsheets().values().get(
-            spreadsheetId=LEDGER_SPREADSHEET_ID,
-            range=f"{SHEET_CONTACT}!A:Z",
-        ).execute()
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=LEDGER_SPREADSHEET_ID,
+                range=f"{SHEET_CONTACT}!A:Z",
+            )
+            .execute()
+        )
         rows = result.get("values", [])
 
         for row in rows:
-            if len(row) > COL_TELEGRAM_ID and row[COL_TELEGRAM_ID].strip() == str(telegram_id):
+            if len(row) > COL_TELEGRAM_ID and row[COL_TELEGRAM_ID].strip() == str(
+                telegram_id
+            ):
                 name = row[0] if len(row) > 0 else "Unknown"
                 email = row[COL_EMAIL] if len(row) > COL_EMAIL else ""
                 return {

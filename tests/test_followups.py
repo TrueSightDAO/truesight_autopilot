@@ -4,9 +4,6 @@ Tests for app/followups.py — follow-up parser + state sidecar.
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -147,9 +144,7 @@ Just prose.
 class TestParseAll:
     def test_parses_followup_blocks_only(self, sample_md: str):
         """Only ```followup blocks are parsed; prose is ignored."""
-        with patch(
-            "app.followups._read_md", return_value=sample_md
-        ):
+        with patch("app.followups._read_md", return_value=sample_md):
             from app.followups import parse_all
 
             results = parse_all()
@@ -165,10 +160,15 @@ class TestParseAll:
             from app.followups import parse_all
 
             results = parse_all()
-            chocolate = [r for r in results if r["id"] == "chocolate-subscription-phase2"][0]
+            chocolate = [
+                r for r in results if r["id"] == "chocolate-subscription-phase2"
+            ][0]
             assert str(chocolate["chat_id"]) == "-1003919341801"
             assert chocolate["thread_id"] == 1939
-            assert chocolate["title"] == "Revisit Chocolate Subscription Phase 2 (fulfillment automation)"
+            assert (
+                chocolate["title"]
+                == "Revisit Chocolate Subscription Phase 2 (fulfillment automation)"
+            )
             assert chocolate["status"] == "open"
             assert chocolate["condition"]["kind"] == "elapsed_days"
             assert chocolate["schedule"]["check"] == "weekly"
@@ -248,10 +248,11 @@ class TestStateSidecar:
         """upsert_state creates a new entry with defaults."""
         from app.followups import upsert_state, _STATE_FILE, _STATE_DIR
 
-        with patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             entry = upsert_state("test-id", next_check="2026-06-12T00:00:00+00:00")
             assert entry["id"] == "test-id"
@@ -263,10 +264,11 @@ class TestStateSidecar:
         """upsert_state merges into existing entry."""
         from app.followups import upsert_state, _STATE_FILE, _STATE_DIR
 
-        with patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             upsert_state("test-id", attempts=1)
             entry = upsert_state("test-id", next_check="2026-06-13T00:00:00+00:00")
@@ -277,10 +279,11 @@ class TestStateSidecar:
         """get_state returns None for never-seen id."""
         from app.followups import get_state, _STATE_FILE, _STATE_DIR
 
-        with patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             result = get_state("never-seen")
             assert result is None
@@ -289,10 +292,11 @@ class TestStateSidecar:
         """Atomic write doesn't corrupt existing state on failure."""
         from app.followups import upsert_state, get_state, _STATE_FILE, _STATE_DIR
 
-        with patch.object(
-            _STATE_DIR.__class__, "resolve", return_value=tmp_path
-        ), patch.object(
-            _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+        with (
+            patch.object(_STATE_DIR.__class__, "resolve", return_value=tmp_path),
+            patch.object(
+                _STATE_FILE.__class__, "resolve", return_value=tmp_path / "state.json"
+            ),
         ):
             upsert_state("test-id", attempts=1)
             # Simulate a failed write by writing garbage

@@ -229,11 +229,13 @@ class TestRunToolEnforcement:
         from app.main import _run_tool
         import asyncio
 
-        result = asyncio.run(_run_tool(
-            func_name="git_push_changes",
-            func_args={},
-            governor_name=None,
-        ))
+        result = asyncio.run(
+            _run_tool(
+                func_name="git_push_changes",
+                func_args={},
+                governor_name=None,
+            )
+        )
         assert "blocked" in result.lower()
         assert "governor" in result.lower()
 
@@ -242,11 +244,13 @@ class TestRunToolEnforcement:
         from app.main import _run_tool
         import asyncio
 
-        result = asyncio.run(_run_tool(
-            func_name="deploy_autopilot",
-            func_args={},
-            governor_name="Stranger",
-        ))
+        result = asyncio.run(
+            _run_tool(
+                func_name="deploy_autopilot",
+                func_args={},
+                governor_name="Stranger",
+            )
+        )
         assert "blocked" in result.lower()
 
     def test_run_tool_allows_read_for_no_identity(self):
@@ -254,11 +258,13 @@ class TestRunToolEnforcement:
         from app.main import _run_tool
         import asyncio
 
-        result = asyncio.run(_run_tool(
-            func_name="read_context_file",
-            func_args={"path": "test.md"},
-            governor_name=None,
-        ))
+        result = asyncio.run(
+            _run_tool(
+                func_name="read_context_file",
+                func_args={"path": "test.md"},
+                governor_name=None,
+            )
+        )
         # Should not be blocked — should try to actually read the file
         assert "blocked" not in result.lower()
 
@@ -267,24 +273,27 @@ class TestRunToolEnforcement:
         from app.main import _run_tool
         import asyncio
 
-        result = asyncio.run(_run_tool(
-            func_name="web_search",
-            func_args={"query": "test"},
-            governor_name="Stranger",
-        ))
+        result = asyncio.run(
+            _run_tool(
+                func_name="web_search",
+                func_args={"query": "test"},
+                governor_name="Stranger",
+            )
+        )
         assert "blocked" not in result.lower()
 
     def test_run_tool_blocked_response_format(self):
         """Blocked response should be valid JSON with status and message."""
         from app.main import _run_tool
         import asyncio
-        import json
 
-        result = asyncio.run(_run_tool(
-            func_name="ssh_run",
-            func_args={},
-            governor_name=None,
-        ))
+        result = asyncio.run(
+            _run_tool(
+                func_name="ssh_run",
+                func_args={},
+                governor_name=None,
+            )
+        )
         try:
             data = json.loads(result)
             assert data["status"] == "blocked"
@@ -298,11 +307,13 @@ class TestRunToolEnforcement:
         import asyncio
 
         with patch.dict("os.environ", {"GOVERNOR_NAMES": "Gary Teh"}):
-            result = asyncio.run(_run_tool(
-                func_name="read_context_file",
-                func_args={"path": "test.md"},
-                governor_name="Gary Teh",
-            ))
+            result = asyncio.run(
+                _run_tool(
+                    func_name="read_context_file",
+                    func_args={"path": "test.md"},
+                    governor_name="Gary Teh",
+                )
+            )
             # Should not be blocked — Gary is a governor
             assert "blocked" not in result.lower()
 
@@ -317,7 +328,10 @@ class TestSystemPromptDataBoundary:
         assert "DATA" in _SYSTEM_PROMPT_HEADER
         assert "INSTRUCTION" in _SYSTEM_PROMPT_HEADER
         assert "attachment" in _SYSTEM_PROMPT_HEADER.lower()
-        assert "never" in _SYSTEM_PROMPT_HEADER.lower() and "execute" in _SYSTEM_PROMPT_HEADER.lower()
+        assert (
+            "never" in _SYSTEM_PROMPT_HEADER.lower()
+            and "execute" in _SYSTEM_PROMPT_HEADER.lower()
+        )
 
     def test_data_boundary_in_built_prompt(self):
         """The built system prompt must include the boundary rule."""
@@ -342,7 +356,10 @@ class TestSystemPromptDataBoundary:
 
         # The rule should explicitly say ingested content is not instructions
         assert "ingested content" in _SYSTEM_PROMPT_HEADER.lower()
-        assert "never" in _SYSTEM_PROMPT_HEADER.lower() and "instructions" in _SYSTEM_PROMPT_HEADER.lower()
+        assert (
+            "never" in _SYSTEM_PROMPT_HEADER.lower()
+            and "instructions" in _SYSTEM_PROMPT_HEADER.lower()
+        )
         assert "governor" in _SYSTEM_PROMPT_HEADER.lower()
         assert "direct message" in _SYSTEM_PROMPT_HEADER.lower()
 
@@ -402,8 +419,12 @@ class TestIntegrationScenarios:
         """Governor should be able to perform all write actions."""
         identity = Identity(telegram_id=12345, role=Role.GOVERNOR, name="Gary")
         write_tools = [
-            "git_push_changes", "merge_pr", "deploy_autopilot",
-            "gmail_send", "ssh_run", "submit_contribution",
+            "git_push_changes",
+            "merge_pr",
+            "deploy_autopilot",
+            "gmail_send",
+            "ssh_run",
+            "submit_contribution",
         ]
         for tool in write_tools:
             decision = evaluate(identity, tool)
@@ -411,118 +432,6 @@ class TestIntegrationScenarios:
 
 
 # ── _run_tool() enforcement gate integration tests ────────────────────────
-
-
-class TestRunToolEnforcement:
-    """Direct tests of the policy enforcement gate in _run_tool().
-
-    These tests verify that _run_tool() in main.py correctly blocks
-    write tools for unauthenticated callers and allows them for governors.
-    """
-
-    def test_write_tool_blocked_without_governor(self):
-        """A write tool called without governor_name should be blocked."""
-        from app.main import _run_tool
-        import asyncio
-
-        result = asyncio.run(_run_tool(
-            func_name="git_push_changes",
-            func_args={},
-            governor_name=None,
-        ))
-        assert "blocked" in result.lower()
-        assert "governor" in result.lower()
-
-    def test_write_tool_blocked_for_guest_name(self):
-        """A write tool called with a non-governor name should be blocked."""
-        from app.main import _run_tool
-        import asyncio
-
-        with patch.dict("os.environ", {"GOVERNOR_NAMES": "Gary Teh"}):
-            result = asyncio.run(_run_tool(
-                func_name="git_push_changes",
-                func_args={},
-                governor_name="Stranger",
-            ))
-            assert "blocked" in result.lower()
-
-    def test_write_tool_allowed_for_governor(self):
-        """A write tool called with a governor name should proceed."""
-        from app.main import _run_tool
-        import asyncio
-
-        with patch.dict("os.environ", {"GOVERNOR_NAMES": "Gary Teh"}):
-            result = asyncio.run(_run_tool(
-                func_name="git_push_changes",
-                func_args={},
-                governor_name="Gary Teh",
-            ))
-            # Should NOT be blocked — should proceed to the actual handler
-            assert "blocked" not in result.lower()
-
-    def test_read_tool_allowed_without_governor(self):
-        """A read tool should work even without governor_name."""
-        from app.main import _run_tool
-        import asyncio
-
-        result = asyncio.run(_run_tool(
-            func_name="read_context_file",
-            func_args={"path": "nonexistent"},
-            governor_name=None,
-        ))
-        # Should proceed to the handler, not be blocked
-        assert "blocked" not in result.lower()
-
-    def test_deploy_blocked_for_guest(self):
-        """Deploy should be blocked for guests."""
-        from app.main import _run_tool
-        import asyncio
-
-        result = asyncio.run(_run_tool(
-            func_name="deploy_autopilot",
-            func_args={},
-            governor_name=None,
-        ))
-        assert "blocked" in result.lower()
-
-    def test_ssh_blocked_for_guest(self):
-        """SSH should be blocked for guests."""
-        from app.main import _run_tool
-        import asyncio
-
-        result = asyncio.run(_run_tool(
-            func_name="ssh_run",
-            func_args={},
-            governor_name=None,
-        ))
-        assert "blocked" in result.lower()
-
-    def test_gmail_send_blocked_for_guest(self):
-        """Email send should be blocked for guests."""
-        from app.main import _run_tool
-        import asyncio
-
-        result = asyncio.run(_run_tool(
-            func_name="gmail_send",
-            func_args={},
-            governor_name=None,
-        ))
-        assert "blocked" in result.lower()
-
-    def test_merge_pr_blocked_for_guest(self):
-        """PR merge should be blocked for guests."""
-        from app.main import _run_tool
-        import asyncio
-
-        result = asyncio.run(_run_tool(
-            func_name="merge_pr",
-            func_args={},
-            governor_name=None,
-        ))
-        assert "blocked" in result.lower()
-
-
-# ── Context.py system prompt tests ─────────────────────────────────────────
 
 
 class TestSystemPrompt:
@@ -578,13 +487,23 @@ class TestCISetup:
         """The GitHub Actions workflow file must exist."""
         from pathlib import Path
 
-        workflow_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "test.yml"
+        workflow_path = (
+            Path(__file__).resolve().parent.parent
+            / ".github"
+            / "workflows"
+            / "test.yml"
+        )
         assert workflow_path.exists(), f"CI workflow not found at {workflow_path}"
 
     def test_ci_runs_pytest(self):
         """The CI workflow must run pytest."""
         from pathlib import Path
 
-        workflow_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "test.yml"
+        workflow_path = (
+            Path(__file__).resolve().parent.parent
+            / ".github"
+            / "workflows"
+            / "test.yml"
+        )
         content = workflow_path.read_text()
         assert "pytest" in content

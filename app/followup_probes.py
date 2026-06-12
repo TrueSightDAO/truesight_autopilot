@@ -10,10 +10,9 @@ Probes never throw exceptions — network errors return not-struck.
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger("autopilot.followups.probes")
@@ -22,7 +21,9 @@ logger = logging.getLogger("autopilot.followups.probes")
 # ── elapsed_days probe ───────────────────────────────────────────────────
 
 
-def elapsed_days(followup: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+def elapsed_days(
+    followup: dict[str, Any], now: datetime | None = None
+) -> dict[str, Any]:
     """
     Check if escalate_after_days has passed since created_at.
 
@@ -89,7 +90,9 @@ def _build_gmail_service():
         return None
 
 
-def gmail_reply(followup: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+def gmail_reply(
+    followup: dict[str, Any], now: datetime | None = None
+) -> dict[str, Any]:
     """
     Check if a reply has arrived from a named sender since created_at.
 
@@ -125,10 +128,7 @@ def gmail_reply(followup: dict[str, Any], now: datetime | None = None) -> dict[s
 
     try:
         results = (
-            gmail.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=5)
-            .execute()
+            gmail.users().messages().list(userId="me", q=query, maxResults=5).execute()
         )
         messages = results.get("messages", [])
 

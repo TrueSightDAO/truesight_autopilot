@@ -1,9 +1,7 @@
 """Tests for app/deploy_watcher.py — safe deploy orchestration."""
 
 import json
-import os
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +24,7 @@ def _temp_state():
         original = STATE_PATH
         # Override the module-level constant
         import app.deploy_watcher as dw
+
         dw.STATE_PATH = Path(tmpdir) / "active_tracks.json"
         dw.STATE_DIR = Path(tmpdir)
         yield
@@ -51,7 +50,9 @@ class TestRegisterTrack:
         assert tracks[0]["track_type"] == "email_poller"
 
     def test_register_with_metadata(self):
-        register_track("t1", "With meta", "telegram_chat", metadata={"thread_id": "2744"})
+        register_track(
+            "t1", "With meta", "telegram_chat", metadata={"thread_id": "2744"}
+        )
         tracks = get_active_tracks()
         assert tracks[0]["metadata"]["thread_id"] == "2744"
 
@@ -61,6 +62,7 @@ class TestHeartbeat:
         register_track("hb-track", "Heartbeat test", "followup_monitor")
         # Force a known old timestamp by writing directly
         import app.deploy_watcher as dw
+
         state = json.loads(dw.STATE_PATH.read_text())
         old_ts = "2020-01-01T00:00:00Z"
         state["tracks"][0]["last_heartbeat"] = old_ts
@@ -96,6 +98,7 @@ class TestCanDeploy:
         register_track("old-track", "Old", "telegram_chat")
         # Simulate an old heartbeat by writing a stale timestamp
         import app.deploy_watcher as dw
+
         state = json.loads(dw.STATE_PATH.read_text())
         state["tracks"][0]["last_heartbeat"] = "2020-01-01T00:00:00Z"
         dw.STATE_PATH.write_text(json.dumps(state))
@@ -127,6 +130,7 @@ class TestCanDeploy:
         register_track("stale", "Stale", "followup_monitor")
         # Make the stale one old
         import app.deploy_watcher as dw
+
         state = json.loads(dw.STATE_PATH.read_text())
         for t in state["tracks"]:
             if t["id"] == "stale":

@@ -11,7 +11,6 @@ Started alongside email_poller and aws_monitor in the main lifespan.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -19,7 +18,6 @@ from typing import Any
 from app.followup_probes import run_probe
 from app.followups import (
     get_state,
-    list_open,
     next_due,
     set_status,
     upsert_state,
@@ -67,7 +65,9 @@ def _get_chat_id(followup: dict[str, Any]) -> str | None:
     return str(cid)
 
 
-def _build_strike_message(followup: dict[str, Any], probe_result: dict[str, Any]) -> str:
+def _build_strike_message(
+    followup: dict[str, Any], probe_result: dict[str, Any]
+) -> str:
     """Build a message to post in the thread when a follow-up strikes."""
     title = followup.get("title", "Untitled follow-up")
     condition = followup.get("condition", {})
@@ -76,11 +76,11 @@ def _build_strike_message(followup: dict[str, Any], probe_result: dict[str, Any]
 
     lines = [
         f"🔔 **Follow-up triggered: {title}**",
-        f"",
+        "",
         f"Condition: {kind}",
         f"Evidence: {evidence}",
-        f"",
-        f"Processing this now — I'll report back in this thread.",
+        "",
+        "Processing this now — I'll report back in this thread.",
     ]
     return "\n".join(lines)
 
@@ -192,7 +192,8 @@ async def _process_one(followup: dict[str, Any], now: datetime):
         # Condition struck — spin a Sophia turn in the thread
         logger.info(
             "Follow-up %s STRUCK! Spinning turn in thread %s",
-            followup_id, thread_id,
+            followup_id,
+            thread_id,
         )
 
         if thread_id:
@@ -212,7 +213,8 @@ async def _process_one(followup: dict[str, Any], now: datetime):
         if not last_pinged:
             logger.info(
                 "Follow-up %s escalation day reached, pinging thread %s",
-                followup_id, thread_id,
+                followup_id,
+                thread_id,
             )
             if thread_id:
                 message = _build_escalation_message(followup)
@@ -222,7 +224,8 @@ async def _process_one(followup: dict[str, Any], now: datetime):
         else:
             logger.debug(
                 "Follow-up %s already pinged at %s, skipping",
-                followup_id, last_pinged,
+                followup_id,
+                last_pinged,
             )
 
     # Update scheduling state
@@ -285,7 +288,8 @@ async def _post_to_thread_direct(chat_id: str | None, thread_id: str, message: s
         if resp.status_code != 200:
             logger.error(
                 "Telegram API error: %s %s",
-                resp.status_code, resp.text[:200],
+                resp.status_code,
+                resp.text[:200],
             )
 
 
@@ -324,7 +328,11 @@ async def _spin_sophia_turn(
             chat_id=chat_id or "-1003919341801",
             thread_id=int(thread_id) if thread_id.isdigit() else None,
         )
-        logger.info("Sophia turn spun for follow-up %s in thread %s", followup.get("id"), thread_id)
+        logger.info(
+            "Sophia turn spun for follow-up %s in thread %s",
+            followup.get("id"),
+            thread_id,
+        )
 
     except ImportError:
         logger.warning("process_message not available — cannot spin Sophia turn")
