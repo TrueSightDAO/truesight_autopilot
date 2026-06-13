@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from .auth import verify_jwt
 from .governor_registry import load_governors
-from .vault import Vault, get_vault, reset_vault_for_testing
+from .vault import get_vault
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
 
     Returns dict with {name, is_governor, email} or raises 403.
     """
-    import hashlib
 
     data = load_governors()
 
@@ -47,25 +46,6 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
                 "is_governor": True,
                 "email": g.get("email", ""),
             }
-
-    # Check if this is a vault synthetic key (vault:email:<hash>)
-    # If so, resolve by matching the email hash against governor emails
-    if public_key_b64.startswith("vault:email:"):
-        email_hash = public_key_b64.split(":", 2)[-1]
-        for g in data.get("governors", []):
-            gov_email = g.get("email", "").strip().lower()
-            if gov_email and hashlib.sha256(gov_email.encode()).hexdigest()[:16] == email_hash:
-                return {
-                    "name": g.get("name", "Unknown"),
-                    "is_governor": True,
-                    "email": gov_email,
-                }
-        # Email hash didn't match any governor - authenticated non-governor
-        return {
-            "name": "Verified Contributor",
-            "is_governor": False,
-            "email": "",
-        }
 
     # Key is verified but not in governors cache — authenticated non-governor
     return {
@@ -163,6 +143,86 @@ async def vault_status_page(request: Request):
 
 
 # ── API endpoints ──────────────────────────────────────────────────────────
+
+
+# In-memory challenge store (nonce-based, single-use)
+_challenges: dict[str, dict] = {}
+
+
+@router.post("/api/challenge")
+async def get_challenge():
+    """Generate a challenge for the client to sign with their DAO Identity keypair."""
+    import secrets
+    import time
+    challenge = secrets.token_hex(32)
+    _challenges[challenge] = {"created_at": time.time(), "used": False}
+    return {"challenge": challenge}
+
+
+@router.post("/api/verify-signature")
+async def verify_signature(request: Request):
+    """Verify a signed challenge and issue a JWT session cookie."""
+    import time
+    from .auth import create_jwt as _create_jwt, verify_rsa_signature
+
+    body = await request.json()
+    challenge = (body.get("challenge") or "").strip()
+    signature = (body.get("signature") or "").strip()
+    public_key = (body.get("public_key") or "").strip()
+
+    if not challenge or not signature or not public_key:
+        raise HTTPException(status_code=400, detail="challenge, signature, and public_key are required.")
+
+    # Check challenge exists and hasn't been used
+    stored = _challenges.get(challenge)
+    if not stored:
+        raise HTTPException(status_code=400, detail="Invalid or expired challenge. Please request a new one.")
+    if stored["used"]:
+        raise HTTPException(status_code=400, detail="Challenge already used (replay detected).")
+
+    # Check challenge expiry (5 minutes)
+    if time.time() - stored["created_at"] > 300:
+        del _challenges[challenge]
+        raise HTTPException(status_code=400, detail="Challenge expired. Please request a new one.")
+
+    # Mark as used (single-use)
+    stored["used"] = True
+
+    # Verify the signature
+    if not verify_rsa_signature(challenge, signature, public_key):
+        raise HTTPException(status_code=401, detail="Invalid signature. Your DAO Identity key does not match.")
+
+    # Check if this public key belongs to a governor
+    identity = _resolve_identity_from_jwt(public_key)
+    if not identity["is_governor"]:
+        raise HTTPException(
+            status_code=403,
+            detail="This DAO Identity is not registered as a governor. Only DAO governors may access the credential vault.",
+        )
+
+    # Issue JWT
+    token = _create_jwt(public_key)
+    response = JSONResponse({"token": token, "expires_in": 3600, "identity": identity})
+    response.set_cookie(
+        key="governor_chat_session",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=3600,
+    )
+    return response
+
+
+@router.get("/api/check-auth")
+async def check_auth(request: Request):
+    """Check if the current session is authenticated as a governor."""
+    try:
+        public_key = verify_jwt(request)
+        identity = _resolve_identity_from_jwt(public_key)
+        return {"authenticated": identity["is_governor"], "identity": identity}
+    except HTTPException:
+        return {"authenticated": False, "identity": None}
 
 
 @router.get("/api/credentials")
