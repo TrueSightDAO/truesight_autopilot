@@ -1060,6 +1060,9 @@ def handle_message(
 
     # Voice note → transcribe locally (faster-whisper)
     is_voice = bool(voice_file_id and not text)
+    # Send voice reply when the user provided text content (typed, voice, or caption)
+    # but skip for bare attachment drops with no words at all.
+    has_user_text = bool(text or voice_file_id or caption)
     transcribed_text = ""
     if is_voice:
         local_audio = download_telegram_file(voice_file_id)
@@ -1158,7 +1161,9 @@ def handle_message(
                 )
             # If user included text content, also send voice reply
             if has_user_text and response:
-                _handle_voice_reply(chat_id, thread_id, response, transcribed_text if is_voice else None)
+                _handle_voice_reply(
+                    chat_id, thread_id, response, transcribed_text if is_voice else None
+                )
         except Exception as e:  # noqa: BLE001
             logger.exception("call_chat failed (attachment)")
             send_message(chat_id, f"⚠️ Error processing the attachment: {e}", thread_id)
@@ -1226,7 +1231,9 @@ def handle_message(
         # For text messages, language is detected from the assistant's response.
         if response:
             _handle_voice_reply(
-                chat_id, thread_id, response,
+                chat_id,
+                thread_id,
+                response,
                 transcribed_text if is_voice else None,
             )
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
