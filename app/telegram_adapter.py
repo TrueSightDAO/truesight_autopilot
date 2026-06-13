@@ -833,19 +833,24 @@ def call_chat_with_typing(
 def _handle_voice_reply(
     chat_id: int,
     thread_id: int | None,
-    transcribed_text: str,
     assistant_response: str,
+    transcribed_text: str | None = None,
 ) -> None:
     """Synthesize and send a voice reply, plus URL follow-up if needed.
+
+    For voice messages, language is detected from the user's transcribed text.
+    For text messages, language is detected from the assistant's response.
 
     Args:
         chat_id: Telegram chat ID.
         thread_id: Optional forum thread ID.
-        transcribed_text: The user's transcribed voice message (for language detection).
         assistant_response: The autopilot's text response to synthesize.
+        transcribed_text: The user's transcribed voice message (for language detection).
+            If None, language is detected from assistant_response instead.
     """
-    # Detect language from the user's original voice message
-    lang = detect_language(transcribed_text)
+    # Detect language: prefer transcribed_text (user's voice), fall back to response text
+    source_for_lang = transcribed_text if transcribed_text else assistant_response
+    lang = detect_language(source_for_lang)
     voice_name = {"en": "Aria", "zh": "Xiaoxiao", "pt": "Francisca"}.get(lang, "Aria")
 
     # Show recording action so Telegram shows a mic icon
