@@ -96,8 +96,11 @@ async function checkDaoRegistration(pub) {
 
 // ---- States ----
 function showGovernor(name) {
-    setRecognition('👋 I recognize you — <strong>' + name + '</strong> (Governor).');
-    hide('step-link'); show('step-signin');
+    // Recognized governor → sign in automatically and go straight to the vault.
+    // No manual button click; signIn() falls back to showing one only if it fails.
+    setRecognition('👋 Welcome back, <strong>' + name + '</strong> (Governor) — signing you in…');
+    hide('step-link');
+    signIn();
 }
 function showRegisteredNonGovernor(email) {
     setRecognition('This key is linked to <strong>' + (email || 'your email') +
@@ -134,6 +137,7 @@ async function signIn() {
         throw new Error((await resp.json()).detail || 'Verification failed');
     } catch (e) {
         setError(e.message); setStatus('');
+        show('step-signin');  // auto sign-in failed → surface a manual retry button
         document.querySelectorAll('button').forEach(b => b.disabled = false);
     }
 }

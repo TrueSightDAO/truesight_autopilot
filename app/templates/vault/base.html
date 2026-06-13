@@ -174,7 +174,8 @@
         <a href="/vault" class="nav-link">Vault</a>
         <a href="/vault/status" class="nav-link">System Status</a>
         {% if identity %}
-            <a href="/logout" class="nav-link" style="margin-left: auto;">Sign out</a>
+            <a href="/logout" class="nav-link" style="margin-left: auto;"
+               onclick="try{localStorage.removeItem('publicKey');localStorage.removeItem('privateKey');}catch(e){}">Sign out</a>
         {% else %}
             <a href="/vault/login" class="nav-link" style="margin-left: auto;">Sign in</a>
         {% endif %}
