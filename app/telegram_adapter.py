@@ -12,12 +12,13 @@ Flow per message:
      Telegram chat + topic (so each topic is its own conversation).
   4. Send the assistant's reply back to the same chat/topic.
 
-Voice message flow:
-  1. Transcribe voice note via faster-whisper (local, free)
-  2. Detect language from transcription
-  3. Send transcribed text to /chat (SSE) for processing
+Voice reply flow:
+  1. For voice messages: transcribe via faster-whisper (local, free), detect language
+  2. For text messages: detect language from the assistant's response text
+  3. Send transcribed/typed text to /chat (SSE) for processing
   4. Synthesize assistant's response as MP3 via edge-tts (local, free)
   5. Send voice reply + URL follow-up text if URLs are present
+  Voice reply is skipped for bare attachment drops (no text, no caption, no voice).
 
 Security model: the trust boundary is the Telegram user-ID allowlist. The
 adapter runs on the same host as the FastAPI service and holds JWT_SECRET, so
@@ -1055,6 +1056,9 @@ def handle_message(
 
     # Voice note → transcribe locally (faster-whisper)
     is_voice = bool(voice_file_id and not text)
+    # Send voice reply when the user provided text content (typed, voice, or caption)
+    # but skip for bare attachment drops with no words at all.
+    has_user_text = bool(text or voice_file_id or caption)
     transcribed_text = ""
     if is_voice:
         local_audio = download_telegram_file(voice_file_id)
@@ -1151,8 +1155,8 @@ def handle_message(
                 response = call_chat_with_progress(
                     chat_id, thread_id, msg_text, session_id, public_key
                 )
-            # If original message was a voice note with attachment, also send voice reply
-            if is_voice and response:
+            # If user included text content, also send voice reply
+            if has_user_text and response:
                 _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
         except Exception as e:  # noqa: BLE001
             logger.exception("call_chat failed (attachment)")
@@ -1215,8 +1219,8 @@ def handle_message(
             response = call_chat_with_progress(
                 chat_id, thread_id, dispatch_text, session_id, public_key
             )
-        # If original message was a voice note, send voice reply + URL follow-up
-        if is_voice and response:
+        # If user included text content, send voice reply + URL follow-up
+        if has_user_text and response:
             _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
