@@ -1,141 +1,221 @@
 {% extends "base.html" %}
 {% block title %}Sign in — Credential Vault{% endblock %}
 {% block content %}
-<div class="card" style="max-width: 520px; margin: 2rem auto;">
+<div class="card" style="max-width: 540px; margin: 2rem auto;">
     <h2>Credential Vault</h2>
     <p style="margin-bottom: 1.5rem; color: var(--text-muted);">
         Stores the service credentials used by the TrueSight DAO Autopilot.
         Access is restricted to verified DAO governors, who sign in with their
-        DAO Identity keypair (stored in this browser).
+        DAO Identity keypair (created and stored only in this browser).
     </p>
 
-    <!-- Recognition banner — filled in on load from /api/whoami -->
-    <div id="recognition" style="margin-bottom: 1.25rem; color: var(--text-muted);">
-        <span id="recognition-text">Checking your DAO Identity…</span>
+    <!-- Recognition banner — filled in on load -->
+    <div id="recognition" style="margin-bottom: 1.25rem;">
+        <span id="recognition-text" style="color: var(--text-muted);">Checking your DAO Identity…</span>
     </div>
 
-    <!-- Recognized governor: just sign in -->
+    <!-- Recognized governor: sign in -->
     <div id="step-signin" style="display:none;">
         <button class="btn btn-primary" onclick="signIn()" id="signin-btn">
             Sign in to the vault
         </button>
     </div>
 
-    <!-- Not recognized: this key isn't linked to a governor account -->
-    <div id="step-unrecognized" style="display:none;">
-        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 1rem;">
-            This DAO Identity key isn't linked to a governor account yet. To get
-            vault access, link this key to your email on the DAO Identity page,
-            then come back here.
+    <!-- Not linked yet: link this key to an email, in-page -->
+    <div id="step-link" style="display:none;">
+        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 0.75rem;">
+            Link this DAO Identity key to your email. A verification link will be
+            emailed to you — open it <strong>in this browser</strong> to finish
+            (your signing key lives only here).
         </p>
-        <a class="btn btn-primary" href="https://dapp.truesight.me/create_signature.html" target="_blank" rel="noopener">
-            Link this key to my email →
-        </a>
-        <button class="btn" onclick="signIn()" style="margin-top:0.5rem;" id="signin-anyway-btn">
-            Try to sign in anyway
-        </button>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <input id="linkEmail" type="email" inputmode="email" autocomplete="email"
+                   placeholder="you@example.com"
+                   style="flex:1; min-width:220px; padding:10px 14px; border-radius:8px; border:1px solid var(--border); font-family:inherit; font-size:0.95rem;">
+            <button class="btn btn-primary" id="linkBtn" onclick="linkEmail()">Verify</button>
+        </div>
     </div>
 
     <div id="login-error" class="error" style="display:none; margin-top: 0.75rem;"></div>
     <div id="login-status" style="display:none; margin-top: 0.75rem; color: var(--text-muted); font-size: 0.9rem;"></div>
 </div>
 
+<!-- The TrueSight DAO Identity client library (same one oracle/dapp use) -->
+<script src="https://unpkg.com/@truesight_dao/dao-client@1.1.0-rc.4/dist/dao-client.min.js"></script>
 <script>
-// ---- Crypto helpers (mirror dapp/create_signature.html + capoeira) ----
-function base64ToArrayBuffer(b64) {
-    const bin = window.atob(b64);
-    const bytes = new Uint8Array(bin.length);
+const client = new DaoClient({ publicKeyKey: 'publicKey', privateKeyKey: 'privateKey' });
+const EDGAR_CHECK_URL = 'https://edgar.truesight.me/dao/check_digital_signature';
+
+// Local challenge signing (proven end-to-end) — used for the vault session,
+// independent of the library's internal signing.
+function b64ToBuf(b64) {
+    const bin = window.atob(b64); const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return bytes.buffer;
 }
-function arrayBufferToBase64(buf) {
-    let bin = '';
-    const bytes = new Uint8Array(buf);
+function bufToB64(buf) {
+    let bin = ''; const bytes = new Uint8Array(buf);
     for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
     return window.btoa(bin);
 }
-async function generateKeypair() {
-    const keyPair = await window.crypto.subtle.generateKey(
-        { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
-        true, ['sign', 'verify']
-    );
-    const publicKey = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
-    const privateKey = await window.crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
-    const publicKeyBase64 = arrayBufferToBase64(publicKey);
-    localStorage.setItem('publicKey', publicKeyBase64);
-    localStorage.setItem('privateKey', arrayBufferToBase64(privateKey));
-    return publicKeyBase64;
-}
-// Auto-generate a keypair the moment one isn't found — no explicit UX step.
-async function ensureKeypair() {
-    const pub = localStorage.getItem('publicKey');
-    const priv = localStorage.getItem('privateKey');
-    if (pub && priv) return pub;
-    return await generateKeypair();
-}
 async function signChallenge(challenge, privateKeyB64) {
-    const privateKeyObj = await window.crypto.subtle.importKey(
-        'pkcs8', base64ToArrayBuffer(privateKeyB64),
-        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']
-    );
-    const sig = await window.crypto.subtle.sign('RSASSA-PKCS1-v1_5', privateKeyObj, new TextEncoder().encode(challenge));
-    return arrayBufferToBase64(sig);
+    const key = await window.crypto.subtle.importKey('pkcs8', b64ToBuf(privateKeyB64),
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+    return bufToB64(await window.crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(challenge)));
 }
 
-// ---- Sign-in (signature flow, unchanged) ----
-async function signIn() {
-    const errorEl = document.getElementById('login-error');
-    const statusEl = document.getElementById('login-status');
-    const pub = localStorage.getItem('publicKey');
-    const priv = localStorage.getItem('privateKey');
-    document.querySelectorAll('button').forEach(b => b.disabled = true);
-    errorEl.style.display = 'none';
-    statusEl.style.display = 'block';
-    statusEl.textContent = 'Signing challenge with your DAO Identity…';
+function setError(msg) {
+    const el = document.getElementById('login-error');
+    el.textContent = msg; el.style.display = msg ? 'block' : 'none';
+}
+function setStatus(msg) {
+    const el = document.getElementById('login-status');
+    el.textContent = msg || ''; el.style.display = msg ? 'block' : 'none';
+}
+function show(id) { document.getElementById(id).style.display = 'block'; }
+function hide(id) { document.getElementById(id).style.display = 'none'; }
+function setRecognition(html) { document.getElementById('recognition-text').innerHTML = html; }
+
+// Governor lookup (vault-specific) — greets a known governor by name.
+async function whoami(pub) {
     try {
+        return await (await fetch('/vault/api/whoami', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ public_key: pub })
+        })).json();
+    } catch (e) { return { recognized: false }; }
+}
+
+// Authoritative DAO-registration status from Edgar (registered / pending / none).
+async function checkDaoRegistration(pub) {
+    if (!pub) return null;
+    try {
+        return await (await fetch(EDGAR_CHECK_URL + '?signature=' + encodeURIComponent(pub), { cache: 'no-store' })).json();
+    } catch (e) { return null; }
+}
+
+// ---- States ----
+function showGovernor(name) {
+    setRecognition('👋 I recognize you — <strong>' + name + '</strong> (Governor).');
+    hide('step-link'); show('step-signin');
+}
+function showRegisteredNonGovernor(email) {
+    setRecognition('This key is linked to <strong>' + (email || 'your email') +
+        '</strong>, but that account isn’t a DAO governor yet.');
+    hide('step-link'); hide('step-signin');
+    setStatus('Only DAO governors can open the vault. Keep contributing — governorship is earned.');
+}
+function showPending(email) {
+    setRecognition('⏳ Almost there — we emailed a verification link to <strong>' +
+        (email || 'your inbox') + '</strong>. Open it in THIS browser to finish.');
+    hide('step-link'); hide('step-signin');
+}
+function showLinkForm() {
+    setRecognition('I don’t recognize this DAO Identity key yet.');
+    hide('step-signin'); show('step-link');
+}
+
+// ---- Sign in (signature flow → vault session) ----
+async function signIn() {
+    setError(''); setStatus('Signing challenge with your DAO Identity…');
+    document.querySelectorAll('button').forEach(b => b.disabled = true);
+    try {
+        await client.ensureKeys();
+        const pub = client.publicKey || localStorage.getItem('publicKey');
+        const priv = localStorage.getItem('privateKey');
         const challenge = (await (await fetch('/vault/api/challenge', { method: 'POST' })).json()).challenge;
         const signature = await signChallenge(challenge, priv);
-        statusEl.textContent = 'Verifying signature…';
-        const verifyResp = await fetch('/vault/api/verify-signature', {
+        setStatus('Verifying signature…');
+        const resp = await fetch('/vault/api/verify-signature', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ challenge, signature, public_key: pub })
         });
-        if (verifyResp.ok) { window.location.href = '/vault'; return; }
-        const errData = await verifyResp.json();
-        throw new Error(errData.detail || 'Verification failed');
+        if (resp.ok) { window.location.href = '/vault'; return; }
+        throw new Error((await resp.json()).detail || 'Verification failed');
     } catch (e) {
-        errorEl.textContent = e.message;
-        errorEl.style.display = 'block';
-        statusEl.style.display = 'none';
+        setError(e.message); setStatus('');
         document.querySelectorAll('button').forEach(b => b.disabled = false);
     }
 }
 
-// ---- On load: already-authed? -> ensure keypair (auto-gen) -> recognize ----
+// ---- Link key → email (in-page, via dao-client) ----
+async function linkEmail() {
+    const email = document.getElementById('linkEmail').value.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Please enter a valid email address.'); return; }
+    setError('');
+    const btn = document.getElementById('linkBtn');
+    btn.disabled = true; btn.textContent = 'Linking…';
+    setStatus('Submitting to Edgar…');
+    try {
+        await client.ensureKeys();
+        await client.registerEmail(email);
+        try { localStorage.setItem('vault-dao-email', email); } catch (e) {}
+        setStatus(''); showPending(email);
+    } catch (e) {
+        setError('Error: ' + (e.message || e));
+        btn.disabled = false; btn.textContent = 'Verify';
+    }
+}
+
+// ---- Verification return (?em=…&vk=… from the email link) ----
+async function handleVerificationReturn() {
+    const vp = new URLSearchParams(window.location.search || '');
+    const vk = (vp.get('vk') || '').trim();
+    const em = (vp.get('em') || '').trim().toLowerCase();
+    if (!vk || !em) return false;
+    // strip params from the URL
+    const clean = new URL(window.location.href);
+    clean.searchParams.delete('vk'); clean.searchParams.delete('em');
+    window.history.replaceState({}, document.title, clean.pathname + clean.search + clean.hash);
+
+    setStatus('Verifying email link…');
+    try {
+        await client.ensureKeys();
+        const pub = client.publicKey || localStorage.getItem('publicKey');
+        const result = await client.verifyEmail(em, vk);
+        if (!result.ok && result.status !== 'duplicate') throw new Error(result.error || 'Verification failed');
+        // poll Edgar until the key reads as registered
+        let st = null;
+        for (let i = 0; i < 6; i++) {
+            st = await checkDaoRegistration(pub);
+            if (st && st.registered) break;
+            await new Promise(r => setTimeout(r, 1500));
+        }
+        setStatus('');
+        // re-resolve against the vault governor list
+        const me = await whoami(pub);
+        if (me.recognized && me.is_governor) showGovernor(me.name);
+        else showRegisteredNonGovernor((st && st.contributor_email) || em);
+    } catch (e) {
+        setError('Verification failed: ' + (e.message || e));
+        showLinkForm();
+    }
+    return true;
+}
+
+// ---- Init ----
 (async function init() {
+    // already signed in?
     try {
         const a = await (await fetch('/vault/api/check-auth')).json();
         if (a.authenticated) { window.location.href = '/vault'; return; }
     } catch (e) { /* not authed */ }
 
-    const pub = await ensureKeypair();
-    const recogText = document.getElementById('recognition-text');
-    try {
-        const me = await (await fetch('/vault/api/whoami', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ public_key: pub })
-        })).json();
-        if (me.recognized && me.is_governor) {
-            recogText.innerHTML = '👋 I recognize you — <strong>' + me.name + '</strong> (Governor).';
-            document.getElementById('step-signin').style.display = 'block';
-        } else {
-            recogText.textContent = 'I don’t recognize this DAO Identity key yet.';
-            document.getElementById('step-unrecognized').style.display = 'block';
-        }
-    } catch (e) {
-        recogText.textContent = 'Ready to sign in with your DAO Identity.';
-        document.getElementById('step-signin').style.display = 'block';
-    }
+    // auto-generate the keypair if missing (no explicit step)
+    await client.ensureKeys();
+
+    // returning from the email verification link owns the render
+    if (await handleVerificationReturn()) return;
+
+    const pub = client.publicKey || localStorage.getItem('publicKey');
+    const me = await whoami(pub);
+    if (me.recognized && me.is_governor) { showGovernor(me.name); return; }
+
+    // not a governor — drive the UI off the DAO registration status
+    const reg = await checkDaoRegistration(pub);
+    if (reg && reg.registered) showRegisteredNonGovernor(reg.contributor_email);
+    else if (reg && reg.pending_verification) showPending(reg.contributor_email);
+    else showLinkForm();
 })();
 </script>
 {% endblock %}
