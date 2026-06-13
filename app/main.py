@@ -2364,20 +2364,9 @@ async def _stream_chat(
         attachment_info is not None,
     )
 
-    # Trim history to avoid context overflow (max ~400K chars = ~100K tokens for messages)
-    # Preserve role tags and other system messages at position 0
-    MAX_HISTORY_CHARS = 400_000
-    total = sum(len(msg.get("content", "")) for msg in history)
-    while total > MAX_HISTORY_CHARS and len(history) > 4:
-        i = 0
-        while i < len(history) and history[i].get("role") == "system":
-            i += 1
-        if i >= len(history) - 1:
-            break
-        removed = history.pop(i)
-        total -= len(removed.get("content", ""))
-
-    # Sanitise orphaned tool messages (DeepSeek rejects them)
+    # Trim history to fit DeepSeek's context window (token-aware), then sanitise so
+    # any tool result orphaned by the trim is healed before the LLM call.
+    _trim_history_to_budget(history)
     _sanitise_tool_messages(history)
 
     try:
@@ -3635,7 +3624,9 @@ async def _chat_blocking_turn(
     tools = get_tool_schemas_for_role(role)
     client = LLMClient()
 
-    # Sanitise orphaned tool messages before the first LLM call
+    # Trim to the context-window budget (this path previously had NO trim at all —
+    # a long thread overflowed DeepSeek and bricked), then sanitise.
+    _trim_history_to_budget(history)
     _sanitise_tool_messages(history)
 
     # Multi-round tool loop (the streaming path loops; this one used to run a
@@ -3863,6 +3854,54 @@ def _truncate_tool_result(text):
     return (
         text[:_MAX_TOOL_RESULT_CHARS]
         + f"\n…[truncated {omitted} chars to keep the thread context from bloating]"
+    )
+
+
+# DeepSeek deepseek-chat has a 131,072-token input window. The old trim used a
+# 400K-CHAR threshold assuming ~4 chars/token — but tool-result / RSA-key /
+# signature-dense content runs ~2 chars/token, so 400K chars was ~200K tokens,
+# OVER the window. The history overflowed and the LLM returned empty BEFORE the
+# trim ever fired — the recurring 780/2622 brick (root-caused 2026-06-12). Trim to
+# a TOKEN budget (density-proof) that leaves headroom for the system prompt, tool
+# schemas, and the 8K response.
+_HISTORY_TOKEN_BUDGET = int(os.getenv("CHAT_HISTORY_TOKEN_BUDGET", "90000"))
+# Below this many chars even dense (2 chars/token) content is safely under budget,
+# so skip the relatively costly token count on normal-sized threads.
+_HISTORY_CHAR_SKIP = 150_000
+
+
+def _history_token_count(messages: list[dict]) -> int:
+    try:
+        import litellm
+
+        return litellm.token_counter(
+            model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat"),
+            messages=messages,
+        )
+    except Exception:
+        # Fallback to the dense 2-chars/token ratio we actually observe.
+        return sum(len(str(m.get("content", "") or "")) for m in messages) // 2
+
+
+def _trim_history_to_budget(history: list[dict]) -> None:
+    """Drop the oldest non-system messages until the history fits DeepSeek's context
+    window with headroom. Token-aware: content density varies 2–4 chars/token, so a
+    char-only threshold either overflows dense content or over-trims prose. Run this
+    BEFORE _sanitise_tool_messages so any tool result left orphaned by a trim is
+    healed before the LLM call."""
+    if sum(len(str(m.get("content", "") or "")) for m in history) < _HISTORY_CHAR_SKIP:
+        return  # cheap fast-path — small thread, no counting needed
+    total = _history_token_count(history)
+    if total <= _HISTORY_TOKEN_BUDGET:
+        return
+    i = 0
+    while i < len(history) and history[i].get("role") == "system":
+        i += 1  # preserve the role tag + any system prefix
+    while total > _HISTORY_TOKEN_BUDGET and (len(history) - i) > 2:
+        removed = history.pop(i)
+        total -= _history_token_count([removed])
+    logger.info(
+        "Trimmed thread history to ~%d tokens (budget %d)", total, _HISTORY_TOKEN_BUDGET
     )
 
 
