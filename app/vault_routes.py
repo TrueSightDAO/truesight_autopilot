@@ -154,6 +154,7 @@ async def get_challenge():
     """Generate a challenge for the client to sign with their DAO Identity keypair."""
     import secrets
     import time
+
     challenge = secrets.token_hex(32)
     _challenges[challenge] = {"created_at": time.time(), "used": False}
     return {"challenge": challenge}
@@ -171,26 +172,38 @@ async def verify_signature(request: Request):
     public_key = (body.get("public_key") or "").strip()
 
     if not challenge or not signature or not public_key:
-        raise HTTPException(status_code=400, detail="challenge, signature, and public_key are required.")
+        raise HTTPException(
+            status_code=400, detail="challenge, signature, and public_key are required."
+        )
 
     # Check challenge exists and hasn't been used
     stored = _challenges.get(challenge)
     if not stored:
-        raise HTTPException(status_code=400, detail="Invalid or expired challenge. Please request a new one.")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired challenge. Please request a new one.",
+        )
     if stored["used"]:
-        raise HTTPException(status_code=400, detail="Challenge already used (replay detected).")
+        raise HTTPException(
+            status_code=400, detail="Challenge already used (replay detected)."
+        )
 
     # Check challenge expiry (5 minutes)
     if time.time() - stored["created_at"] > 300:
         del _challenges[challenge]
-        raise HTTPException(status_code=400, detail="Challenge expired. Please request a new one.")
+        raise HTTPException(
+            status_code=400, detail="Challenge expired. Please request a new one."
+        )
 
     # Mark as used (single-use)
     stored["used"] = True
 
     # Verify the signature
     if not verify_rsa_signature(challenge, signature, public_key):
-        raise HTTPException(status_code=401, detail="Invalid signature. Your DAO Identity key does not match.")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid signature. Your DAO Identity key does not match.",
+        )
 
     # Check if this public key belongs to a governor
     identity = _resolve_identity_from_jwt(public_key)
@@ -225,32 +238,54 @@ async def check_auth(request: Request):
         return {"authenticated": False, "identity": None}
 
 
+@router.post("/api/whoami")
+async def whoami(request: Request):
+    """Recognize a public key WITHOUT a signed-in session, so the login page can
+    greet a returning governor by name *before* they sign in. No signature is
+    required (it's just an identity lookup of the caller's own key); the email is
+    never returned, so it can't be used to harvest contact info."""
+    body = await request.json()
+    public_key = (body.get("public_key") or "").strip()
+    if not public_key:
+        return {"recognized": False, "is_governor": False}
+    identity = _resolve_identity_from_jwt(public_key)
+    if identity["is_governor"]:
+        return {"recognized": True, "name": identity["name"], "is_governor": True}
+    return {"recognized": False, "is_governor": False}
+
+
 @router.get("/api/credentials")
-async def list_credentials(request: Request, identity: dict = Depends(_require_vault_governor)):
+async def list_credentials(
+    request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """List all credential names + metadata (never values)."""
     try:
         vault = get_vault()
         refs = vault.list_refs()
-        return JSONResponse({
-            "credentials": [
-                {
-                    "name": r.name,
-                    "purpose": r.purpose,
-                    "scopes": r.scopes,
-                    "version": r.version,
-                    "created_by": r.created_by,
-                    "created_at": r.created_at,
-                }
-                for r in refs
-            ]
-        })
+        return JSONResponse(
+            {
+                "credentials": [
+                    {
+                        "name": r.name,
+                        "purpose": r.purpose,
+                        "scopes": r.scopes,
+                        "version": r.version,
+                        "created_by": r.created_by,
+                        "created_at": r.created_at,
+                    }
+                    for r in refs
+                ]
+            }
+        )
     except Exception as e:
         logger.error("Failed to list credentials: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/credentials")
-async def add_credential(request: Request, identity: dict = Depends(_require_vault_governor)):
+async def add_credential(
+    request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """Add a new credential."""
     body = await request.json()
     name = body.get("name", "").strip()
@@ -261,7 +296,9 @@ async def add_credential(request: Request, identity: dict = Depends(_require_vau
     if not name or not value:
         raise HTTPException(status_code=400, detail="Name and value are required.")
 
-    scopes = [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else []
+    scopes = (
+        [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else []
+    )
 
     try:
         vault = get_vault()
@@ -275,7 +312,9 @@ async def add_credential(request: Request, identity: dict = Depends(_require_vau
 
 
 @router.delete("/api/credentials/{name}")
-async def delete_credential(name: str, request: Request, identity: dict = Depends(_require_vault_governor)):
+async def delete_credential(
+    name: str, request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """Delete a credential."""
     try:
         vault = get_vault()
@@ -289,7 +328,9 @@ async def delete_credential(name: str, request: Request, identity: dict = Depend
 
 
 @router.post("/api/credentials/{name}/rotate")
-async def rotate_credential(name: str, request: Request, identity: dict = Depends(_require_vault_governor)):
+async def rotate_credential(
+    name: str, request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """Rotate (update) a credential to a new version."""
     body = await request.json()
     new_value = body.get("value", "").strip()
@@ -301,11 +342,13 @@ async def rotate_credential(name: str, request: Request, identity: dict = Depend
     try:
         vault = get_vault()
         entry = vault.update(name, new_value, identity["name"], new_purpose=new_purpose)
-        return JSONResponse({
-            "success": True,
-            "name": name,
-            "new_version": entry.version,
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "name": name,
+                "new_version": entry.version,
+            }
+        )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -314,73 +357,97 @@ async def rotate_credential(name: str, request: Request, identity: dict = Depend
 
 
 @router.get("/api/audit-log")
-async def get_audit_log(request: Request, identity: dict = Depends(_require_vault_governor)):
+async def get_audit_log(
+    request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """Get the vault audit log."""
     try:
         vault = get_vault()
         entries = vault.get_audit_log(limit=200)
-        return JSONResponse({
-            "entries": [
-                {
-                    "action": e.action,
-                    "credential_name": e.credential_name,
-                    "version": e.version,
-                    "actor": e.actor,
-                    "timestamp": e.timestamp,
-                    "details": e.details,
-                }
-                for e in entries
-            ]
-        })
+        return JSONResponse(
+            {
+                "entries": [
+                    {
+                        "action": e.action,
+                        "credential_name": e.credential_name,
+                        "version": e.version,
+                        "actor": e.actor,
+                        "timestamp": e.timestamp,
+                        "details": e.details,
+                    }
+                    for e in entries
+                ]
+            }
+        )
     except Exception as e:
         logger.error("Failed to read audit log: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/system-status")
-async def system_status(request: Request, identity: dict = Depends(_require_vault_governor)):
+async def system_status(
+    request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """Get system status including active tracks and deploy readiness."""
     from .deploy_watcher import get_system_status as _get_status
+
     return JSONResponse(_get_status())
 
 
 @router.post("/api/deploy")
-async def trigger_deploy(request: Request, identity: dict = Depends(_require_vault_governor)):
+async def trigger_deploy(
+    request: Request, identity: dict = Depends(_require_vault_governor)
+):
     """Trigger a deploy, optionally forcing it."""
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    body = (
+        await request.json()
+        if request.headers.get("content-type") == "application/json"
+        else {}
+    )
     force = body.get("force", False)
-    
+
     from .deploy_watcher import can_deploy as _can_deploy
+
     ok, blocking = _can_deploy(force=force)
-    
+
     if not ok:
-        return JSONResponse({
-            "success": False,
-            "message": "Deploy blocked by active tracks.",
-            "blocking_tracks": blocking,
-        }, status_code=409)
-    
+        return JSONResponse(
+            {
+                "success": False,
+                "message": "Deploy blocked by active tracks.",
+                "blocking_tracks": blocking,
+            },
+            status_code=409,
+        )
+
     # Trigger the deploy
     import asyncio
+
     asyncio.create_task(_run_deploy())
-    
-    return JSONResponse({
-        "success": True,
-        "message": "Deploy triggered. Service will restart shortly.",
-    })
+
+    return JSONResponse(
+        {
+            "success": True,
+            "message": "Deploy triggered. Service will restart shortly.",
+        }
+    )
 
 
 async def _run_deploy():
     """Run the deploy in the background."""
     import subprocess
     import sys
-    
+
     try:
         result = subprocess.run(
             [sys.executable, "-m", "scripts.deploy"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
-        logger.info("Deploy result: rc=%d, stdout=%s", result.returncode, result.stdout[-500:])
+        logger.info(
+            "Deploy result: rc=%d, stdout=%s", result.returncode, result.stdout[-500:]
+        )
     except Exception as e:
         logger.error("Deploy failed: %s", e)
 
@@ -392,14 +459,18 @@ async def vault_health():
         vault = get_vault()
         initialized = vault.is_initialized()
         count = len(vault.list_refs()) if initialized else 0
-        return JSONResponse({
-            "initialized": initialized,
-            "credential_count": count,
-            "status": "healthy" if initialized else "not_initialized",
-        })
+        return JSONResponse(
+            {
+                "initialized": initialized,
+                "credential_count": count,
+                "status": "healthy" if initialized else "not_initialized",
+            }
+        )
     except Exception as e:
-        return JSONResponse({
-            "initialized": False,
-            "credential_count": 0,
-            "status": f"error: {e}",
-        })
+        return JSONResponse(
+            {
+                "initialized": False,
+                "credential_count": 0,
+                "status": f"error: {e}",
+            }
+        )
