@@ -1220,9 +1220,15 @@ def handle_message(
             response = call_chat_with_progress(
                 chat_id, thread_id, dispatch_text, session_id, public_key
             )
-        # If original message was a voice note, send voice reply + URL follow-up
-        if is_voice and response:
-            _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
+        # Send voice reply for ALL governor messages (text and voice), not just voice.
+        # The assistant's response is synthesized as speech and sent as a voice note.
+        # For voice messages, language is detected from the user's transcribed text.
+        # For text messages, language is detected from the assistant's response.
+        if response:
+            _handle_voice_reply(
+                chat_id, thread_id, response,
+                transcribed_text if is_voice else None,
+            )
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
         send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
