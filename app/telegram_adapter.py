@@ -1158,7 +1158,7 @@ def handle_message(
                 )
             # If original message was a voice note with attachment, also send voice reply
             if is_voice and response:
-                _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
+                _handle_voice_reply(chat_id, thread_id, response, transcribed_text)
         except Exception as e:  # noqa: BLE001
             logger.exception("call_chat failed (attachment)")
             send_message(chat_id, f"⚠️ Error processing the attachment: {e}", thread_id)
