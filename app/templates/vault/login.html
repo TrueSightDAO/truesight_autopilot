@@ -2,91 +2,188 @@
 {% block title %}Sign in — Credential Vault{% endblock %}
 {% block content %}
 <div class="card" style="max-width: 500px; margin: 2rem auto;">
-    <h2>Sign in to the Credential Vault</h2>
+    <h2>Sign in with your DAO Identity</h2>
     <p style="margin-bottom: 1.5rem; color: var(--text-muted);">
         The credential vault stores service credentials used by the TrueSight DAO Autopilot.
         Access is restricted to verified DAO governors.
     </p>
 
-    <div id="step-email">
-        <label for="email">Your DAO-registered email address</label>
-        <input type="email" id="email" placeholder="you@example.com" />
-        <button class="btn btn-primary" onclick="sendChallenge()">Send verification code</button>
-        <div id="email-error" class="error" style="display:none; margin-top: 0.5rem;"></div>
+    <div id="step-identity">
+        <p style="margin-bottom: 1rem;">
+            Sign in by signing a challenge with your DAO Identity keypair.
+            Your keypair is stored in your browser's local storage.
+        </p>
+        <button class="btn btn-primary" onclick="signIn()" id="signin-btn">
+            Sign in with DAO Identity
+        </button>
+        <div id="login-error" class="error" style="display:none; margin-top: 0.5rem;"></div>
+        <div id="login-status" style="display:none; margin-top: 0.5rem; color: var(--text-muted); font-size: 0.9rem;"></div>
     </div>
 
-    <div id="step-code" style="display:none;">
-        <label for="code">Verification code (check your email)</label>
-        <input type="text" id="code" placeholder="Paste the code from your email" />
-        <button class="btn btn-primary" onclick="verifyCode()">Verify &amp; sign in</button>
-        <div id="code-error" class="error" style="display:none; margin-top: 0.5rem;"></div>
-        <p style="margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted);">
-            Didn't receive a code? <a href="#" onclick="sendChallenge(); return false;">Resend</a>
+    <div id="step-register" style="display:none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+        <h3 style="margin-bottom: 0.75rem;">No keypair found</h3>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
+            You need a DAO Identity keypair to sign in. Generate one now — it will be stored
+            in your browser's local storage.
         </p>
+        <button class="btn btn-primary" onclick="generateAndSignIn()" id="generate-btn">
+            Generate keypair &amp; sign in
+        </button>
     </div>
 </div>
 
 <script>
-let currentEmail = '';
+// ---- Crypto helpers (mirrors oracle-draw-submit.js pattern) ----
 
-async function sendChallenge() {
-    const email = document.getElementById('email').value.trim();
-    const errorEl = document.getElementById('email-error');
-    if (!email) {
-        errorEl.textContent = 'Please enter your email address.';
-        errorEl.style.display = 'block';
-        return;
-    }
-    errorEl.style.display = 'none';
-    document.getElementById('step-email').style.display = 'none';
-    document.getElementById('step-code').style.display = 'block';
-    currentEmail = email;
-    document.getElementById('code').focus();
-    // Send the challenge code via email
-    try {
-        const resp = await fetch('/auth/send-challenge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: email })
-        });
-        if (!resp.ok) {
-            const data = await resp.json();
-            errorEl.textContent = data.detail || 'Failed to send verification code.';
-            errorEl.style.display = 'block';
-        }
-    } catch (e) {
-        // Network error - user can still try a code if they got it via another channel
-        console.error('Failed to send challenge:', e);
-    }
+function base64ToArrayBuffer(b64) {
+    const bin = window.atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
 }
 
-async function verifyCode() {
-    const code = document.getElementById('code').value.trim();
-    const errorEl = document.getElementById('code-error');
-    if (!code) {
-        errorEl.textContent = 'Please enter the verification code.';
-        errorEl.style.display = 'block';
+function arrayBufferToBase64(buf) {
+    let bin = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+    return window.btoa(bin);
+}
+
+async function generateKeypair() {
+    const keyPair = await window.crypto.subtle.generateKey(
+        { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+        true,
+        ['sign', 'verify']
+    );
+    const publicKey = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
+    const privateKey = await window.crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
+    const publicKeyBase64 = arrayBufferToBase64(publicKey);
+    const privateKeyBase64 = arrayBufferToBase64(privateKey);
+    localStorage.setItem('publicKey', publicKeyBase64);
+    localStorage.setItem('privateKey', privateKeyBase64);
+    return publicKeyBase64;
+}
+
+async function signChallenge(challenge, privateKeyB64) {
+    const privateKeyObj = await window.crypto.subtle.importKey(
+        'pkcs8',
+        base64ToArrayBuffer(privateKeyB64),
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+        false,
+        ['sign']
+    );
+    const encoder = new TextEncoder();
+    const sig = await window.crypto.subtle.sign(
+        'RSASSA-PKCS1-v1_5',
+        privateKeyObj,
+        encoder.encode(challenge)
+    );
+    return arrayBufferToBase64(sig);
+}
+
+function getStoredKeypair() {
+    const pub = localStorage.getItem('publicKey');
+    const priv = localStorage.getItem('privateKey');
+    if (pub && priv) return { publicKey: pub, privateKey: priv };
+    return null;
+}
+
+// ---- Login flow ----
+
+async function signIn() {
+    const btn = document.getElementById('signin-btn');
+    const errorEl = document.getElementById('login-error');
+    const statusEl = document.getElementById('login-status');
+
+    const kp = getStoredKeypair();
+    if (!kp) {
+        // No keypair — show register option
+        document.getElementById('step-identity').style.display = 'none';
+        document.getElementById('step-register').style.display = 'block';
         return;
     }
+
     errorEl.style.display = 'none';
-    // Submit the code to the auth endpoint
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Signing challenge with your DAO Identity...';
+    btn.disabled = true;
+
     try {
-        const resp = await fetch('/auth/verify-code', {
+        // 1. Get a challenge from the server
+        const challengeResp = await fetch('/vault/api/challenge', { method: 'POST' });
+        if (!challengeResp.ok) {
+            throw new Error('Failed to get challenge: ' + challengeResp.status);
+        }
+        const challengeData = await challengeResp.json();
+        const challenge = challengeData.challenge;
+
+        // 2. Sign the challenge with the stored private key
+        const signature = await signChallenge(challenge, kp.privateKey);
+
+        // 3. Submit the signed challenge for verification
+        statusEl.textContent = 'Verifying signature...';
+        const verifyResp = await fetch('/vault/api/verify-signature', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: currentEmail, code: code })
+            body: JSON.stringify({
+                challenge: challenge,
+                signature: signature,
+                public_key: kp.publicKey
+            })
         });
-        if (resp.ok) {
+
+        if (verifyResp.ok) {
+            // Success — redirect to vault
             window.location.href = '/vault';
         } else {
-            const data = await resp.json();
-            errorEl.textContent = data.detail || 'Verification failed. Please try again.';
-            errorEl.style.display = 'block';
+            const errData = await verifyResp.json();
+            throw new Error(errData.detail || 'Verification failed');
         }
     } catch (e) {
-        errorEl.textContent = 'Network error. Please try again.';
+        errorEl.textContent = e.message;
         errorEl.style.display = 'block';
+        statusEl.style.display = 'none';
+        btn.disabled = false;
     }
 }
+
+async function generateAndSignIn() {
+    const btn = document.getElementById('generate-btn');
+    const errorEl = document.getElementById('login-error');
+    const statusEl = document.getElementById('login-status');
+
+    errorEl.style.display = 'none';
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Generating DAO Identity keypair...';
+    btn.disabled = true;
+
+    try {
+        const publicKey = await generateKeypair();
+        statusEl.textContent = 'Keypair generated. Signing challenge...';
+
+        // Now sign in with the new keypair
+        await signIn();
+    } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.style.display = 'block';
+        statusEl.style.display = 'none';
+        btn.disabled = false;
+    }
+}
+
+// Check if already authenticated on page load
+(async function() {
+    try {
+        const resp = await fetch('/vault/api/check-auth');
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.authenticated) {
+                window.location.href = '/vault';
+            }
+        }
+    } catch (e) {
+        // Not authenticated — show login
+    }
+})();
 </script>
 {% endblock %}

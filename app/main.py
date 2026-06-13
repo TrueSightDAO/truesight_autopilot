@@ -621,6 +621,7 @@ async def root():
   <p class="tagline">The Oracle of TrueSight DAO —<br>wisdom from the I Ching, grounded in DAO state.</p>
 
   <a class="btn" href="https://oracle.truesight.me" target="_blank">Cast the I Ching</a>
+  <a class="btn" href="/vault/" style="margin-top: 0.75rem;">Credential Vault</a>
 
   <div class="footer">
     <a href="https://truesight.me">TrueSight DAO</a> &middot; regenerative &amp; sovereign
