@@ -833,19 +833,24 @@ def call_chat_with_typing(
 def _handle_voice_reply(
     chat_id: int,
     thread_id: int | None,
-    transcribed_text: str,
     assistant_response: str,
+    transcribed_text: str | None = None,
 ) -> None:
     """Synthesize and send a voice reply, plus URL follow-up if needed.
+
+    For voice messages, language is detected from the user's transcribed text.
+    For text messages, language is detected from the assistant's response.
 
     Args:
         chat_id: Telegram chat ID.
         thread_id: Optional forum thread ID.
-        transcribed_text: The user's transcribed voice message (for language detection).
         assistant_response: The autopilot's text response to synthesize.
+        transcribed_text: The user's transcribed voice message (for language detection).
+            If None, language is detected from assistant_response instead.
     """
-    # Detect language from the user's original voice message
-    lang = detect_language(transcribed_text)
+    # Detect language: prefer transcribed_text (user's voice), fall back to response text
+    source_for_lang = transcribed_text if transcribed_text else assistant_response
+    lang = detect_language(source_for_lang)
     voice_name = {"en": "Aria", "zh": "Xiaoxiao", "pt": "Francisca"}.get(lang, "Aria")
 
     # Show recording action so Telegram shows a mic icon
@@ -1153,7 +1158,7 @@ def handle_message(
                 )
             # If original message was a voice note with attachment, also send voice reply
             if is_voice and response:
-                _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
+                _handle_voice_reply(chat_id, thread_id, response, transcribed_text)
         except Exception as e:  # noqa: BLE001
             logger.exception("call_chat failed (attachment)")
             send_message(chat_id, f"⚠️ Error processing the attachment: {e}", thread_id)
@@ -1215,9 +1220,15 @@ def handle_message(
             response = call_chat_with_progress(
                 chat_id, thread_id, dispatch_text, session_id, public_key
             )
-        # If original message was a voice note, send voice reply + URL follow-up
-        if is_voice and response:
-            _handle_voice_reply(chat_id, thread_id, transcribed_text, response)
+        # Send voice reply for ALL governor messages (text and voice), not just voice.
+        # The assistant's response is synthesized as speech and sent as a voice note.
+        # For voice messages, language is detected from the user's transcribed text.
+        # For text messages, language is detected from the assistant's response.
+        if response:
+            _handle_voice_reply(
+                chat_id, thread_id, response,
+                transcribed_text if is_voice else None,
+            )
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
         send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
