@@ -651,8 +651,45 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
         return False
 
 
+_DEPLOY_MARKER = "/tmp/.autopilot_deployed"
+
+
+def _deploy_in_progress() -> bool:
+    """The deploy marker exists between deploy.py writing it (just before the
+    restart) and the freshly-booted brain removing it — i.e. a redeploy is underway."""
+    try:
+        return os.path.exists(_DEPLOY_MARKER)
+    except Exception:
+        return False
+
+
+def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
+    """Wait for the brain to be reachable (it may be mid deploy-restart), so a brief
+    restart is invisible instead of surfacing a Connection-refused error. Returns fast
+    when the brain is already up."""
+    url = f"{settings.autopilot_chat_url.rstrip('/')}/health"
+    for attempt in range(max_attempts):
+        try:
+            if httpx.get(url, timeout=5.0).status_code == 200:
+                return True
+        except Exception:
+            pass
+        if attempt < max_attempts - 1:
+            time.sleep(backoff)
+    return False
+
+
+def _brain_unavailable_message() -> str:
+    """A clear indicator instead of a raw Errno — names a redeploy when one is underway."""
+    if _deploy_in_progress():
+        return "🚀 Sophia is redeploying — back in a few seconds. Please resend your message shortly."
+    return "⏳ Sophia is briefly restarting — please resend in a few seconds."
+
+
 def call_chat(message: str, session_id: str, public_key: str) -> str:
     """POST to /chat-blocking as the governor; return the assistant text."""
+    if not _wait_for_brain():
+        return _brain_unavailable_message()
     token = create_jwt(public_key)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
     resp = httpx.post(
@@ -692,6 +729,13 @@ def call_chat_with_progress(
     if status_id is None:
         logger.warning("Could not send status message — falling back to blocking chat")
         return call_chat(message, session_id, public_key)
+
+    # Ride out a brain restart (e.g. a redeploy) before streaming, so a brief
+    # redeploy shows a clear indicator instead of a Connection-refused error.
+    if not _wait_for_brain():
+        msg = _brain_unavailable_message()
+        edit_message_text(chat_id, status_id, msg, thread_id)
+        return msg
 
     tool_emoji: dict[str, str] = {
         "web_search": "🔍",
@@ -1062,6 +1106,22 @@ def handle_message(
     # Reply-threads and the General topic carry ids that 400 on sendMessage
     # ("message thread not found"), so we ignore them for routing + session keying.
     thread_id = msg.get("message_thread_id") if msg.get("is_topic_message") else None
+    # Best-effort: capture the forum-topic name when Telegram includes it (topic
+    # created/edited service message, or a reply rooted at the topic-creation
+    # message) so the vault status page can show + link named threads.
+    if thread_id:
+        _ftc = (
+            msg.get("forum_topic_created")
+            or msg.get("forum_topic_edited")
+            or (msg.get("reply_to_message") or {}).get("forum_topic_created")
+        )
+        if isinstance(_ftc, dict) and _ftc.get("name"):
+            try:
+                from .topic_names import record_topic_name
+
+                record_topic_name(thread_id, _ftc["name"])
+            except Exception:
+                pass
     user_id = (msg.get("from") or {}).get("id")
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
