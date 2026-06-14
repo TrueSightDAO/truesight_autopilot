@@ -58,11 +58,26 @@ def _remote_url(repo: str) -> str:
     return f"https://github.com/TrueSightDAO/{repo}.git"
 
 
+def _resolve_pat() -> str:
+    """Resolve GitHub PAT from settings, falling back to vault."""
+    pat = settings.github_pat or ""
+    if not pat:
+        try:
+            from ..vault import get_vault
+            vault = get_vault()
+            if vault.has_credential("github_krake_pat"):
+                pat = vault.get_value("github_krake_pat")
+                logger.info("git_tools: resolved PAT from vault credential 'github_krake_pat'")
+        except Exception:
+            logger.warning("git_tools: vault fallback for PAT failed", exc_info=True)
+    return pat
+
+
 def _git(
     args: list[str], cwd: str | Path, timeout: int = 60
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["GIT_PAT"] = settings.github_pat or ""
+    env["GIT_PAT"] = _resolve_pat()
     env["GIT_TERMINAL_PROMPT"] = "0"  # fail fast instead of hanging on a prompt
     return subprocess.run(
         [
