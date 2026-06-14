@@ -160,7 +160,7 @@ def git_push_changes(
         )
     if not (writes or edits or deletes):
         return _err("nothing to do: provide writes, edits, and/or deletes")
-    if not settings.github_pat:
+    if not _resolve_pat():
         return _err("TRUESIGHT_DAO_AUTOPILOT PAT not configured on this host")
 
     workdir = Path(tempfile.mkdtemp(prefix=f"sophia-git-{repo}-"))
