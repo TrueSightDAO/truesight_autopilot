@@ -369,6 +369,12 @@ async def lifespan(app: FastAPI):
     # ── Deploy notification: check for marker file from deploy.py ──
     _check_deploy_marker()
 
+    # ── CM0: garbage-collect old tool-result artifacts (best-effort, on boot) ──
+    try:
+        _gc_artifacts(int(os.getenv("ARTIFACT_GC_MAX_AGE_DAYS", "14")))
+    except Exception as exc:  # never block startup
+        logger.warning("artifact GC on boot failed: %s", exc)
+
     if not settings.dry_run:
         try:
             email_poller = EmailPoller()
@@ -3043,6 +3049,45 @@ async def get_chat_progress(request: Request) -> JSONResponse:
     return JSONResponse({"running": False, "snapshot": None})
 
 
+@app.get("/chat/context")
+async def get_chat_context(request: Request) -> JSONResponse:
+    """CM4 introspection — the session's context budget: message count, ~token
+    estimate vs the trim budget, pinned working-set notes, and artifact count.
+    Read-only; keyed by the caller's session."""
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    session_id = _session_key(public_key, request)
+    history = _sessions.get(session_id) or _load_or_create_session(session_id)
+    chars = sum(len(str(m.get("content", "") or "")) for m in history)
+    tokens = (
+        _history_token_count(history) if chars >= _HISTORY_CHAR_SKIP else chars // 2
+    )
+    pinned = [
+        m.get("content", "")
+        for m in history
+        if m.get("role") == "system"
+        and str(m.get("content", "")).startswith("[PINNED]")
+    ]
+    try:
+        adir = _artifact_session_dir(session_id)
+        artifacts = len(list(adir.glob("*.txt"))) if adir.exists() else 0
+    except Exception:
+        artifacts = 0
+    return JSONResponse(
+        {
+            "messages": len(history),
+            "chars": chars,
+            "tokens_est": tokens,
+            "token_budget": _HISTORY_TOKEN_BUDGET,
+            "model_window": 131072,
+            "pct_of_budget": round(tokens / max(1, _HISTORY_TOKEN_BUDGET) * 100, 1),
+            "pinned_notes": pinned,
+            "artifacts": artifacts,
+        }
+    )
+
+
 @app.get("/chat/queue")
 async def get_queue(request: Request) -> JSONResponse:
     """Return the current message queue for this session."""
@@ -4024,15 +4069,106 @@ def _trim_history_to_budget(history: list[dict]) -> None:
     total = _history_token_count(history)
     if total <= _HISTORY_TOKEN_BUDGET:
         return
-    i = 0
-    while i < len(history) and history[i].get("role") == "system":
-        i += 1  # preserve the role tag + any system prefix
-    while total > _HISTORY_TOKEN_BUDGET and (len(history) - i) > 2:
-        removed = history.pop(i)
+    while total > _HISTORY_TOKEN_BUDGET:
+        # Drop the OLDEST non-system message. system messages (the role tag + any
+        # [PINNED] working-set notes from pin_note, Pillar C) are never dropped.
+        k = 0
+        while k < len(history) and history[k].get("role") == "system":
+            k += 1
+        if k >= len(history) - 1:  # only system + the latest message left — stop
+            break
+        removed = history.pop(k)
         total -= _history_token_count([removed])
     logger.info(
         "Trimmed thread history to ~%d tokens (budget %d)", total, _HISTORY_TOKEN_BUDGET
     )
+
+
+# ── Context-management Pillar C: recall + working-set ─────────────────────────
+def _gc_artifacts(max_age_days: int = 14) -> int:
+    """Delete artifact files older than max_age_days (CM0 GC). Best-effort."""
+    import time as _t
+
+    cutoff = _t.time() - max_age_days * 86400
+    removed = 0
+    try:
+        if _ARTIFACT_DIR.exists():
+            for f in _ARTIFACT_DIR.rglob("*.txt"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink()
+                        removed += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("artifact GC failed: %s", e)
+    if removed:
+        logger.info(
+            "artifact GC removed %d file(s) older than %dd", removed, max_age_days
+        )
+    return removed
+
+
+def _span_around(text: str, q: str, radius: int = 300) -> str:
+    i = text.lower().find(q)
+    if i < 0:
+        return text[: radius * 2]
+    a = max(0, i - radius)
+    b = min(len(text), i + len(q) + radius)
+    return ("…" if a > 0 else "") + text[a:b] + ("…" if b < len(text) else "")
+
+
+def _search_transcript(query, session_id, max_spans=8):
+    """Grep this session's full on-disk history + artifacts for `query`; return the
+    matched spans. The 'really look back' recall (Pillar C)."""
+    import hashlib
+
+    q = (query or "").strip().lower()
+    if not q:
+        return {"status": "error", "reason": "query is required"}
+    spans: list = []
+    try:
+        sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
+        p = SESSION_LOG_DIR / f"{sid_hash}.json"
+        if p.is_file():
+            msgs = json.loads(p.read_text(encoding="utf-8")).get("full_history") or []
+            for idx, msg in enumerate(msgs):
+                c = msg.get("content")
+                if isinstance(c, str) and q in c.lower():
+                    spans.append(
+                        {
+                            "source": "transcript",
+                            "index": idx,
+                            "role": msg.get("role"),
+                            "text": _span_around(c, q),
+                        }
+                    )
+                    if len(spans) >= max_spans:
+                        break
+    except Exception as e:
+        logger.warning("search_transcript history error: %s", e)
+    if len(spans) < max_spans:
+        try:
+            d = _artifact_session_dir(session_id)
+            if d.exists():
+                for f in sorted(d.glob("*.txt")):
+                    try:
+                        data = f.read_text(encoding="utf-8")
+                    except Exception:
+                        continue
+                    if q in data.lower():
+                        spans.append(
+                            {
+                                "source": "artifact",
+                                "artifact_id": f.stem,
+                                "text": _span_around(data, q),
+                            }
+                        )
+                        if len(spans) >= max_spans:
+                            break
+        except Exception:
+            pass
+    return {"status": "ok", "query": query, "matches": len(spans), "spans": spans}
 
 
 def _sanitise_tool_messages(history: list[dict]) -> None:
