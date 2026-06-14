@@ -38,10 +38,10 @@ app.include_router(vault_router)
 app.include_router(auth_router)
 
 # Also mount at root for direct access
-from .vault_routes import router as vault_router_root
 from fastapi import APIRouter
 
 root_router = APIRouter()
+
 
 @root_router.get("/")
 async def root():
@@ -57,5 +57,6 @@ async def root():
             "audit_log": "/vault/api/audit-log",
         },
     }
+
 
 app.include_router(root_router)

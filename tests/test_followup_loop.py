@@ -5,7 +5,7 @@ Tests for app/followup_loop.py — follow-up comb loop.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -23,7 +23,11 @@ def sample_followup() -> dict:
         "title": "Test follow-up",
         "created_at": "2026-06-10",
         "condition": {"kind": "elapsed_days"},
-        "schedule": {"check": "daily", "escalate_after_days": 2, "on_escalate": "ping_thread"},
+        "schedule": {
+            "check": "daily",
+            "escalate_after_days": 2,
+            "on_escalate": "ping_thread",
+        },
         "status": "open",
     }
 
@@ -101,7 +105,10 @@ class TestProcessOne:
 
         with (
             patch("app.followup_loop.get_state", return_value={"attempts": 0}),
-            patch("app.followup_loop.run_probe", return_value={"struck": True, "evidence": "Struck!"}),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": True, "evidence": "Struck!"},
+            ),
             patch("app.followup_loop.set_status") as mock_set_status,
             patch("app.followup_loop.upsert_state"),
             patch("app.followup_loop._post_to_thread", new_callable=AsyncMock),
@@ -118,9 +125,17 @@ class TestProcessOne:
         now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
 
         with (
-            patch("app.followup_loop.get_state", return_value={"attempts": 0, "last_pinged": None}),
-            patch("app.followup_loop.run_probe", return_value={"struck": False, "evidence": "No reply"}),
-            patch("app.followup_loop._post_to_thread", new_callable=AsyncMock) as mock_post,
+            patch(
+                "app.followup_loop.get_state",
+                return_value={"attempts": 0, "last_pinged": None},
+            ),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": False, "evidence": "No reply"},
+            ),
+            patch(
+                "app.followup_loop._post_to_thread", new_callable=AsyncMock
+            ) as mock_post,
             patch("app.followup_loop.upsert_state"),
         ):
             await _process_one(sample_followup, now)
@@ -135,9 +150,20 @@ class TestProcessOne:
         now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
 
         with (
-            patch("app.followup_loop.get_state", return_value={"attempts": 0, "last_pinged": "2026-06-12T12:00:00+00:00"}),
-            patch("app.followup_loop.run_probe", return_value={"struck": False, "evidence": "No reply"}),
-            patch("app.followup_loop._post_to_thread", new_callable=AsyncMock) as mock_post,
+            patch(
+                "app.followup_loop.get_state",
+                return_value={
+                    "attempts": 0,
+                    "last_pinged": "2026-06-12T12:00:00+00:00",
+                },
+            ),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": False, "evidence": "No reply"},
+            ),
+            patch(
+                "app.followup_loop._post_to_thread", new_callable=AsyncMock
+            ) as mock_post,
             patch("app.followup_loop.upsert_state"),
         ):
             await _process_one(sample_followup, now)
@@ -155,8 +181,13 @@ class TestProcessOne:
 
         with (
             patch("app.followup_loop.get_state", return_value={"attempts": 0}),
-            patch("app.followup_loop.run_probe", return_value={"struck": False, "evidence": "Not yet"}),
-            patch("app.followup_loop._post_to_thread", new_callable=AsyncMock) as mock_post,
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": False, "evidence": "Not yet"},
+            ),
+            patch(
+                "app.followup_loop._post_to_thread", new_callable=AsyncMock
+            ) as mock_post,
             patch("app.followup_loop.set_status") as mock_set_status,
             patch("app.followup_loop.upsert_state"),
         ):
@@ -173,7 +204,10 @@ class TestProcessOne:
 
         with (
             patch("app.followup_loop.get_state", return_value={"attempts": 0}),
-            patch("app.followup_loop.run_probe", return_value={"struck": False, "evidence": "Not yet"}),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": False, "evidence": "Not yet"},
+            ),
             patch("app.followup_loop._post_to_thread", new_callable=AsyncMock),
             patch("app.followup_loop.upsert_state") as mock_upsert,
         ):
@@ -204,7 +238,9 @@ class TestTick:
 
         with (
             patch("app.followup_loop.next_due", return_value=[sample_followup]),
-            patch("app.followup_loop._process_one", new_callable=AsyncMock) as mock_process,
+            patch(
+                "app.followup_loop._process_one", new_callable=AsyncMock
+            ) as mock_process,
         ):
             await _tick()
             mock_process.assert_called_once()

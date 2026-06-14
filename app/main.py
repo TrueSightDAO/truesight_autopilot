@@ -1172,7 +1172,6 @@ _CANONICAL_LABELS: dict[str, list[str]] = {
 _FIELD_ALIASES: dict[str, str] = {
     # Inventory Movement
     "manager_name": "Manager Name",
-    "manager": "Manager Name",
     "manager (from)": "Manager Name",
     "from": "Manager Name",
     "sender": "Manager Name",
@@ -1203,7 +1202,6 @@ _FIELD_ALIASES: dict[str, str] = {
     "filename": "Attached Filename",
     "attachment": "Attached Filename",
     # QR Code Registration
-    "qr_code": "QR Code",
     "landing_page": "Landing Page",
     "landing": "Landing Page",
     "page": "Landing Page",

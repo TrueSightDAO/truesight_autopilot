@@ -4,7 +4,6 @@ Phase 3 of the Multi-Tenant Governance & Vault plan (vault-first order).
 """
 
 import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -12,8 +11,6 @@ import pytest
 
 from app.vault import (
     Vault,
-    VaultEntry,
-    VaultAuditEntry,
     CredentialRef,
     get_vault,
     reset_vault_for_testing,
@@ -402,5 +399,6 @@ class TestEdgeCases:
         assert len(key_bytes) > 0
         # Should be a Fernet key (base64-encoded 32 bytes)
         from cryptography.fernet import Fernet
+
         f = Fernet(key_bytes)
         assert f is not None
