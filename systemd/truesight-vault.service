@@ -1,0 +1,21 @@
+[Unit]
+Description=TrueSight Vault Worker — dedicated credential-vault web server (port 8002)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/truesight_autopilot
+Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/opt/truesight_autopilot
+# Runs separately from the brain so the vault + system-status pages stay responsive
+# even when the main bot is busy on a long LLM turn. app.vault_app eagerly
+# initializes the vault (dir + Fernet key) on startup.
+ExecStart=/opt/truesight_autopilot/.venv/bin/uvicorn app.vault_app:app --host 127.0.0.1 --port 8002 --workers 2
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

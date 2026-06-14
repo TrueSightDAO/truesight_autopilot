@@ -40,7 +40,86 @@ Both modes share the same brain: **DeepSeek-V3** (30× cheaper than Claude) with
 | AWS bill surprises you at month-end | Daily cost check → anomaly detected → PR to pause non-prod resources |
 | GAS execution error → manual script debugging → Stack Overflow rabbit hole | Error email → autopilot parses stack trace → proposes fix in `.gs` or Python equivalent |
 
-## Architecture
+## Architecture & Services
+
+Sophia runs as **four systemd services** on a dedicated EC2 box, fronted by nginx
+(`sophia.truesight.me`). They're deliberately split so the credential vault and the
+Telegram adapter stay responsive even while the brain is busy on a long LLM turn.
+
+```mermaid
+flowchart TB
+    G["Governors<br/>(Telegram forum topics)"]
+    NGINX["nginx · sophia.truesight.me :443<br/>/ → brain :8001 · /vault,/auth → vault :8002"]
+    subgraph BOX["EC2 · /opt/truesight_autopilot"]
+        ADAPTER["truesight-autopilot-telegram<br/>app.telegram_adapter<br/>long-poll · topic→role dispatch"]
+        BRAIN["truesight-autopilot · :8001<br/>app.main:app (FastAPI)<br/>LLM tool-loop · sessions<br/>context-mgmt · roles · policy"]
+        WATCH["truesight-autopilot-watchdog<br/>app.attention_watchdog<br/>read-only nudges"]
+        VAULT["truesight-vault · :8002<br/>app.vault_app:app<br/>Fernet vault · /vault UI · /auth"]
+        DATA[("sessions/ · artifacts/ · vault/<br/>on-disk state")]
+    end
+    EXT["GitHub · Gmail · AWS · GCP<br/>Google Sheets"]
+    EDGAR["Edgar / dao_protocol<br/>(DAO ledger)"]
+
+    G -->|long-poll| ADAPTER
+    ADAPTER <-->|"HTTP /chat (SSE)"| BRAIN
+    G -.->|HTTPS| NGINX
+    NGINX --> BRAIN
+    NGINX --> VAULT
+    BRAIN -->|tools| EXT
+    BRAIN -->|signed contributions| EDGAR
+    BRAIN <--> DATA
+    VAULT <--> DATA
+    WATCH -.->|nudges| G
+```
+
+| Service (systemd unit) | Entrypoint | Port | Role |
+|---|---|---|---|
+| **truesight-autopilot** | `uvicorn app.main:app` | 8001 | **The brain.** The `/chat` LLM tool-loop (DeepSeek), session store + context management, role/policy gating, the proactive monitors, and all ~34 tools. |
+| **truesight-autopilot-telegram** | `python -m app.telegram_adapter` | — | **Telegram adapter.** Long-polls Telegram, maps each forum topic to a role, dispatches the thread to the brain's `/chat`, streams the reply back. |
+| **truesight-autopilot-watchdog** | `python -m app.attention_watchdog` | — | **Attention watchdog.** Read-only — nudges in Saved Messages about unanswered asks. Never acts on your behalf. |
+| **truesight-vault** | `uvicorn app.vault_app:app` | 8002 | **Credential vault.** Fernet-encrypted on-disk store + the governor-only `/vault` web UI (DAO-Identity RSA login) + the `/auth` email-verification routes. Separate worker so it stays up when the brain is busy. |
+
+All four are restarted together by `deploy_autopilot` and `scripts/deploy.sh`. nginx
+(`config/nginx/sophia.conf`) terminates HTTPS, routes `/vault` + `/auth` to :8002 and
+everything else to :8001, and proxies `/dao/*`, `/proxy/gas`, etc. on to the separate
+`dao_protocol` service.
+
+### Repository layout
+
+```text
+app/
+  main.py               # the brain: FastAPI app, /chat LLM tool-loop, session store,
+                        #   context management (externalize / compact / token-trim), /chat/context
+  telegram_adapter.py   # Telegram long-poll adapter            -> -telegram service
+  attention_watchdog.py # read-only nudge watchdog              -> -watchdog service
+  vault_app.py          # vault FastAPI app (:8002)             -> -vault service
+  vault.py              # Fernet-encrypted credential store (writes vault/ on disk)
+  vault_routes.py       # /vault web UI + /vault/api/* (DAO-Identity RSA login)
+  auth.py auth_routes.py# JWT + RSA signature verification + email onboarding
+  roles.py              # forum-topic -> role -> {allowed tools, system prompt}
+  policy.py             # per-governor permission enforcement on tool calls
+  governor_registry.py  # who's a governor (treasury-cache/dao_members.json)
+  tool_registry.py      # auto-discovers every TOOL_SPEC under app/tools/
+  llm/                  # LLM provider abstraction (DeepSeek via litellm, ...)
+  context.py config.py  # system prompt + settings
+  followup_*.py engagement.py            # proactive follow-up monitoring
+  aws_monitor.py email_poller.py research.py daily_briefing.py  # proactive monitors
+  tools/                # ~34 tool modules (ssh_run, deploy, git, sheets, qr,
+                        #   read_tool_result, recall_context, pin_note, ...)
+  templates/vault/      # Jinja2 templates for the /vault web UI
+config/nginx/           # sophia.conf - HTTPS termination + routing
+systemd/                # the 4 *.service unit files
+scripts/                # deploy.sh, launch_ec2.sh, user-data.sh
+tests/                  # pytest suite (+ conftest.py redirects writable state to tmp)
+
+# Runtime state - on the box only, gitignored:
+sessions/               # per-thread conversation transcripts (<md5>.json)
+artifacts/              # offloaded large tool results (context Pillar A; chmod 700)
+vault/                  # vault.key (Fernet master key, chmod 600) + encrypted store
+```
+
+<details>
+<summary>Legacy conceptual data-flow sketch (proactive-monitor view)</summary>
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -77,6 +156,8 @@ Both modes share the same brain: **DeepSeek-V3** (30× cheaper than Claude) with
                     │  as contribution│
                     └─────────────────┘
 ```
+
+</details>
 
 ## Monitors
 
@@ -135,10 +216,13 @@ ssh sophia
 # Navigate to the deployment
 cd /opt/truesight_autopilot
 
-# Key directories
-app/              # FastAPI application code
+# Key directories (full tree: see "Repository layout" above)
+app/              # FastAPI application code (brain, adapter, watchdog, vault)
 scripts/          # launch_ec2.sh, deploy.sh, user-data.sh
-systemd/          # truesight-autopilot.service
+systemd/          # the 4 *.service unit files
+sessions/         # per-thread transcripts   (runtime, gitignored)
+artifacts/        # offloaded tool results    (runtime, gitignored)
+vault/            # vault.key + encrypted store (runtime, gitignored)
 ```
 
 **Environment file:** `/opt/truesight_autopilot/.env` (chmod 600)
@@ -147,16 +231,19 @@ systemd/          # truesight-autopilot.service
 grep -v '^#' /opt/truesight_autopilot/.env | sed 's/=.*/=*/'
 ```
 
-**Systemd service:**
+**Systemd services** (four — see the Services table above):
 ```bash
-# Status
-sudo systemctl status truesight-autopilot
+# Status of all four
+sudo systemctl status truesight-autopilot truesight-autopilot-telegram \
+                      truesight-autopilot-watchdog truesight-vault
 
-# Logs (follow)
-sudo journalctl -u truesight-autopilot -f
+# Logs (follow) — pick the service
+sudo journalctl -u truesight-autopilot -f        # the brain
+sudo journalctl -u truesight-vault -f            # the credential vault
 
-# Restart after code or env changes
-sudo systemctl restart truesight-autopilot
+# Restart after code or env changes (deploy_autopilot / deploy.sh restart all four)
+sudo systemctl restart truesight-autopilot truesight-autopilot-telegram \
+                       truesight-autopilot-watchdog truesight-vault
 
 # Enable/disable auto-start on boot
 sudo systemctl enable truesight-autopilot
