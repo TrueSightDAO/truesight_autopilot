@@ -138,9 +138,34 @@ def _err(reason: str, **extra: Any) -> dict[str, Any]:
     return {"status": "error", "reason": reason, **extra}
 
 
+def _vault_credential(name: str) -> str | None:
+    """Try vault first, fall back to None."""
+    try:
+        from ..vault import Vault
+        v = Vault()
+        if v.is_initialized():
+            v.initialize()
+            return v.get_value(name)
+    except Exception:
+        logger.debug("vault lookup failed for %s, falling back", name)
+    return None
+
+
 def _key_path() -> Path:
     """Return the first existing SSH key from a list of candidates.
-    Falls back through: sophia_infra -> id_ed25519_truesight_autopilot -> id_rsa."""
+    Vault-first: try ssh_key_nelanco / ssh_key_server_us / ssh_key_california,
+    then fall back through: sophia_infra -> id_ed25519_truesight_autopilot -> id_rsa."""
+    # Vault-first: write vault key to a temp file if found
+    for vault_name in ("ssh_key_nelanco", "ssh_key_server_us", "ssh_key_california"):
+        val = _vault_credential(vault_name)
+        if val:
+            import tempfile
+            tmp = Path(tempfile.mktemp(prefix=f"vault_{vault_name}_", suffix=".pem"))
+            tmp.write_text(val)
+            tmp.chmod(0o600)
+            logger.info("Resolved %s from vault (temp key at %s)", vault_name, tmp)
+            return tmp
+    # Fallback: current file-based resolution
     env_key = os.environ.get("SOPHIA_SSH_KEY_PATH", "")
     if env_key:
         p = Path(env_key).expanduser()
