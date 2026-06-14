@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,14 +26,14 @@ STATE_PATH = STATE_DIR / "active_tracks.json"
 
 # Expected max durations per track type (seconds)
 TRACK_TIMEOUTS: dict[str, int] = {
-    "telegram_chat": 120,       # LLM call + tool execution
-    "followup_monitor": 30,     # Probe + state write
-    "email_poller": 15,         # Gmail query + dispatch
-    "ssh_operation": 60,        # Clone, push, deploy
-    "git_operation": 60,        # Branch, commit, push
-    "aws_watcher": 10,          # Status check
-    "daily_briefing": 60,       # LLM generation
-    "deploy": 120,              # Pip install + restart
+    "telegram_chat": 120,  # LLM call + tool execution
+    "followup_monitor": 30,  # Probe + state write
+    "email_poller": 15,  # Gmail query + dispatch
+    "ssh_operation": 60,  # Clone, push, deploy
+    "git_operation": 60,  # Branch, commit, push
+    "aws_watcher": 10,  # Status check
+    "daily_briefing": 60,  # LLM generation
+    "deploy": 120,  # Pip install + restart
 }
 
 DEFAULT_TIMEOUT = 60  # fallback for unknown track types
@@ -93,16 +92,18 @@ def register_track(
     # Remove any existing track with the same ID
     state["tracks"] = [t for t in state["tracks"] if t["id"] != track_id]
 
-    state["tracks"].append({
-        "id": track_id,
-        "label": label,
-        "track_type": track_type,
-        "started_at": now,
-        "last_heartbeat": now,
-        "expected_max_duration_s": TRACK_TIMEOUTS.get(track_type, DEFAULT_TIMEOUT),
-        "status": "running",
-        "metadata": metadata or {},
-    })
+    state["tracks"].append(
+        {
+            "id": track_id,
+            "label": label,
+            "track_type": track_type,
+            "started_at": now,
+            "last_heartbeat": now,
+            "expected_max_duration_s": TRACK_TIMEOUTS.get(track_type, DEFAULT_TIMEOUT),
+            "status": "running",
+            "metadata": metadata or {},
+        }
+    )
     _save_state(state)
     logger.debug("Track registered: %s (%s)", track_id, label)
 
@@ -162,7 +163,6 @@ def can_deploy(*, force: bool = False) -> tuple[bool, list[dict[str, Any]]]:
         return True, []
 
     tracks = get_active_tracks()
-    now = time.time()
     blocking: list[dict[str, Any]] = []
 
     for track in tracks:
@@ -171,23 +171,30 @@ def can_deploy(*, force: bool = False) -> tuple[bool, list[dict[str, Any]]]:
 
         if elapsed < max_dur:
             # Track is actively running — blocks deploy
-            blocking.append({
-                "id": track["id"],
-                "label": track["label"],
-                "track_type": track["track_type"],
-                "elapsed_s": round(elapsed, 1),
-                "max_duration_s": max_dur,
-                "reason": f"Active ({elapsed:.0f}s elapsed, {max_dur}s max)",
-            })
+            blocking.append(
+                {
+                    "id": track["id"],
+                    "label": track["label"],
+                    "track_type": track["track_type"],
+                    "elapsed_s": round(elapsed, 1),
+                    "max_duration_s": max_dur,
+                    "reason": f"Active ({elapsed:.0f}s elapsed, {max_dur}s max)",
+                }
+            )
             logger.info(
                 "Deploy blocked by %s: %s (%ds elapsed, %ds max)",
-                track["id"], track["label"], elapsed, max_dur,
+                track["id"],
+                track["label"],
+                elapsed,
+                max_dur,
             )
         else:
             # Track exceeded its max duration — treat as stuck/crashed
             logger.warning(
                 "Deploy proceeding despite %s: exceeded max duration (%ds > %ds)",
-                track["id"], elapsed, max_dur,
+                track["id"],
+                elapsed,
+                max_dur,
             )
 
     if blocking:
@@ -200,23 +207,24 @@ def can_deploy(*, force: bool = False) -> tuple[bool, list[dict[str, Any]]]:
 def get_system_status() -> dict[str, Any]:
     """Get a full system status snapshot for the vault web page."""
     tracks = get_active_tracks()
-    now = time.time()
 
     enriched = []
     for track in tracks:
         elapsed = _seconds_since(track["last_heartbeat"])
         max_dur = track.get("expected_max_duration_s", DEFAULT_TIMEOUT)
-        enriched.append({
-            "id": track["id"],
-            "label": track["label"],
-            "track_type": track["track_type"],
-            "elapsed_s": round(elapsed, 1),
-            "max_duration_s": max_dur,
-            "status": "active" if elapsed < max_dur else "stale",
-            "started_at": track.get("started_at", ""),
-            "last_heartbeat": track.get("last_heartbeat", ""),
-            "metadata": track.get("metadata", {}),
-        })
+        enriched.append(
+            {
+                "id": track["id"],
+                "label": track["label"],
+                "track_type": track["track_type"],
+                "elapsed_s": round(elapsed, 1),
+                "max_duration_s": max_dur,
+                "status": "active" if elapsed < max_dur else "stale",
+                "started_at": track.get("started_at", ""),
+                "last_heartbeat": track.get("last_heartbeat", ""),
+                "metadata": track.get("metadata", {}),
+            }
+        )
 
     can, blocking = can_deploy()
 

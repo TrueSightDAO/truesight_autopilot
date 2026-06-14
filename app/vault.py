@@ -25,9 +25,8 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any
 
 from cryptography.fernet import Fernet
 
@@ -138,14 +137,16 @@ class Vault:
             self._key_path.write_bytes(key)
             self._key_path.chmod(0o600)  # owner read/write only
             logger.info("Vault key generated at %s", self._key_path)
-            self._audit_log(VaultAuditEntry(
-                action="initialize",
-                credential_name="__vault__",
-                version=None,
-                actor=actor,
-                timestamp=_now_iso(),
-                details="Vault initialized with new key",
-            ))
+            self._audit_log(
+                VaultAuditEntry(
+                    action="initialize",
+                    credential_name="__vault__",
+                    version=None,
+                    actor=actor,
+                    timestamp=_now_iso(),
+                    details="Vault initialized with new key",
+                )
+            )
 
         if self._fernet is None:
             self._fernet = Fernet(self._key_path.read_bytes())
@@ -227,14 +228,16 @@ class Vault:
         self._entries[name] = entry
         self._save()
 
-        self._audit_log(VaultAuditEntry(
-            action="add",
-            credential_name=name,
-            version=1,
-            actor=created_by,
-            timestamp=now,
-            details=f"Purpose: {purpose}, Scopes: {scopes}",
-        ))
+        self._audit_log(
+            VaultAuditEntry(
+                action="add",
+                credential_name=name,
+                version=1,
+                actor=created_by,
+                timestamp=now,
+                details=f"Purpose: {purpose}, Scopes: {scopes}",
+            )
+        )
 
         logger.info("Vault: added credential '%s' (v1) by %s", name, created_by)
         return entry
@@ -274,7 +277,9 @@ class Vault:
         old = self._entries[name]
         encrypted = self._encrypt(value)
         now = _now_iso()
-        resolved_scopes = list(new_scopes) if new_scopes is not None else list(old.scopes)
+        resolved_scopes = (
+            list(new_scopes) if new_scopes is not None else list(old.scopes)
+        )
         entry = VaultEntry(
             name=name,
             purpose=new_purpose or old.purpose,
@@ -288,18 +293,23 @@ class Vault:
         self._entries[name] = entry
         self._save()
 
-        self._audit_log(VaultAuditEntry(
-            action="update",
-            credential_name=name,
-            version=entry.version,
-            actor=updated_by,
-            timestamp=now,
-            details=f"Rotated from v{old.version}",
-        ))
+        self._audit_log(
+            VaultAuditEntry(
+                action="update",
+                credential_name=name,
+                version=entry.version,
+                actor=updated_by,
+                timestamp=now,
+                details=f"Rotated from v{old.version}",
+            )
+        )
 
         logger.info(
             "Vault: rotated credential '%s' v%d→v%d by %s",
-            name, old.version, entry.version, updated_by,
+            name,
+            old.version,
+            entry.version,
+            updated_by,
         )
         return entry
 
@@ -324,14 +334,16 @@ class Vault:
         entry = self._entries.pop(name)
         self._save()
 
-        self._audit_log(VaultAuditEntry(
-            action="delete",
-            credential_name=name,
-            version=entry.version,
-            actor=deleted_by,
-            timestamp=_now_iso(),
-            details=f"Deleted v{entry.version} (purpose: {entry.purpose})",
-        ))
+        self._audit_log(
+            VaultAuditEntry(
+                action="delete",
+                credential_name=name,
+                version=entry.version,
+                actor=deleted_by,
+                timestamp=_now_iso(),
+                details=f"Deleted v{entry.version} (purpose: {entry.purpose})",
+            )
+        )
 
         logger.info("Vault: deleted credential '%s' by %s", name, deleted_by)
 
@@ -435,22 +447,24 @@ class Vault:
             "version": 1,
             "exported_at": _now_iso(),
             "exported_by": actor,
-            "entries": {
-                name: asdict(entry) for name, entry in self._entries.items()
-            },
+            "entries": {name: asdict(entry) for name, entry in self._entries.items()},
         }
         payload = json.dumps(backup, indent=2, ensure_ascii=False).encode("utf-8")
 
-        self._audit_log(VaultAuditEntry(
-            action="backup",
-            credential_name="__vault__",
-            version=None,
-            actor=actor,
-            timestamp=_now_iso(),
-            details=f"Exported {len(self._entries)} entries",
-        ))
+        self._audit_log(
+            VaultAuditEntry(
+                action="backup",
+                credential_name="__vault__",
+                version=None,
+                actor=actor,
+                timestamp=_now_iso(),
+                details=f"Exported {len(self._entries)} entries",
+            )
+        )
 
-        logger.info("Vault: backup exported by %s (%d entries)", actor, len(self._entries))
+        logger.info(
+            "Vault: backup exported by %s (%d entries)", actor, len(self._entries)
+        )
         return payload
 
     def restore_from_backup(
@@ -494,18 +508,22 @@ class Vault:
 
         self._save()
 
-        self._audit_log(VaultAuditEntry(
-            action="restore",
-            credential_name="__vault__",
-            version=None,
-            actor=restored_by,
-            timestamp=_now_iso(),
-            details=f"Restored {len(entries_data)} entries (merge={merge})",
-        ))
+        self._audit_log(
+            VaultAuditEntry(
+                action="restore",
+                credential_name="__vault__",
+                version=None,
+                actor=restored_by,
+                timestamp=_now_iso(),
+                details=f"Restored {len(entries_data)} entries (merge={merge})",
+            )
+        )
 
         logger.info(
             "Vault: restored %d entries by %s (merge=%s)",
-            len(entries_data), restored_by, merge,
+            len(entries_data),
+            restored_by,
+            merge,
         )
         return len(entries_data)
 
@@ -569,9 +587,7 @@ class Vault:
         data = {
             "version": 1,
             "updated_at": _now_iso(),
-            "entries": {
-                name: asdict(entry) for name, entry in self._entries.items()
-            },
+            "entries": {name: asdict(entry) for name, entry in self._entries.items()},
         }
         plaintext = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         encrypted = self._fernet.encrypt(plaintext)

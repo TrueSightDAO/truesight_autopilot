@@ -126,7 +126,9 @@ def _parse_block(body: str, line_offset: int) -> dict[str, Any] | str:
     # Required fields
     for field in ("id", "chat_id", "thread_id", "title", "created_at", "status"):
         if field not in parsed:
-            return f"Followup '{parsed.get('id', '?')}' missing required field '{field}'"
+            return (
+                f"Followup '{parsed.get('id', '?')}' missing required field '{field}'"
+            )
 
     # thread_id is REQUIRED — this is the guardrail against silent background loops
     if not parsed.get("thread_id"):
@@ -188,13 +190,16 @@ def upsert_state(id: str, **kwargs: Any) -> dict[str, Any]:
     if one doesn't exist. Returns the full state entry.
     """
     state = _load_state()
-    entry = state.get(id, {
-        "id": id,
-        "last_checked": None,
-        "next_check": None,
-        "attempts": 0,
-        "last_pinged": None,
-    })
+    entry = state.get(
+        id,
+        {
+            "id": id,
+            "last_checked": None,
+            "next_check": None,
+            "attempts": 0,
+            "last_pinged": None,
+        },
+    )
     entry.update(kwargs)
     state[id] = entry
     _write_state(state)
@@ -246,10 +251,7 @@ def set_status(id: str, new_status: str) -> bool:
         new_content = content[: match.start()] + updated_block + content[match.end() :]
     elif new_status == "resolved":
         # Move to ## Recently shipped
-        new_content = (
-            content[: match.start()]
-            + content[match.end() :]
-        )
+        new_content = content[: match.start()] + content[match.end() :]
         # Find the Recently shipped section and append
         shipped_marker = "\n## Recently shipped\n"
         shipped_idx = new_content.find(shipped_marker)
@@ -265,13 +267,15 @@ def set_status(id: str, new_status: str) -> bool:
             )
         else:
             # No Recently shipped section — append at end
-            new_content = new_content.rstrip() + "\n\n## Recently shipped\n\n" + updated_block + "\n"
+            new_content = (
+                new_content.rstrip()
+                + "\n\n## Recently shipped\n\n"
+                + updated_block
+                + "\n"
+            )
     else:
         # aborted — move to ## Closed without shipping
-        new_content = (
-            content[: match.start()]
-            + content[match.end() :]
-        )
+        new_content = content[: match.start()] + content[match.end() :]
         closed_marker = "\n## Closed without shipping\n"
         closed_idx = new_content.find(closed_marker)
         if closed_idx >= 0:
@@ -284,7 +288,12 @@ def set_status(id: str, new_status: str) -> bool:
                 + new_content[insert_point:]
             )
         else:
-            new_content = new_content.rstrip() + "\n\n## Closed without shipping\n\n" + updated_block + "\n"
+            new_content = (
+                new_content.rstrip()
+                + "\n\n## Closed without shipping\n\n"
+                + updated_block
+                + "\n"
+            )
 
     _write_md(new_content)
 

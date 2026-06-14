@@ -90,6 +90,7 @@ class EdgarLogger:
 
             # Step 2: Trigger GAS processing
             import requests as _requests
+
             gas_url = (
                 "https://script.google.com/macros/s/"
                 "AKfycbzlUS6-b3_wZaGwTVenx3pBNNNScGDt9TB0ueUyDPvbkt64zryH5QI_hrvT7i2EPYEc"
@@ -99,7 +100,11 @@ class EdgarLogger:
             if gas_resp.ok:
                 logger.info("GAS processing triggered for QR registration")
             else:
-                logger.warning("GAS trigger returned %d: %s", gas_resp.status_code, gas_resp.text[:200])
+                logger.warning(
+                    "GAS trigger returned %d: %s",
+                    gas_resp.status_code,
+                    gas_resp.text[:200],
+                )
 
             return True
         except Exception as e:

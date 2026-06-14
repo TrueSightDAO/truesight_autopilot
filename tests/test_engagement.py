@@ -1,17 +1,13 @@
 """Tests for app/engagement.py — engagement modes (Phase 2)."""
 
-import json
-import os
 import tempfile
 from pathlib import Path
 
-from unittest.mock import patch
 
 import pytest
 
 from app.engagement import (
     EngagementMode,
-    _config_path,
     format_audit_message,
     get_engagement_mode,
     get_audit_channel_id,
@@ -28,6 +24,7 @@ def _temp_config():
     """Use a temp config file for tests."""
     with tempfile.TemporaryDirectory(prefix="engagement_test_") as tmpdir:
         import app.engagement as eng
+
         original = eng.ENGAGEMENT_MODE_FILE
         eng.ENGAGEMENT_MODE_FILE = str(Path(tmpdir) / "engagement_modes.json")
         yield
@@ -43,7 +40,9 @@ class TestEngagementModeConfig:
         assert mode == EngagementMode.PROACTIVE
 
     def test_set_and_get_addressed_only(self):
-        result = set_engagement_mode(12345, EngagementMode.ADDRESSED_ONLY, set_by="Gary")
+        result = set_engagement_mode(
+            12345, EngagementMode.ADDRESSED_ONLY, set_by="Gary"
+        )
         assert result is True
         mode = get_engagement_mode(12345)
         assert mode == EngagementMode.ADDRESSED_ONLY
@@ -59,7 +58,9 @@ class TestEngagementModeConfig:
 
     def test_per_thread_mode(self):
         set_engagement_mode(12345, EngagementMode.ADDRESSED_ONLY, thread_id=2744)
-        assert get_engagement_mode(12345, thread_id=2744) == EngagementMode.ADDRESSED_ONLY
+        assert (
+            get_engagement_mode(12345, thread_id=2744) == EngagementMode.ADDRESSED_ONLY
+        )
         # Different thread should still be proactive
         assert get_engagement_mode(12345, thread_id=9999) == EngagementMode.PROACTIVE
 
@@ -166,7 +167,9 @@ class TestDM:
 
 class TestAuditChannel:
     def test_format_audit_message(self):
-        msg = format_audit_message("deploy", "Gary", "Deployed v1.2.3", surface="thread 2744")
+        msg = format_audit_message(
+            "deploy", "Gary", "Deployed v1.2.3", surface="thread 2744"
+        )
         assert "deploy" in msg
         assert "Gary" in msg
         assert "thread 2744" in msg

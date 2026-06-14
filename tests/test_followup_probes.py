@@ -20,7 +20,11 @@ def elapsed_followup() -> dict:
         "id": "test-elapsed",
         "created_at": "2026-06-10",
         "condition": {"kind": "elapsed_days"},
-        "schedule": {"check": "daily", "escalate_after_days": 2, "on_escalate": "ping_thread"},
+        "schedule": {
+            "check": "daily",
+            "escalate_after_days": 2,
+            "on_escalate": "ping_thread",
+        },
         "status": "open",
     }
 
@@ -36,7 +40,11 @@ def gmail_followup() -> dict:
             "from": "partner@example.com",
             "subject_contains": "Quote",
         },
-        "schedule": {"check": "daily", "escalate_after_days": 2, "on_escalate": "ping_thread"},
+        "schedule": {
+            "check": "daily",
+            "escalate_after_days": 2,
+            "on_escalate": "ping_thread",
+        },
         "status": "open",
     }
 
@@ -81,7 +89,12 @@ class TestElapsedDays:
         """Returns not-struck when created_at is invalid."""
         from app.followup_probes import elapsed_days
 
-        followup = {"id": "test", "created_at": "not-a-date", "condition": {"kind": "elapsed_days"}, "schedule": {}}
+        followup = {
+            "id": "test",
+            "created_at": "not-a-date",
+            "condition": {"kind": "elapsed_days"},
+            "schedule": {},
+        }
         result = elapsed_days(followup)
         assert result["struck"] is False
 
@@ -102,7 +115,11 @@ class TestGmailReply:
         """Returns not-struck when no 'from' address in condition."""
         from app.followup_probes import gmail_reply
 
-        followup = {"id": "test", "created_at": "2026-06-10", "condition": {"kind": "gmail_reply"}}
+        followup = {
+            "id": "test",
+            "created_at": "2026-06-10",
+            "condition": {"kind": "gmail_reply"},
+        }
         result = gmail_reply(followup)
         assert result["struck"] is False
         assert "No 'from' address" in result["evidence"]
@@ -156,7 +173,9 @@ class TestGmailReply:
         from app.followup_probes import gmail_reply
 
         mock_gmail = MagicMock()
-        mock_gmail.users().messages().list().execute.side_effect = Exception("API error")
+        mock_gmail.users().messages().list().execute.side_effect = Exception(
+            "API error"
+        )
 
         with patch("app.followup_probes._build_gmail_service", return_value=mock_gmail):
             result = gmail_reply(gmail_followup)

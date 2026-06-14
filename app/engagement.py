@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +24,13 @@ ENGAGEMENT_MODE_FILE = "data/engagement_modes.json"
 
 # Sophia's name variants for addressed-only detection
 SOPHIA_NAMES = [
-    "sophia", "sophia,", "sophia.", "sophia!",
-    "sophia?", "@sophia", "@sophiabot",
+    "sophia",
+    "sophia,",
+    "sophia.",
+    "sophia!",
+    "sophia?",
+    "@sophia",
+    "@sophiabot",
 ]
 
 # ── Data types ─────────────────────────────────────────────────────────────
@@ -117,7 +121,9 @@ def set_engagement_mode(
         "thread_id": thread_id,
     }
     _save_config(config)
-    logger.info("Engagement mode set to '%s' for surface %s by %s", mode, surface_key, set_by)
+    logger.info(
+        "Engagement mode set to '%s' for surface %s by %s", mode, surface_key, set_by
+    )
     return True
 
 
@@ -166,7 +172,9 @@ def is_addressed(text: str, bot_username: str | None = None) -> bool:
     # Check for Sophia name anywhere in the first 50 chars
     first_50 = text_lower[:50]
     for name in SOPHIA_NAMES:
-        clean_name = name.replace(",", "").replace(".", "").replace("!", "").replace("?", "")
+        clean_name = (
+            name.replace(",", "").replace(".", "").replace("!", "").replace("?", "")
+        )
         if clean_name in first_50:
             return True
 
@@ -194,7 +202,7 @@ def is_reply_to_sophia(msg: dict[str, Any], sophia_bot_id: int | None = None) ->
     if not sophia_bot_id:
         return False
 
-    from_user = (reply_to.get("from") or {})
+    from_user = reply_to.get("from") or {}
     return from_user.get("id") == sophia_bot_id
 
 

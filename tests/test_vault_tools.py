@@ -1,7 +1,6 @@
 """Tests for app/tools/vault_tools.py — vault interaction tools (Phase 3.5, 3.6)."""
 
 import tempfile
-from pathlib import Path
 
 import pytest
 

@@ -37,19 +37,27 @@ async def send_challenge(request: Request) -> JSONResponse:
     # Send the email via Gmail
     try:
         from .tools.gmail_tools import gmail_send as _gmail_send
+
         result = _gmail_send(
             to=email,
             subject="Your TrueSight DAO Vault verification code",
             body=f"Your verification code is: {code}\n\nThis code expires in 10 minutes.\n\nIf you did not request this code, please ignore this email.\n\n- TrueSight DAO Autopilot",
             account="admin",
         )
-        logger.info("Challenge code sent to %s (rc=%s)", email, result.get("returncode"))
+        logger.info(
+            "Challenge code sent to %s (rc=%s)", email, result.get("returncode")
+        )
     except Exception as e:
         logger.error("Failed to send challenge email to %s: %s", email, e)
         # Don't reveal to the user whether sending failed (anti-phishing)
         pass
 
-    return JSONResponse({"sent": True, "message": "If this email is registered, a verification code has been sent."})
+    return JSONResponse(
+        {
+            "sent": True,
+            "message": "If this email is registered, a verification code has been sent.",
+        }
+    )
 
 
 @router.post("/auth/verify-code")
@@ -65,10 +73,15 @@ async def verify_code(request: Request) -> JSONResponse:
     # Check the stored code
     stored = _challenge_codes.get(email)
     if not stored:
-        raise HTTPException(status_code=400, detail="No verification code sent to this email. Please request a new code.")
+        raise HTTPException(
+            status_code=400,
+            detail="No verification code sent to this email. Please request a new code.",
+        )
 
     if code != stored:
-        raise HTTPException(status_code=400, detail="Invalid verification code. Please try again.")
+        raise HTTPException(
+            status_code=400, detail="Invalid verification code. Please try again."
+        )
 
     # Code verified - remove it so it can't be reused
     del _challenge_codes[email]
@@ -77,9 +90,7 @@ async def verify_code(request: Request) -> JSONResponse:
     synthetic_key = f"vault:email:{hashlib.sha256(email.encode()).hexdigest()[:16]}"
     token = _create_jwt(synthetic_key)
 
-    response = JSONResponse(
-        {"token": token, "expires_in": 60 * 60}
-    )
+    response = JSONResponse({"token": token, "expires_in": 60 * 60})
     response.set_cookie(
         key="governor_chat_session",
         value=token,
