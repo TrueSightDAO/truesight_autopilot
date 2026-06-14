@@ -350,6 +350,38 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
     steps: list[dict] = []
     start = time.time()
 
+    # ── Already-on-latest no-op guard (phase one, local) ─────────────────────
+    # If the deployed code already matches origin/main, do NOT restart. A restart
+    # severs in-flight turns; because the adapter then resubmits the severed
+    # message, the model re-calls deploy_autopilot → an unbounded REDEPLOY LOOP
+    # (observed 2026-06-14 on the vault commit-hash thread: deploy → restart →
+    # resubmit → deploy …, and a tight "deferred / retry when idle" spin while a
+    # long Kopi Bay onboarding turn held the lock). Checking the hash first also
+    # answers the common "is the latest already deployed?" question without
+    # bouncing the service at all.
+    if os.environ.get(_PHASE_ENV) != _PHASE_TWO and _is_local():
+        try:
+            _rd = settings.ec2_remote_dir
+            _run_local("git fetch origin main", cwd=_rd, timeout=30)
+            local_sha = _run_local("git rev-parse HEAD", cwd=_rd, timeout=10)
+            origin_sha = _run_local("git rev-parse origin/main", cwd=_rd, timeout=10)
+            if local_sha and local_sha == origin_sha:
+                logger.info("Deploy NO-OP — already on latest %s", local_sha[:8])
+                return json.dumps(
+                    {
+                        "status": "noop",
+                        "commit": local_sha,
+                        "message": (
+                            f"Already on the latest commit {local_sha[:8]} — "
+                            "no deploy needed. Did NOT restart. Do not retry."
+                        ),
+                    }
+                )
+        except DeployError as e:
+            logger.warning(
+                "Deploy hash-precheck failed (%s) — proceeding with deploy", e
+            )
+
     # ── Idle-drain guard ────────────────────────────────────────────────────
     # NEVER restart while another thread is mid-turn: a restart severs in-flight
     # turns and wedges the adapter (the repeated self-brick on 2026-06-12). Wait a
