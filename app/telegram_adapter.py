@@ -420,7 +420,11 @@ def download_telegram_file(file_id: str) -> str | None:
 
 
 def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int | None:
-    """Send a message; return the Telegram message_id of the first chunk, or None."""
+    """Send a message; return the Telegram message_id of the first chunk, or None.
+
+    Retries up to 3 times on 429 (rate limited) with exponential backoff,
+    respecting Telegram's retry_after hint.
+    """
     msg_id: int | None = None
     for i, chunk in enumerate(chunk_text(text)):
         # Render Markdown → Telegram HTML so headings/bold/bullets/code show up.
@@ -432,60 +436,85 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
         }
         if thread_id:
             payload["message_thread_id"] = thread_id
-        try:
-            resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
-            if resp.status_code == 200:
-                result = resp.json().get("result", {})
-                if i == 0:
-                    msg_id = result.get("message_id")
-            else:
-                logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
-                # Fallback: send the raw chunk as plain text. Covers both
-                # "message thread not found" and any HTML parse error — the reply
-                # still lands (just unformatted) instead of vanishing.
-                # NOTE: do NOT include message_thread_id in the fallback — if the
-                # original 400 was "message thread not found", the retry with the
-                # same thread_id would 400 again. Drop it so the message lands.
-                fallback: dict[str, Any] = {
-                    "chat_id": chat_id,
-                    "text": chunk,
-                    "disable_web_page_preview": True,
-                }
-                resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
-                if i == 0 and resp2.status_code == 200:
-                    msg_id = resp2.json().get("result", {}).get("message_id")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("sendMessage failed: %s", e)
+        for attempt in range(3):
+            try:
+                resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
+                if resp.status_code == 200:
+                    result = resp.json().get("result", {})
+                    if i == 0:
+                        msg_id = result.get("message_id")
+                    break
+                elif resp.status_code == 429:
+                    retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+                    logger.warning(
+                        "sendMessage 429 (attempt %d/3): retry after %ds",
+                        attempt + 1, retry_after,
+                    )
+                    time.sleep(min(retry_after + 1, 30))
+                else:
+                    logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
+                    # Fallback: send the raw chunk as plain text. Covers both
+                    # "message thread not found" and any HTML parse error.
+                    # NOTE: do NOT include message_thread_id in the fallback — if the
+                    # original 400 was "message thread not found", the retry with the
+                    # same thread_id would 400 again. Drop it so the message lands.
+                    fallback: dict[str, Any] = {
+                        "chat_id": chat_id,
+                        "text": chunk,
+                        "disable_web_page_preview": True,
+                    }
+                    resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
+                    if i == 0 and resp2.status_code == 200:
+                        msg_id = resp2.json().get("result", {}).get("message_id")
+                    break
+            except Exception as e:  # noqa: BLE001
+                logger.warning("sendMessage failed (attempt %d/3): %s", attempt + 1, e)
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
     return msg_id
 
 
 def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bool:
-    """Send a voice message from a local audio file. Returns True on success."""
+    """Send a voice message from a local audio file. Returns True on success.
+
+    Retries up to 3 times on 429 (rate limited) with exponential backoff,
+    respecting Telegram's retry_after hint.
+    """
     if not os.path.isfile(file_path):
         logger.warning("send_voice: file not found %s", file_path)
         return False
-    try:
-        with open(file_path, "rb") as fh:
-            files = {"voice": (os.path.basename(file_path), fh, "audio/mpeg")}
-            payload: dict[str, Any] = {"chat_id": chat_id}
-            if thread_id:
-                payload["message_thread_id"] = thread_id
-            resp = httpx.post(
-                _api("sendVoice"), data=payload, files=files, timeout=30.0
-            )
-            if resp.status_code == 200:
-                logger.info(
-                    "Sent voice message (%d bytes) to chat %s",
-                    os.path.getsize(file_path),
-                    chat_id,
+    for attempt in range(3):
+        try:
+            with open(file_path, "rb") as fh:
+                files = {"voice": (os.path.basename(file_path), fh, "audio/mpeg")}
+                payload: dict[str, Any] = {"chat_id": chat_id}
+                if thread_id:
+                    payload["message_thread_id"] = thread_id
+                resp = httpx.post(
+                    _api("sendVoice"), data=payload, files=files, timeout=30.0
                 )
-                return True
-            else:
-                logger.warning("sendVoice %s: %s", resp.status_code, resp.text[:200])
-                return False
-    except Exception as e:
-        logger.warning("sendVoice failed: %s", e)
-        return False
+                if resp.status_code == 200:
+                    logger.info(
+                        "Sent voice message (%d bytes) to chat %s",
+                        os.path.getsize(file_path),
+                        chat_id,
+                    )
+                    return True
+                elif resp.status_code == 429:
+                    retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+                    logger.warning(
+                        "sendVoice 429 (attempt %d/3): retry after %ds",
+                        attempt + 1, retry_after,
+                    )
+                    time.sleep(min(retry_after + 1, 30))
+                else:
+                    logger.warning("sendVoice %s: %s", resp.status_code, resp.text[:200])
+                    return False
+        except Exception as e:
+            logger.warning("sendVoice failed (attempt %d/3): %s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    return False
 
 
 def edit_message_text(
@@ -836,7 +865,10 @@ def _handle_voice_reply(
     assistant_response: str,
     transcribed_text: str | None = None,
 ) -> None:
-    """Synthesize and send a voice reply, plus URL follow-up if needed.
+    """Synthesize and send a voice reply, plus the full text reply.
+
+    Always sends BOTH voice and text, regardless of whether URLs are present.
+    URLs are appended to the text message so the user gets everything in one place.
 
     For voice messages, language is detected from the user's transcribed text.
     For text messages, language is detected from the assistant's response.
@@ -867,18 +899,17 @@ def _handle_voice_reply(
             len(assistant_response),
         )
     else:
-        # Fallback: send as text if synthesis fails
-        logger.warning("Voice synthesis failed, sending text fallback")
-        send_message(chat_id, assistant_response, thread_id)
-        return
+        logger.warning("Voice synthesis failed, skipping voice")
 
-    # URL follow-up: if response contains URLs, send them as a separate text message
+    # Always send the full text reply, with URLs appended if present
     urls = extract_urls(assistant_response)
     if urls:
         url_text = "**🔗 Links from my response:**\n"
         for url in urls:
             url_text += f"\n• {url}"
-        send_message(chat_id, url_text, thread_id)
+        send_message(chat_id, assistant_response + "\n\n" + url_text, thread_id)
+    else:
+        send_message(chat_id, assistant_response, thread_id)
 
 
 # ── Update handling + loop ─────────────────────────────────────────────────
