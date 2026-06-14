@@ -140,7 +140,8 @@ def _err(reason: str, **extra: Any) -> dict[str, Any]:
 
 def _key_path() -> Path:
     """Return the first existing SSH key from a list of candidates.
-    Falls back through: sophia_infra -> id_ed25519_truesight_autopilot -> id_rsa."""
+    Falls back through: sophia_infra -> id_ed25519_truesight_autopilot -> id_rsa.
+    As a last resort, tries to resolve a PEM key from the vault (ssh_key_*)."""
     env_key = os.environ.get("SOPHIA_SSH_KEY_PATH", "")
     if env_key:
         p = Path(env_key).expanduser()
@@ -155,6 +156,21 @@ def _key_path() -> Path:
     for c in candidates:
         if c.is_file():
             return c
+    # Fallback: try vault for a PEM key (e.g. ssh_key_krake, ssh_key_ec2, etc.)
+    try:
+        from ..vault import get_vault
+        vault = get_vault()
+        for cred_name in vault.get_names():
+            if cred_name.startswith("ssh_key_"):
+                pem_data = vault.get_value(cred_name)
+                # Write to a temp file with restricted permissions
+                tmp_key = Path(tempfile.mkstemp(prefix="sophia-vault-ssh-", suffix=".pem")[1])
+                tmp_key.write_text(pem_data)
+                tmp_key.chmod(0o600)
+                logger.info("ssh_tools: resolved SSH key from vault credential '%s'", cred_name)
+                return tmp_key
+    except Exception:
+        logger.warning("ssh_tools: vault fallback for SSH key failed", exc_info=True)
     return candidates[0]  # return default even if missing, for the error message
 
 
