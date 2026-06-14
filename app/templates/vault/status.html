@@ -43,10 +43,16 @@ fetch('/vault/api/system-status')
         let html = '<p><strong>Can deploy:</strong> ' + (data.can_deploy ? '✅ Yes' : '❌ No') + '</p>';
         html += '<p><strong>Active tracks:</strong> ' + data.total_tracks + '</p>';
         if (data.active_tracks && data.active_tracks.length > 0) {
-            html += '<table><thead><tr><th>Track ID</th><th>Label</th><th>Type</th><th>Status</th><th>Elapsed</th><th>Max</th><th>Started</th></tr></thead><tbody>';
+            html += '<table><thead><tr><th>Topic</th><th>Thread</th><th>Type</th><th>Status</th><th>Elapsed</th><th>Started</th></tr></thead><tbody>';
+            const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
             data.active_tracks.forEach(t => {
                 const statusClass = t.status === 'active' ? '' : 'style="color: var(--text-muted);"';
-                html += '<tr ' + statusClass + '><td><code>' + t.id + '</code></td><td>' + t.label + '</td><td>' + t.track_type + '</td><td>' + t.status + '</td><td>' + t.elapsed_s + 's</td><td>' + t.max_duration_s + 's</td><td>' + (t.started_at || '').slice(0, 19) + '</td></tr>';
+                const tid = t.thread_id || '';
+                const name = t.thread_name || (tid ? ('Thread ' + tid) : t.label);
+                const topicCell = t.telegram_link
+                    ? '<a href="' + esc(t.telegram_link) + '" target="_blank" rel="noopener">' + esc(name) + ' ↗</a>'
+                    : esc(name);
+                html += '<tr ' + statusClass + '><td>' + topicCell + '</td><td><code>' + esc(tid || t.id) + '</code></td><td>' + esc(t.track_type) + '</td><td>' + esc(t.status) + '</td><td>' + t.elapsed_s + 's</td><td>' + esc((t.started_at || '').slice(0, 19)) + '</td></tr>';
             });
             html += '</tbody></table>';
         } else {

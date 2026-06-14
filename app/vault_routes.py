@@ -402,6 +402,27 @@ async def get_audit_log(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _enrich_track(track: dict) -> dict:
+    """Add thread_id, a clickable Telegram deep-link, and the topic name to a track,
+    derived from its session_id (tg:<chat>:<thread>)."""
+    sid = (track.get("metadata") or {}).get("session_id") or track.get("id") or ""
+    parts = str(sid).split(":")
+    if len(parts) >= 3 and parts[0] == "tg":
+        chat_id, thread_id = parts[1], parts[2]
+        track["thread_id"] = thread_id
+        track["chat_id"] = chat_id
+        # Telegram deep-link to the forum topic (strip the -100 supergroup prefix).
+        if chat_id.startswith("-100"):
+            track["telegram_link"] = f"https://t.me/c/{chat_id[4:]}/{thread_id}"
+        try:
+            from .topic_names import get_topic_name
+
+            track["thread_name"] = get_topic_name(thread_id)
+        except Exception:
+            track["thread_name"] = None
+    return track
+
+
 @router.get("/api/system-status")
 async def system_status(
     request: Request, identity: dict = Depends(_require_vault_governor)
@@ -409,7 +430,11 @@ async def system_status(
     """Get system status including active tracks and deploy readiness."""
     from .deploy_watcher import get_system_status as _get_status
 
-    return JSONResponse(_get_status())
+    status = _get_status()
+    status["active_tracks"] = [
+        _enrich_track(t) for t in status.get("active_tracks", [])
+    ]
+    return JSONResponse(status)
 
 
 @router.post("/api/deploy")

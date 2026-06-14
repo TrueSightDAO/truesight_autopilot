@@ -126,6 +126,12 @@ def create_telegram_topic(
 
     link = _deep_link(target, thread_id)
     logger.info("created topic %r (thread=%s) in chat %s", name, thread_id, target)
+    try:  # remember the name so the vault status page can show + link it
+        from ..topic_names import record_topic_name
+
+        record_topic_name(thread_id, name)
+    except Exception:
+        pass
     return {
         "status": "ok",
         "topic_name": name,
