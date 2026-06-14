@@ -276,13 +276,14 @@ def git_push_changes(
 
         # ── open PR ───────────────────────────────────────────────────────
         if open_pr:
+            pr_pat = _resolve_pat()
             try:
                 resp = httpx.post(
                     f"https://api.github.com/repos/TrueSightDAO/{repo}/pulls",
                     headers={
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28",
-                        "Authorization": f"Bearer {settings.github_pat}",
+                        "Authorization": f"Bearer {pr_pat}",
                     },
                     json={
                         "title": pr_title or commit_message,
