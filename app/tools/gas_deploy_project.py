@@ -54,6 +54,33 @@ def _err(reason: str, **extra: Any) -> str:
     return json.dumps({"status": "error", "reason": reason, **extra})
 
 
+def _resolve_clasp_oauth() -> str | None:
+    """Vault-first: try clasp_oauth_gary, fall back to ~/.clasprc-gary.json."""
+    try:
+        from ..vault import Vault
+        v = Vault()
+        if v.is_initialized():
+            v.initialize()
+            val = v.get_value("clasp_oauth_gary")
+            if val:
+                # Write to a temp .clasprc.json for clasp to find
+                clasp_path = Path.home() / ".clasprc.json"
+                clasp_path.write_text(val)
+                clasp_path.chmod(0o600)
+                logger.info("Resolved clasp OAuth from vault -> ~/.clasprc.json")
+                return val
+    except Exception:
+        logger.debug("vault clasp OAuth lookup failed, falling back")
+    # Fallback: check for gary-specific clasp file
+    gary_clasp = Path.home() / ".clasprc-gary.json"
+    if gary_clasp.is_file():
+        import shutil
+        shutil.copy2(gary_clasp, Path.home() / ".clasprc.json")
+        logger.info("Fell back to .clasprc-gary.json")
+        return gary_clasp.read_text()
+    return None
+
+
 def _resolve_tokenomics_root() -> Path | None:
     """Find a local tokenomics checkout the deploy script can run from."""
     candidates = [
@@ -99,6 +126,9 @@ def gas_deploy_project(
     """
     if not script_id or not isinstance(script_id, str):
         return _err("script_id is required (string)")
+
+    # Ensure clasp OAuth is resolved before deploy
+    _resolve_clasp_oauth()
 
     root = _resolve_tokenomics_root()
     if root is None:

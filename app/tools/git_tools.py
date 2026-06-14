@@ -58,11 +58,27 @@ def _remote_url(repo: str) -> str:
     return f"https://github.com/TrueSightDAO/{repo}.git"
 
 
+def _resolve_pat() -> str:
+    """Vault-first: try github_krake_pat, fall back to settings.github_pat."""
+    try:
+        from ..vault import Vault
+        v = Vault()
+        if v.is_initialized():
+            v.initialize()
+            val = v.get_value("github_krake_pat")
+            if val:
+                logger.info("Resolved github PAT from vault")
+                return val
+    except Exception:
+        logger.debug("vault PAT lookup failed, falling back to env")
+    return settings.github_pat or ""
+
+
 def _git(
     args: list[str], cwd: str | Path, timeout: int = 60
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["GIT_PAT"] = settings.github_pat or ""
+    env["GIT_PAT"] = _resolve_pat()
     env["GIT_TERMINAL_PROMPT"] = "0"  # fail fast instead of hanging on a prompt
     return subprocess.run(
         [
@@ -145,8 +161,9 @@ def git_push_changes(
         )
     if not (writes or edits or deletes):
         return _err("nothing to do: provide writes, edits, and/or deletes")
-    if not settings.github_pat:
-        return _err("TRUESIGHT_DAO_AUTOPILOT PAT not configured on this host")
+    pat = _resolve_pat()
+    if not pat:
+        return _err("No GitHub PAT found (tried vault github_krake_pat and env TRUESIGHT_DAO_AUTOPILOT)")
 
     workdir = Path(tempfile.mkdtemp(prefix=f"sophia-git-{repo}-"))
     try:
