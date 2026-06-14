@@ -193,7 +193,8 @@ def test_handle_message_allowed_calls_chat(monkeypatch, sent):
             message=message,
             session_id=session_id,
             public_key=public_key,
-        ),
+        )
+        or ("", True),
     )
     # real forum topic (is_topic_message=True) => threaded session + threaded routing
     ta.handle_message(
@@ -218,7 +219,8 @@ def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
         "call_chat_with_progress",
         lambda chat_id, thread_id, message, session_id, public_key: captured.update(
             session_id=session_id, thread_id=thread_id
-        ),
+        )
+        or ("", True),
     )
     ta.handle_message(
         _msg(user_id=111, chat_id=555, text="hi", thread_id=4242),
@@ -240,7 +242,8 @@ def test_handle_message_photo_routes_with_path(monkeypatch, sent):
         "call_chat_with_progress",
         lambda chat_id, thread_id, message, session_id, public_key: captured.update(
             message=message
-        ),
+        )
+        or ("", True),
     )
     msg = {
         "chat": {"id": 555},
@@ -279,3 +282,46 @@ def test_handle_message_help_no_chat_call(monkeypatch, sent):
     ta.handle_message(_msg(user_id=111, text="/help"), allowed={111}, public_key="PK")
     assert called["n"] == 0
     assert sent and "private DAO assistant" in sent[0]["text"]
+
+
+# ── _handle_voice_reply: no duplicate text (regression for #208) ──
+
+
+@pytest.fixture
+def voice_stubs(monkeypatch):
+    """Stub the voice/network side-effects; capture send_message text payloads."""
+    sends: list[str] = []
+    monkeypatch.setattr(
+        ta, "send_message", lambda chat_id, text, thread_id=None: sends.append(text)
+    )
+    monkeypatch.setattr(ta, "send_voice_action", lambda *a, **k: None)
+    monkeypatch.setattr(ta, "send_voice", lambda *a, **k: True)
+    monkeypatch.setattr(ta, "synthesize_voice", lambda text, language="en": "/tmp/x.mp3")
+    monkeypatch.setattr(ta, "detect_language", lambda text: "en")
+    return sends
+
+
+def test_voice_reply_no_duplicate_text_when_already_shown(voice_stubs):
+    # Progress path already displayed the answer → voice path must NOT resend it.
+    ta._handle_voice_reply(
+        555, None, "Here is the answer.", None, text_already_sent=True
+    )
+    assert voice_stubs == []  # voice sent, but no text resend
+
+
+def test_voice_reply_links_only_followup_when_already_shown(voice_stubs):
+    # With URLs, send a links-only follow-up — never the full response again.
+    ta._handle_voice_reply(
+        555, None, "See https://x.com/foo for details.", None, text_already_sent=True
+    )
+    assert len(voice_stubs) == 1
+    assert "https://x.com/foo" in voice_stubs[0]
+    assert "See https://x.com/foo for details." not in voice_stubs[0]
+
+
+def test_voice_reply_sends_full_text_when_not_shown(voice_stubs):
+    # Progress fallback returned text without displaying it → send the full text.
+    ta._handle_voice_reply(
+        555, None, "Fallback answer.", None, text_already_sent=False
+    )
+    assert voice_stubs == ["Fallback answer."]

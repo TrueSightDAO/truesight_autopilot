@@ -714,13 +714,21 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
 
 def call_chat_with_progress(
     chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str
-) -> str:
+) -> tuple[str, bool]:
     """POST to /chat (SSE) and send styled interim progress updates to Telegram.
 
     Flow:
       1. Send a styled status message with message_id captured.
       2. Stream SSE events, editing the status message with progress.
       3. On 'done': send the final response as a new message, delete the status.
+
+    Returns:
+        (response_text, text_already_displayed). The bool is True when this
+        function has already rendered the text reply into the chat (the normal
+        path edits/sends the final answer). It is False only when it fell back
+        to the blocking call_chat, which returns text WITHOUT displaying it —
+        the caller (voice path) must then send the text itself. This prevents
+        the duplicate-text bug where the answer was sent twice.
     """
     token = create_jwt(public_key)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
@@ -728,14 +736,15 @@ def call_chat_with_progress(
     status_id = send_message(chat_id, "🔄 Thinking…", thread_id)
     if status_id is None:
         logger.warning("Could not send status message — falling back to blocking chat")
-        return call_chat(message, session_id, public_key)
+        # Blocking fallback returns text but does NOT display it → caller sends it.
+        return call_chat(message, session_id, public_key), False
 
     # Ride out a brain restart (e.g. a redeploy) before streaming, so a brief
     # redeploy shows a clear indicator instead of a Connection-refused error.
     if not _wait_for_brain():
         msg = _brain_unavailable_message()
         edit_message_text(chat_id, status_id, msg, thread_id)
-        return msg
+        return msg, True
 
     tool_emoji: dict[str, str] = {
         "web_search": "🔍",
@@ -785,7 +794,7 @@ def call_chat_with_progress(
                     f"⚠️ Autopilot returned HTTP {resp.status_code}.",
                     thread_id,
                 )
-                return f"⚠️ Autopilot returned HTTP {resp.status_code}."
+                return f"⚠️ Autopilot returned HTTP {resp.status_code}.", True
 
             final_response = ""
             for line in resp.iter_lines():
@@ -857,10 +866,10 @@ def call_chat_with_progress(
                 if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(
                     chat_id, status_id, final_response, thread_id
                 ):
-                    return final_response
+                    return final_response, True
                 delete_message(chat_id, status_id)
                 send_message(chat_id, final_response, thread_id)
-                return final_response
+                return final_response, True
             else:
                 edit_message_text(
                     chat_id,
@@ -868,7 +877,7 @@ def call_chat_with_progress(
                     "⚠️ Autopilot produced an empty response.",
                     thread_id,
                 )
-                return "⚠️ Autopilot produced an empty response."
+                return "⚠️ Autopilot produced an empty response.", True
 
     except httpx.ReadTimeout:
         edit_message_text(
@@ -877,11 +886,11 @@ def call_chat_with_progress(
             "⚠️ Autopilot timed out. Try a simpler request or try again.",
             thread_id,
         )
-        return "⚠️ Autopilot timed out — the LLM or a tool took too long."
+        return "⚠️ Autopilot timed out — the LLM or a tool took too long.", True
     except Exception as e:
         logger.exception("call_chat_with_progress failed")
         edit_message_text(chat_id, status_id, f"⚠️ Error: {e}", thread_id)
-        return f"⚠️ Error: {e}"
+        return f"⚠️ Error: {e}", True
 
 
 def call_chat_with_typing(
@@ -908,11 +917,19 @@ def _handle_voice_reply(
     thread_id: int | None,
     assistant_response: str,
     transcribed_text: str | None = None,
+    text_already_sent: bool = True,
 ) -> None:
-    """Synthesize and send a voice reply, plus the full text reply.
+    """Synthesize and send a voice reply alongside the text reply.
 
-    Always sends BOTH voice and text, regardless of whether URLs are present.
-    URLs are appended to the text message so the user gets everything in one place.
+    The text reply is normally already rendered by ``call_chat_with_progress``
+    (it edits the "🔄 Thinking…" status into the final answer). In that case we
+    must NOT re-send the full text here — doing so caused the duplicate-text
+    bug (text → voice → the same text again). We only add a links-only
+    follow-up so the URLs are clickable, since the voice note does not read
+    URLs aloud.
+
+    When ``text_already_sent`` is False (the rare progress fallback that returns
+    text without displaying it), this function sends the full text itself.
 
     For voice messages, language is detected from the user's transcribed text.
     For text messages, language is detected from the assistant's response.
@@ -923,6 +940,9 @@ def _handle_voice_reply(
         assistant_response: The autopilot's text response to synthesize.
         transcribed_text: The user's transcribed voice message (for language detection).
             If None, language is detected from assistant_response instead.
+        text_already_sent: True if the text reply has already been displayed in
+            the chat (the normal progress path). When True, only a links-only
+            follow-up is sent; when False, the full text is sent.
     """
     # Detect language: prefer transcribed_text (user's voice), fall back to response text
     source_for_lang = transcribed_text if transcribed_text else assistant_response
@@ -945,15 +965,25 @@ def _handle_voice_reply(
     else:
         logger.warning("Voice synthesis failed, skipping voice")
 
-    # Always send the full text reply, with URLs appended if present
+    # Text handling: avoid duplicating the answer that the progress path showed.
     urls = extract_urls(assistant_response)
-    if urls:
-        url_text = "**🔗 Links from my response:**\n"
-        for url in urls:
-            url_text += f"\n• {url}"
-        send_message(chat_id, assistant_response + "\n\n" + url_text, thread_id)
+    if text_already_sent:
+        # Full text already rendered by call_chat_with_progress. Only add a
+        # links-only follow-up so the URLs are clickable (voice skips URLs).
+        if urls:
+            url_text = "**🔗 Links from my response:**\n"
+            for url in urls:
+                url_text += f"\n• {url}"
+            send_message(chat_id, url_text, thread_id)
     else:
-        send_message(chat_id, assistant_response, thread_id)
+        # Text was NOT displayed yet (progress fallback) — send it now.
+        if urls:
+            url_text = "**🔗 Links from my response:**\n"
+            for url in urls:
+                url_text += f"\n• {url}"
+            send_message(chat_id, assistant_response + "\n\n" + url_text, thread_id)
+        else:
+            send_message(chat_id, assistant_response, thread_id)
 
 
 # ── Update handling + loop ─────────────────────────────────────────────────
@@ -1247,13 +1277,17 @@ def handle_message(
             lock = _thread_dispatch_lock(chat_id, thread_id)
             _ack_queued_if_busy(chat_id, thread_id, lock, session_id)
             with lock:
-                response = call_chat_with_progress(
+                response, text_shown = call_chat_with_progress(
                     chat_id, thread_id, msg_text, session_id, public_key
                 )
             # If user included text content, also send voice reply
             if has_user_text and response:
                 _handle_voice_reply(
-                    chat_id, thread_id, response, transcribed_text if is_voice else None
+                    chat_id,
+                    thread_id,
+                    response,
+                    transcribed_text if is_voice else None,
+                    text_already_sent=text_shown,
                 )
         except Exception as e:  # noqa: BLE001
             logger.exception("call_chat failed (attachment)")
@@ -1313,7 +1347,7 @@ def handle_message(
 
         _ack_queued_if_busy(chat_id, thread_id, lock, session_id)
         with lock:
-            response = call_chat_with_progress(
+            response, text_shown = call_chat_with_progress(
                 chat_id, thread_id, dispatch_text, session_id, public_key
             )
         # Send voice reply for ALL governor messages (text and voice), not just voice.
@@ -1326,6 +1360,7 @@ def handle_message(
                 thread_id,
                 response,
                 transcribed_text if is_voice else None,
+                text_already_sent=text_shown,
             )
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
