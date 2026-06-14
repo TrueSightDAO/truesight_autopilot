@@ -132,6 +132,24 @@ async def vault_login_page(request: Request):
     )
 
 
+@router.get("/logout")
+async def vault_logout():
+    """Sign out: clear the JWT cookie server-side and redirect to login."""
+    from fastapi.responses import RedirectResponse
+
+    response = RedirectResponse(url="/vault/login", status_code=302)
+    response.set_cookie(
+        key="governor_chat_session",
+        value="",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=0,
+        expires=0,
+    )
+    return response
+
+
 @router.get("/status", response_class=HTMLResponse)
 async def vault_status_page(request: Request):
     """System status page — shows active tracks, deploy readiness, vault health."""
