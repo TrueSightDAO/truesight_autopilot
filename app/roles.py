@@ -363,9 +363,10 @@ def get_tool_schemas_for_role(role: Role | None) -> list[dict[str, Any]]:
     if role is None or not role.tools:
         return all_schemas
     # Context-management utilities are universal — available to every role:
-    # read_tool_result (read an offloaded result), search_transcript ("really look
-    # back"), pin_note (pin a working-set note that survives trim/compaction).
-    allowed = set(role.tools) | {"read_tool_result", "search_transcript", "pin_note"}
+    # read_tool_result (read an offloaded result), recall_context ("really look
+    # back" in this thread), pin_note (pin a working-set note that survives
+    # trim/compaction).
+    allowed = set(role.tools) | {"read_tool_result", "recall_context", "pin_note"}
     return [t for t in all_schemas if t["function"]["name"] in allowed]
 
 

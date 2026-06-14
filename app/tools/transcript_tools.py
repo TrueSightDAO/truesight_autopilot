@@ -40,12 +40,14 @@ def _pin(text, history):
 
 
 SEARCH_SPEC = ToolSpec(
-    name="search_transcript",
+    name="recall_context",
     description=(
-        "Search this conversation's FULL history + offloaded artifacts for a keyword "
-        "and return the matching spans. Use when the user says 'really look back' / "
-        "asks about something from much earlier than the recent context — the live "
-        "context only holds recent turns, so this is how you recall older detail."
+        "Search THIS conversation's full history + offloaded tool-result artifacts "
+        "for a keyword and return the matching spans. Use when the user says 'really "
+        "look back' / asks about something from much earlier in this thread than the "
+        "recent context — the live context only holds recent turns, so this is how "
+        "you recall older detail from the current conversation. (For files a governor "
+        "previously attached, use search_transcript instead.)"
     ),
     parameters={
         "type": "object",
