@@ -3962,8 +3962,20 @@ def _artifact_session_dir(session_id: str):
 def _externalize_tool_result(text, tool_call_id="", session_id="", tool_name=""):
     """Offload a large tool result to a local artifact file; return an 8K summary +
     a read_tool_result handle. Best-effort: any failure falls back to plain
-    truncation and never blocks the turn."""
-    if not isinstance(text, str) or len(text) <= _MAX_TOOL_RESULT_CHARS:
+    truncation and never blocks the turn.
+
+    Tool results are not always strings — several tools (recall_context,
+    search_code, the sheet tools, …) return dicts/lists. Coerce to a string
+    FIRST so the returned value is always a valid `tool` message `content` and
+    can never crash the downstream `result_text[:300]` log slice with
+    `TypeError: unhashable type: 'slice'` (observed live 2026-06-14 after a
+    recall_context call on the Kopi Bay thread)."""
+    if not isinstance(text, str):
+        try:
+            text = json.dumps(text, default=str)
+        except (TypeError, ValueError):
+            text = str(text)
+    if len(text) <= _MAX_TOOL_RESULT_CHARS:
         return text
     if os.getenv("CONTEXT_EXTERNALIZE", "1") != "1" or not session_id:
         return _truncate_tool_result(text)
