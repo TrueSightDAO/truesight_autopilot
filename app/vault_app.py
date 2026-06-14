@@ -60,3 +60,18 @@ async def root():
 
 
 app.include_router(root_router)
+
+
+@app.on_event("startup")
+async def _init_vault_on_startup() -> None:
+    """Eagerly initialize the credential vault (dir + key) when the worker boots,
+    so a fresh machine is ready immediately and never hits a missing-key error on
+    the first credential upload. get_vault() auto-initializes; this just triggers it
+    at boot instead of lazily on first request. Best-effort — never blocks startup."""
+    try:
+        from .vault import get_vault
+
+        v = get_vault()
+        logger.info("Vault ready on startup (initialized=%s)", v.is_initialized())
+    except Exception as e:  # pragma: no cover
+        logger.warning("Vault startup init failed: %s", e)

@@ -274,6 +274,7 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
             "truesight-autopilot",
             "truesight-autopilot-telegram",
             "truesight-autopilot-watchdog",
+            "truesight-vault",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -574,7 +575,7 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
         # Use nohup so the restart survives the SSH session closing
         _run_remote(
             client,
-            "sudo nohup systemctl restart truesight-autopilot truesight-autopilot-telegram truesight-autopilot-watchdog > /dev/null 2>&1 &",
+            "sudo nohup systemctl restart truesight-autopilot truesight-autopilot-telegram truesight-autopilot-watchdog truesight-vault > /dev/null 2>&1 &",
             timeout=10,
         )
         steps.append({"step": "restart_service", "status": "ok"})
