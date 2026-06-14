@@ -24,6 +24,8 @@ Runtime requirements (autopilot host) — all provisioned automatically by
   clasp 3.3.0 (also baked into user-data.sh for fresh boxes).
 - clasp auth — deploy.sh syncs the operator Mac's `~/.clasprc.json`
   (clasp login is interactive OAuth; the token file is the portable artifact).
+  As a fallback, the tool can write a temporary `~/.clasprc.json` from the
+  vault credential ``clasp_oauth_gary`` if the file is missing.
 
 If any of those aren't ready, the tool surfaces the failure verbatim
 rather than masking it — so the operator can react.
