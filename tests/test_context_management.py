@@ -129,7 +129,7 @@ def test_context_tools_are_universal_across_roles():
     assert specialised, "expected at least one role with an explicit tool list"
     for r in specialised:
         names = {t["function"]["name"] for t in get_tool_schemas_for_role(r)}
-        for tool in ("read_tool_result", "search_transcript", "pin_note"):
+        for tool in ("read_tool_result", "recall_context", "pin_note"):
             assert tool in names, f"{r.key} missing {tool}"
 
 
