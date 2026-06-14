@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -204,6 +206,24 @@ def can_deploy(*, force: bool = False) -> tuple[bool, list[dict[str, Any]]]:
     return True, []
 
 
+@lru_cache(maxsize=1)
+def _get_commit_hash() -> str:
+    """Get the deployed git commit hash, cached for the lifetime of the process."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).resolve().parent.parent,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning("Failed to read git commit hash: %s", e)
+    return "unknown"
+
+
 def get_system_status() -> dict[str, Any]:
     """Get a full system status snapshot for the vault web page."""
     tracks = get_active_tracks()
@@ -233,6 +253,7 @@ def get_system_status() -> dict[str, Any]:
         "blocking_tracks": blocking,
         "active_tracks": enriched,
         "total_tracks": len(tracks),
+        "commit_hash": _get_commit_hash(),
         "checked_at": _now_iso(),
     }
 

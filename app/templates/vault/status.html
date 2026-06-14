@@ -19,6 +19,13 @@
 </div>
 
 <div class="card">
+    <h2>Deployed Version</h2>
+    <div id="deployed-version">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
+    </div>
+</div>
+
+<div class="card">
     <h2>Vault Health</h2>
     <div id="vault-health">
         <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
@@ -59,6 +66,23 @@ fetch('/vault/api/system-status')
     })
     .catch(() => {
         document.getElementById('system-status').innerHTML = '<p style="color: var(--danger);">Failed to load system status. <a href="/vault/login">Sign in</a> to view.</p>';
+    });
+
+// Load deployed version
+fetch('/vault/api/system-status')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+        const el = document.getElementById('deployed-version');
+        if (!data || !data.commit_hash) {
+            el.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">Could not determine deployed version.</p>';
+            return;
+        }
+        const hash = data.commit_hash;
+        const shortHash = hash.slice(0, 7);
+        el.innerHTML = '<p><strong>Commit:</strong> <a href="https://github.com/TrueSightDAO/truesight_autopilot/commit/' + hash + '" target="_blank" rel="noopener" style="font-family: monospace; font-size: 1.1rem;">' + shortHash + '</a></p>';
+    })
+    .catch(() => {
+        document.getElementById('deployed-version').innerHTML = '<p style="color: var(--danger);">Failed to load deployed version.</p>';
     });
 
 // Load vault health
