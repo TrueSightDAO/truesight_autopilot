@@ -2263,7 +2263,9 @@ async def _run_tool_round_loop(
                         **({"queue_msg_id": queue_msg_id} if queue_msg_id else {}),
                     ):
                         yield hb
-                    result_text = _truncate_tool_result(await tool_task)
+                    result_text = _externalize_tool_result(
+                        await tool_task, tool_call_id, session_id, func_name
+                    )
                 except asyncio.CancelledError:
                     logger.info(
                         "[%d] %sTool %s cancelled by user",
@@ -2364,8 +2366,9 @@ async def _stream_chat(
         attachment_info is not None,
     )
 
-    # Trim history to fit DeepSeek's context window (token-aware), then sanitise so
-    # any tool result orphaned by the trim is healed before the LLM call.
+    # Compact completed tool-chains (Pillar B) → trim to the token budget (backstop)
+    # → sanitise so any tool result orphaned by the compaction/trim is healed.
+    _compact_old_tool_chains(history)
     _trim_history_to_budget(history)
     _sanitise_tool_messages(history)
 
@@ -3624,8 +3627,10 @@ async def _chat_blocking_turn(
     tools = get_tool_schemas_for_role(role)
     client = LLMClient()
 
-    # Trim to the context-window budget (this path previously had NO trim at all —
-    # a long thread overflowed DeepSeek and bricked), then sanitise.
+    # Compact completed tool-chains (Pillar B) → trim to the context-window budget
+    # (this path previously had NO trim at all — a long thread overflowed and
+    # bricked) → sanitise.
+    _compact_old_tool_chains(history)
     _trim_history_to_budget(history)
     _sanitise_tool_messages(history)
 
@@ -3672,8 +3677,13 @@ async def _chat_blocking_turn(
                     )
                 except (json.JSONDecodeError, TypeError):
                     func_args = {}
-                result_text = _truncate_tool_result(
-                    await _run_tool(func_name, func_args, history, session_id, gov_name)
+                result_text = _externalize_tool_result(
+                    await _run_tool(
+                        func_name, func_args, history, session_id, gov_name
+                    ),
+                    tc["id"],
+                    session_id,
+                    func_name,
                 )
                 tool_trace.append(
                     {"name": func_name, "args": func_args, "result": result_text}
@@ -3855,6 +3865,126 @@ def _truncate_tool_result(text):
         text[:_MAX_TOOL_RESULT_CHARS]
         + f"\n…[truncated {omitted} chars to keep the thread context from bloating]"
     )
+
+
+# ── Context-management Pillar A: tool-result externalization ──────────────────
+# Big tool results are the densest, most-disposable context (the 780/2622 brick).
+# Write the FULL result to a local artifact file and keep only an 8K summary + a
+# read_tool_result handle inline — so the dense bytes stop accumulating but the
+# detail is recoverable. LOCAL FS ONLY (tool output can contain secrets/PII), never
+# git. CONTEXT_MANAGEMENT_PLAN.md, 2026-06-14.
+_ARTIFACT_DIR = SESSION_LOG_DIR.parent / "artifacts"
+
+
+def _artifact_session_dir(session_id: str):
+    import hashlib
+
+    return _ARTIFACT_DIR / hashlib.md5(session_id.encode()).hexdigest()[:12]
+
+
+def _externalize_tool_result(text, tool_call_id="", session_id="", tool_name=""):
+    """Offload a large tool result to a local artifact file; return an 8K summary +
+    a read_tool_result handle. Best-effort: any failure falls back to plain
+    truncation and never blocks the turn."""
+    if not isinstance(text, str) or len(text) <= _MAX_TOOL_RESULT_CHARS:
+        return text
+    if os.getenv("CONTEXT_EXTERNALIZE", "1") != "1" or not session_id:
+        return _truncate_tool_result(text)
+    try:
+        import hashlib
+
+        d = _artifact_session_dir(session_id)
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(_ARTIFACT_DIR, 0o700)
+        except Exception:
+            pass
+        aid = (
+            tool_call_id or hashlib.md5(text[:256].encode()).hexdigest()[:12]
+        ).replace("/", "_")
+        (d / f"{aid}.txt").write_text(text, encoding="utf-8")
+        omitted = len(text) - _MAX_TOOL_RESULT_CHARS
+        tn = f" from {tool_name}" if tool_name else ""
+        return (
+            text[:_MAX_TOOL_RESULT_CHARS]
+            + f"\n…[+{omitted} more chars{tn} saved to artifact '{aid}'. "
+            + f"Call read_tool_result(artifact_id='{aid}') for the full output.]"
+        )
+    except Exception as e:
+        logger.warning(
+            "tool-result externalize failed (%s) — falling back to truncation", e
+        )
+        return _truncate_tool_result(text)
+
+
+def _read_artifact(
+    artifact_id: str, session_id: str, offset: int = 0, limit: int = 16000
+):
+    """Read back a full tool-result artifact (or a slice). Used by read_tool_result."""
+    try:
+        p = _artifact_session_dir(session_id) / f"{artifact_id}.txt"
+        if not p.is_file():
+            return f"[artifact '{artifact_id}' not found for this session]"
+        data = p.read_text(encoding="utf-8")
+        offset = max(0, int(offset or 0))
+        chunk = data[offset : offset + max(1, int(limit or 16000))]
+        more = len(data) - (offset + len(chunk))
+        tail = (
+            f"\n…[{more} more chars — read_tool_result(offset={offset + len(chunk)})]"
+            if more > 0
+            else ""
+        )
+        return chunk + tail
+    except Exception as e:
+        return f"[failed to read artifact '{artifact_id}': {e}]"
+
+
+# ── Context-management Pillar B: sub-task compaction ──────────────────────────
+def _compact_old_tool_chains(history: list[dict]) -> None:
+    """Collapse COMPLETED tool-call chains older than the recent window into a
+    one-line assistant note (tool detail is already in artifacts). Keeps the
+    conversation flow + the active sub-task; strips the dense tool machinery from
+    old turns so the token-trim has to drop far less. Runs BEFORE the trim; the
+    self-heal sanitiser runs after as a protocol backstop. In-place, like the trim."""
+    if os.getenv("CONTEXT_COMPACT", "1") != "1":
+        return
+    keep = int(os.getenv("CONTEXT_COMPACT_KEEP_RECENT", "30"))
+    n = len(history)
+    if n <= keep:
+        return
+    cutoff = n - keep
+    out: list[dict] = []
+    i = 0
+    compacted = 0
+    while i < n:
+        m = history[i]
+        if i < cutoff and m.get("role") == "assistant" and m.get("tool_calls"):
+            names = [
+                (tc.get("function") or {}).get("name")
+                for tc in m["tool_calls"]
+                if (tc.get("function") or {}).get("name")
+            ]
+            j = i + 1
+            while j < n and history[j].get("role") == "tool":
+                j += 1
+            text = (m.get("content") or "").strip()
+            note = (
+                f"[{j - i - 1} tool result(s) compacted: "
+                f"{', '.join(names) or 'tools'} — detail in artifacts]"
+            )
+            out.append(
+                {"role": "assistant", "content": (text + "\n" if text else "") + note}
+            )
+            compacted += 1
+            i = j
+        else:
+            out.append(m)
+            i += 1
+    if compacted:
+        history[:] = out
+        logger.info(
+            "Compacted %d old tool-chain(s); kept last %d messages", compacted, keep
+        )
 
 
 # DeepSeek deepseek-chat has a 131,072-token input window. The old trim used a
