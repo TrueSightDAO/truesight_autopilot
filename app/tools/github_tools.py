@@ -15,8 +15,19 @@ def _github_headers() -> dict[str, str]:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if settings.github_pat:
-        headers["Authorization"] = f"Bearer {settings.github_pat}"
+    pat = settings.github_pat
+    if not pat:
+        # Fallback: try vault for github_krake_pat
+        try:
+            from ..vault import get_vault
+            vault = get_vault()
+            if vault.has_credential("github_krake_pat"):
+                pat = vault.get_value("github_krake_pat")
+                logger.info("github_tools: resolved PAT from vault credential 'github_krake_pat'")
+        except Exception:
+            logger.warning("github_tools: vault fallback for PAT failed", exc_info=True)
+    if pat:
+        headers["Authorization"] = f"Bearer {pat}"
     return headers
 
 
