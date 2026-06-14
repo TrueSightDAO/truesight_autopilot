@@ -29,6 +29,8 @@ from fastapi.responses import (
 from .auth import create_jwt, verify_jwt, verify_payload
 from .config import settings
 from .context import get_context_file, refresh_context_repos, refresh_system_prompt
+from .deploy_watcher import register_track as _dw_register_track
+from .deploy_watcher import unregister_track as _dw_unregister_track
 from .governor_registry import load_governors
 from .governor_registry import refresh_cache as refresh_governor_cache
 from .roles import (
@@ -138,6 +140,35 @@ _message_queues: dict[str, list[dict]] = {}  # session_key -> list of queued mes
 _session_locks: dict[
     str, asyncio.Lock
 ] = {}  # session_key -> lock (one writer/executor per thread)
+
+
+def _register_chat_turn_track(session_id: str, governor_name: str | None) -> None:
+    """Register an active chat turn in deploy_watcher's file-based registry.
+
+    The vault status panel (served by the standalone vault_app on port 8002, a
+    SEPARATE process) reads deploy_watcher.active_tracks.json — it cannot see this
+    process's in-memory `_active_streams`. Until now ONLY aws_monitor/email_poller
+    registered tracks, so live conversations showed "Active tracks: 0" and the
+    panel's deploy gate (can_deploy) couldn't see them. Mirror the _active_streams
+    lifecycle into the file registry. Best-effort: a registry hiccup must never
+    break a turn."""
+    try:
+        _dw_register_track(
+            session_id,
+            f"Telegram chat — {governor_name or 'governor'}",
+            "telegram_chat",
+            metadata={"session_id": session_id},
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chat-turn track register failed (%s)", e)
+
+
+def _unregister_chat_turn_track(session_id: str) -> None:
+    """Remove a chat turn from deploy_watcher's registry. Best-effort."""
+    try:
+        _dw_unregister_track(session_id, status="completed")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chat-turn track unregister failed (%s)", e)
 
 # Per-session live-progress record — updated by _run_tool_round_loop so a
 # second message in the same thread can introspect what the running turn is
@@ -3320,6 +3351,9 @@ async def chat(request: Request):
 
     # Track session as active — survives client disconnect
     _active_streams[session_id] = time.time()
+    # Also register in the file-based deploy_watcher registry so the vault panel
+    # (separate process) and the deploy gate can see this live turn.
+    _register_chat_turn_track(session_id, gov_name)
     # Clear any stale cancel flag from a prior turn so this fresh request runs
     _cancel_flags.pop(session_id, None)
 
@@ -3340,6 +3374,7 @@ async def chat(request: Request):
                     yield event
             finally:
                 _active_streams.pop(session_id, None)
+                _unregister_chat_turn_track(session_id)
                 _cancel_flags.pop(session_id, None)
 
     return StreamingResponse(
