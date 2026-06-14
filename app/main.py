@@ -1795,8 +1795,9 @@ async def _run_tool(
             f"- {u.strip()}" for u in pr_urls
         )
         description = f"{title}\n\n{pr_block}\n\nDetails:\n{body}"
+        contribution_type = func_args.get("type", "Time (Minutes)")
         attrs: dict[str, str] = {
-            "Type": "Time (Minutes)" if amount == "0" or float(amount) > 60 else "USD",
+            "Type": contribution_type,
             "Amount": amount,
             "Description": description,
             "Contributor(s)": contributors,

@@ -135,8 +135,13 @@ TOOL_SPECS = [
                 "contributors": {"type": "string", "description": "Display name."},
                 "amount": {
                     "type": "string",
-                    "description": "Minutes or dollar amount.",
+                    "description": "Minutes or USD amount.",
                     "default": "0",
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Contribution type: 'Time (Minutes)' or 'USD'. Defaults to 'Time (Minutes)'.",
+                    "default": "Time (Minutes)",
                 },
                 "tdg_issued": {
                     "type": "string",
