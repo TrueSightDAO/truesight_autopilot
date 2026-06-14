@@ -281,6 +281,9 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     echo \"Waiting 5s for active requests to drain before restart...\"
     sleep 5
     sudo systemctl restart truesight-autopilot
+    # Vault worker (port 8002) — restart so credential-vault fixes actually take
+    # effect; it was silently running stale code because deploys skipped it.
+    sudo systemctl restart truesight-vault 2>/dev/null || true
     # Start the Telegram adapter only when a bot token is configured.
     if grep -q '^TELEGRAM_BOT_API_KEY=.' $REMOTE_DIR/.env 2>/dev/null; then
         sudo systemctl restart truesight-autopilot-telegram
