@@ -1252,6 +1252,17 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
     """
     canonical_set = set(_CANONICAL_LABELS.get(event_name, []))
 
+    # Defensive: this is type-hinted `dict`, but a double-encoded tool call can
+    # hand us a JSON string (or None). Coerce so a malformed arg can never crash
+    # the tool loop and brick the thread.
+    if isinstance(attributes, str):
+        try:
+            attributes = json.loads(attributes)
+        except (json.JSONDecodeError, ValueError):
+            attributes = {}
+    if not isinstance(attributes, dict):
+        attributes = {}
+
     normalized = {}
     for key, value in attributes.items():
         # Skip descriptive-only keys
@@ -1383,6 +1394,27 @@ async def _run_tool(
         # DUPLICATE GUARD: check DAO ledger (ground truth) before submitting
         event_name = func_args.get("event_name", "CONTRIBUTION EVENT")
         attributes = func_args.get("attributes", {})
+
+        # The LLM sometimes double-encodes the nested `attributes` object as a
+        # JSON *string* (e.g. {"attributes": "{\"Contributor Name\": ...}"})
+        # instead of an object. Coerce it back to a dict before normalizing —
+        # otherwise _normalize_submission_labels crashes on .items() and the
+        # whole turn dies mid-tool-loop, leaving an orphan tool_call that bricks
+        # the thread. (Observed on the Kopi Bay onboarding thread, 2026-06-14.)
+        if isinstance(attributes, str):
+            try:
+                attributes = json.loads(attributes)
+            except (json.JSONDecodeError, ValueError):
+                return json.dumps(
+                    {
+                        "status": "invalid",
+                        "message": (
+                            "`attributes` must be a JSON object, not a string. "
+                            "Pass attributes as a nested object, e.g. "
+                            '{"event_name": "...", "attributes": {"Label": "Value"}}.'
+                        ),
+                    }
+                )
 
         # Normalize attribute keys to canonical labels
         attributes = _normalize_submission_labels(event_name, attributes)
