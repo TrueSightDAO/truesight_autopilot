@@ -153,6 +153,65 @@
         }
         .nudge-card h2 { color: var(--text); }
         .nudge-card p { margin-bottom: 1.5rem; color: var(--text-muted); }
+
+        /* ── Mobile responsiveness ── */
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 0.5rem;
+                padding: 1rem;
+                text-align: center;
+            }
+            .header h1 { font-size: 1.2rem; }
+            .header .identity { font-size: 0.8rem; }
+            .container { padding: 1rem; }
+            .card { padding: 1rem; }
+            .nav-bar {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                padding: 0.5rem 1rem;
+                justify-content: center;
+            }
+            .nav-bar .nav-link:last-child { margin-left: 0 !important; }
+            /* Make tables horizontally scrollable */
+            .card table,
+            table {
+                display: block;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                white-space: nowrap;
+            }
+            th, td {
+                padding: 0.4rem 0.4rem;
+                font-size: 0.8rem;
+            }
+            /* Stack heading + button row on mobile */
+            div[style*="display: flex"][style*="justify-content: space-between"] {
+                flex-direction: column;
+                align-items: flex-start !important;
+                gap: 0.75rem;
+            }
+            /* Login page email input full-width */
+            div[style*="display:flex"][style*="gap:0.5rem"] {
+                flex-direction: column;
+            }
+            div[style*="display:flex"][style*="gap:0.5rem"] input {
+                min-width: unset !important;
+                width: 100%;
+            }
+            /* Modal on mobile */
+            .modal {
+                width: 95%;
+                padding: 1.25rem;
+            }
+            /* Deploy button row */
+            div[style*="display: flex"][style*="gap: 0.5rem"] {
+                flex-wrap: wrap;
+            }
+            /* Empty state */
+            .empty-state { padding: 2rem 1rem; }
+            .nudge-card { padding: 2rem 1rem; }
+        }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
