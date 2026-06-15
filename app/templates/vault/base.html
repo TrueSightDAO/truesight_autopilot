@@ -80,8 +80,9 @@
             margin-bottom: 0.75rem;
         }
         label { display: block; font-weight: 500; margin-bottom: 0.25rem; font-size: 0.85rem; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; word-wrap: break-word; }
+        td:last-child { white-space: nowrap; min-width: 130px; }
         th { font-weight: 600; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; }
         .badge {
             display: inline-block;

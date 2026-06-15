@@ -36,7 +36,7 @@
 
     <div class="card">
         {% if credentials %}
-        <table>
+        <div class="card-table-wrap"><table>
             <thead>
                 <tr>
                     <th>Name</th>
@@ -62,7 +62,7 @@
                 </tr>
                 {% endfor %}
             </tbody>
-        </table>
+        </table></div>
         {% else %}
         <div class="empty-state">
             <p>No credentials stored yet.</p>
