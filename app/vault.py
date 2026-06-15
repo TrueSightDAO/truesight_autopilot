@@ -122,6 +122,11 @@ class Vault:
         # In-memory cache: {name: VaultEntry}
         self._entries: dict[str, VaultEntry] = {}
         self._loaded = False
+        # (mtime_ns, size) of vault.json.enc at the moment we last loaded it.
+        # Used to detect when ANOTHER process/worker (or Sophia's CLI) has
+        # written to the same vault dir, so this long-lived instance reloads
+        # instead of serving a stale cache. None = file absent at load time.
+        self._loaded_sig: tuple[int, int] | None = None
 
     # ── Initialization ────────────────────────────────────────────────
 
@@ -545,22 +550,45 @@ class Vault:
 
     # ── Internal methods ──────────────────────────────────────────────
 
+    def _disk_signature(self) -> tuple[int, int] | None:
+        """(mtime_ns, size) of the vault file, or None if it doesn't exist."""
+        try:
+            st = self._vault_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            return None
+
     def _ensure_loaded(self) -> None:
+        """Load the vault, or RELOAD it if the file changed under us.
+
+        The vault runs as multiple OS processes (the main bot on :8001, the
+        dedicated vault web worker on :8002, plus one-off CLI writes). They do
+        NOT share memory, so a write by one is invisible to the others until
+        they re-read disk. Without this reload check a long-lived worker serves
+        a stale cache forever — the bug behind the 2026-06-15 "page shows empty
+        after the credentials were added" incident.
+        """
         if not self._loaded:
+            self._load()
+        elif self._disk_signature() != self._loaded_sig:
+            logger.debug("Vault: file changed on disk — reloading")
             self._load()
 
     def _load(self) -> None:
         """Load the vault from disk."""
+        self._loaded = True
+        # Capture the signature BEFORE reading: if a concurrent write lands
+        # mid-read we'll reload next time (stale-but-safe) rather than miss it.
+        self._loaded_sig = self._disk_signature()
+
         if not self._vault_path.exists():
             self._entries = {}
-            self._loaded = True
             return
 
         try:
             encrypted_data = self._vault_path.read_bytes()
             if not encrypted_data.strip():
                 self._entries = {}
-                self._loaded = True
                 return
 
             if self._fernet is None:
@@ -572,12 +600,10 @@ class Vault:
                 name: VaultEntry(**entry_data)
                 for name, entry_data in data.get("entries", {}).items()
             }
-            self._loaded = True
             logger.debug("Vault: loaded %d entries", len(self._entries))
         except Exception as e:
             logger.error("Failed to load vault: %s", e)
             self._entries = {}
-            self._loaded = True
 
     def _save(self) -> None:
         """Save the vault to disk atomically."""
@@ -597,6 +623,10 @@ class Vault:
         tmp_path.write_bytes(encrypted)
         tmp_path.chmod(0o600)
         tmp_path.rename(self._vault_path)
+
+        # Record our own write so the next read doesn't reload it as if it were
+        # an external change. (A reload here would be harmless but wasteful.)
+        self._loaded_sig = self._disk_signature()
 
     def _encrypt(self, value: str) -> str:
         if self._fernet is None:

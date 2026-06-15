@@ -233,6 +233,56 @@ class TestPersistence:
         assert vault.list_refs() == []
 
 
+# ── Cross-process / multi-worker cache coherence ──────────────────────────
+
+
+class TestCrossProcessReload:
+    """A long-lived Vault instance (e.g. the uvicorn vault worker) must reflect
+    writes made by a SEPARATE process — the main bot, a 2nd worker, or Sophia's
+    CLI. Each process has its own in-memory cache, so without a reload-on-change
+    check the worker serves a stale cache forever. This is the bug behind the
+    2026-06-15 "vault page shows empty after the 31 credentials were added"
+    incident — Sophia wrote them from a CLI process; the web worker never reread.
+    """
+
+    def test_reader_sees_external_add_after_caching_empty(self, vault_dir):
+        reader = Vault(vault_dir=str(vault_dir))
+        reader.initialize()
+        # Warm the reader's cache while the store is still empty.
+        assert reader.list_refs() == []
+
+        # A separate instance (a different process in prod) adds a credential.
+        writer = Vault(vault_dir=str(vault_dir))
+        writer.add("late_key", "late_val", "Added after reader cached", ["read"], "Gary")
+
+        # The reader must reflect it WITHOUT being restarted.
+        assert "late_key" in [r.name for r in reader.list_refs()]
+        assert reader.get_value("late_key") == "late_val"
+
+    def test_reader_sees_external_delete(self, vault_dir):
+        reader = Vault(vault_dir=str(vault_dir))
+        reader.initialize()
+        reader.add("k", "v", "x", ["read"], "Gary")
+        assert reader.has_credential("k") is True
+
+        writer = Vault(vault_dir=str(vault_dir))
+        writer.delete("k", "Gary")
+
+        assert reader.has_credential("k") is False
+
+    def test_reader_sees_external_rotation(self, vault_dir):
+        reader = Vault(vault_dir=str(vault_dir))
+        reader.initialize()
+        reader.add("k", "v1", "x", ["read"], "Gary")
+        assert reader.get_value("k") == "v1"
+
+        writer = Vault(vault_dir=str(vault_dir))
+        writer.update("k", "v2", "Gary")
+
+        assert reader.get_value("k") == "v2"
+        assert reader.get_ref("k").version == 2
+
+
 # ── Backup / Restore tests ────────────────────────────────────────────────
 
 
