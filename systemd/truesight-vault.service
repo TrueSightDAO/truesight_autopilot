@@ -11,7 +11,15 @@ Environment=PYTHONPATH=/opt/truesight_autopilot
 # Runs separately from the brain so the vault + system-status pages stay responsive
 # even when the main bot is busy on a long LLM turn. app.vault_app eagerly
 # initializes the vault (dir + Fernet key) on startup.
-ExecStart=/opt/truesight_autopilot/.venv/bin/uvicorn app.vault_app:app --host 127.0.0.1 --port 8002 --workers 2
+#
+# --workers 1 (was 2): the Vault keeps its decrypted entries in a module-level
+# in-process cache. With 2 workers, a credential added through one worker was
+# invisible to the other (and to the page, depending on which worker nginx hit)
+# until restart — a contributor to the 2026-06-15 "vault shows empty" confusion.
+# The vault page is single-governor and trivially loaded; a 2nd worker buys no
+# throughput. (Cross-process freshness is also handled by mtime-reload in
+# app/vault.py; one worker additionally keeps the write path race-free.)
+ExecStart=/opt/truesight_autopilot/.venv/bin/uvicorn app.vault_app:app --host 127.0.0.1 --port 8002 --workers 1
 Restart=always
 RestartSec=5
 StandardOutput=journal
