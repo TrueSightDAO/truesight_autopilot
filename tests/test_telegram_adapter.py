@@ -187,14 +187,16 @@ def test_handle_message_allowed_calls_chat(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: captured.update(
-            chat_id=chat_id,
-            thread_id=thread_id,
-            message=message,
-            session_id=session_id,
-            public_key=public_key,
-        )
-        or ("", True),
+        lambda chat_id, thread_id, message, session_id, public_key: (
+            captured.update(
+                chat_id=chat_id,
+                thread_id=thread_id,
+                message=message,
+                session_id=session_id,
+                public_key=public_key,
+            )
+            or ("", True)
+        ),
     )
     # real forum topic (is_topic_message=True) => threaded session + threaded routing
     ta.handle_message(
@@ -217,10 +219,9 @@ def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: captured.update(
-            session_id=session_id, thread_id=thread_id
-        )
-        or ("", True),
+        lambda chat_id, thread_id, message, session_id, public_key: (
+            captured.update(session_id=session_id, thread_id=thread_id) or ("", True)
+        ),
     )
     ta.handle_message(
         _msg(user_id=111, chat_id=555, text="hi", thread_id=4242),
@@ -240,10 +241,9 @@ def test_handle_message_photo_routes_with_path(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: captured.update(
-            message=message
-        )
-        or ("", True),
+        lambda chat_id, thread_id, message, session_id, public_key: (
+            captured.update(message=message) or ("", True)
+        ),
     )
     msg = {
         "chat": {"id": 555},
@@ -296,7 +296,9 @@ def voice_stubs(monkeypatch):
     )
     monkeypatch.setattr(ta, "send_voice_action", lambda *a, **k: None)
     monkeypatch.setattr(ta, "send_voice", lambda *a, **k: True)
-    monkeypatch.setattr(ta, "synthesize_voice", lambda text, language="en": "/tmp/x.mp3")
+    monkeypatch.setattr(
+        ta, "synthesize_voice", lambda text, language="en": "/tmp/x.mp3"
+    )
     monkeypatch.setattr(ta, "detect_language", lambda text: "en")
     return sends
 
@@ -321,7 +323,153 @@ def test_voice_reply_links_only_followup_when_already_shown(voice_stubs):
 
 def test_voice_reply_sends_full_text_when_not_shown(voice_stubs):
     # Progress fallback returned text without displaying it → send the full text.
-    ta._handle_voice_reply(
-        555, None, "Fallback answer.", None, text_already_sent=False
-    )
+    ta._handle_voice_reply(555, None, "Fallback answer.", None, text_already_sent=False)
     assert voice_stubs == ["Fallback answer."]
+
+
+# ── /verify identity on-ramp (Phase 1) ──
+
+
+def _dm(user_id=222, chat_id=222, text="hi", username="garyjob"):
+    return {
+        "chat": {"id": chat_id, "type": "private"},
+        "from": {"id": user_id, "username": username},
+        "text": text,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _clear_pending():
+    # Reset the global governor cache around each test so resolve_identity()
+    # calls in the gate don't leak cached env state into other test modules.
+    from app.policy import refresh_governor_cache
+
+    refresh_governor_cache()
+    ta._pending_verifications.clear()
+    yield
+    ta._pending_verifications.clear()
+    refresh_governor_cache()
+
+
+def test_verify_command_starts_challenge(monkeypatch, sent):
+    monkeypatch.setattr(
+        "app.identity_binding.mint_challenge",
+        lambda email, telegram_id=None: {"success": True},
+    )
+    # user 222 is NOT in the allowlist, but /verify in a DM is the on-ramp.
+    ta.handle_message(
+        _dm(user_id=222, text="/verify gary@truesight.me"),
+        allowed={111},
+        public_key="PK",
+    )
+    assert 222 in ta._pending_verifications
+    assert ta._pending_verifications[222]["email"] == "gary@truesight.me"
+    assert any("code" in c["text"].lower() for c in sent)
+
+
+def test_verify_command_rejects_bad_email(monkeypatch, sent):
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "app.identity_binding.mint_challenge",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"success": True},
+    )
+    ta.handle_message(
+        _dm(user_id=222, text="/verify notanemail"), allowed={111}, public_key="PK"
+    )
+    assert called["n"] == 0
+    assert 222 not in ta._pending_verifications
+    assert any("usage" in c["text"].lower() for c in sent)
+
+
+def test_verify_code_binds(monkeypatch, sent):
+    monkeypatch.setattr(
+        "app.identity_binding.consume_challenge",
+        lambda email, code, tid, uname=None: {"success": True},
+    )
+    ta._pending_verifications[222] = {"email": "gary@truesight.me", "ts": time.time()}
+    ta.handle_message(_dm(user_id=222, text="ABCDEFGH"), allowed={111}, public_key="PK")
+    assert 222 not in ta._pending_verifications
+    assert any("verified" in c["text"].lower() for c in sent)
+
+
+def test_verify_wrong_code_keeps_pending(monkeypatch, sent):
+    monkeypatch.setattr(
+        "app.identity_binding.consume_challenge",
+        lambda email, code, tid, uname=None: {
+            "success": False,
+            "error": "Invalid code.",
+        },
+    )
+    ta._pending_verifications[222] = {"email": "gary@truesight.me", "ts": time.time()}
+    ta.handle_message(_dm(user_id=222, text="WRONG999"), allowed={111}, public_key="PK")
+    assert 222 in ta._pending_verifications  # still pending; can retry
+    assert any("invalid" in c["text"].lower() for c in sent)
+
+
+def test_verify_cancel(sent):
+    ta._pending_verifications[222] = {"email": "gary@truesight.me", "ts": time.time()}
+    ta.handle_message(_dm(user_id=222, text="/cancel"), allowed={111}, public_key="PK")
+    assert 222 not in ta._pending_verifications
+    assert any("cancel" in c["text"].lower() for c in sent)
+
+
+def test_verify_only_in_dm_not_group(monkeypatch, sent):
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "app.identity_binding.mint_challenge",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"success": True},
+    )
+    monkeypatch.setattr(
+        "app.identity_binding.check_binding_status", lambda tid: {"bound": False}
+    )
+    # /verify in a GROUP from a non-allowlisted user → no verify, gate rejects.
+    ta.handle_message(
+        {
+            "chat": {"id": 555, "type": "group"},
+            "from": {"id": 999},
+            "text": "/verify x@y.com",
+        },
+        allowed={111},
+        public_key="PK",
+    )
+    assert called["n"] == 0
+    assert any("not authorized" in c["text"].lower() for c in sent)
+
+
+def test_unbound_user_dm_still_rejected(monkeypatch, sent):
+    # A normal DM (not /verify) from an unbound non-governor is still rejected —
+    # the verify on-ramp does not open the gate to general chat.
+    monkeypatch.setattr(
+        "app.identity_binding.check_binding_status", lambda tid: {"bound": False}
+    )
+    from app.policy import refresh_governor_cache
+
+    refresh_governor_cache()
+    ta.handle_message(
+        _dm(user_id=999, text="hello there"), allowed={111}, public_key="PK"
+    )
+    assert any("not authorized" in c["text"].lower() for c in sent)
+
+
+def test_verified_governor_admitted_through_gate(monkeypatch, sent):
+    # A non-allowlisted id that resolves to GOVERNOR via binding is admitted:
+    # it reaches the chat path (call_chat_with_progress), not the reject.
+    from app.policy import Identity, Role
+
+    monkeypatch.setattr(
+        "app.policy.resolve_identity",
+        lambda **k: Identity(telegram_id=777, role=Role.GOVERNOR, name="Gary Teh"),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key: (
+            captured.update(hit=True) or ("", True)
+        ),
+    )
+    monkeypatch.setattr(ta, "_handle_voice_reply", lambda *a, **k: None)
+    ta.handle_message(
+        _dm(user_id=777, text="what shipped?"), allowed={111}, public_key="PK"
+    )
+    assert captured.get("hit") is True

@@ -2,8 +2,13 @@
 
 Resolves (tenant, surface, identity, action) → allow/deny.
 
-Phase 0.1 (vault-first order): identity resolver only.
-  telegram_id → {guest, governor}
+Identity resolver:
+  telegram_id → env allowlist, OR Column X (Contributors contact
+  information) → Governors cache → {guest, governor}
+
+A telegram_id verified through the Telegram /verify flow is written to
+Column X; if that contributor is in the Governors cache, they resolve to
+GOVERNOR even on a device whose id was never added to the env allowlist.
 
 The full (tenant × surface × identity × action) key is stubbed for now —
 tenant defaults to "truesight", surface is inferred from context, and
@@ -20,6 +25,7 @@ from __future__ import annotations
 import enum
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -63,6 +69,12 @@ class Identity:
 _GOVERNOR_NAMES: set[str] | None = None
 _GOVERNOR_TELEGRAM_IDS: set[int] | None = None
 
+# Cache for the Column X → binding lookup (telegram_id → {email, name} or None).
+# Bindings change rarely; a short TTL keeps the per-message hot path off the
+# Sheets API. Lookup FAILURES are never cached, so they retry.
+_BINDING_CACHE_TTL = int(os.getenv("BINDING_CACHE_TTL", "300"))
+_binding_cache: dict[int, tuple[float, dict | None]] = {}
+
 
 def _load_governor_names() -> set[str]:
     global _GOVERNOR_NAMES
@@ -101,6 +113,60 @@ def refresh_governor_cache() -> None:
     global _GOVERNOR_NAMES, _GOVERNOR_TELEGRAM_IDS
     _GOVERNOR_NAMES = None
     _GOVERNOR_TELEGRAM_IDS = None
+    _binding_cache.clear()
+
+
+# ── Column X binding lookup (Phase 1 read-side) ──────────────────────────
+
+
+def _resolve_binding(telegram_id: int) -> dict | None:
+    """Look up the verified identity bound to this telegram_id (Column X).
+
+    Returns ``{"email", "name"}`` if the id is bound to a verified
+    contributor, else ``None``. Cached with a short TTL; lookup failures
+    (network, missing creds) return None and are NOT cached so they retry.
+    """
+    now = time.time()
+    cached = _binding_cache.get(telegram_id)
+    if cached is not None and (now - cached[0]) < _BINDING_CACHE_TTL:
+        return cached[1]
+
+    try:
+        from .identity_binding import check_binding_status
+
+        status = check_binding_status(telegram_id)
+    except Exception as exc:  # noqa: BLE001 — degrade to guest, don't crash
+        logger.warning("Binding lookup failed for telegram_id=%s: %s", telegram_id, exc)
+        return None
+
+    result: dict | None = None
+    if status.get("bound"):
+        result = {
+            "email": (status.get("email") or "").strip(),
+            "name": (status.get("name") or "").strip(),
+        }
+    _binding_cache[telegram_id] = (now, result)
+    return result
+
+
+def _binding_is_governor(email: str, name: str) -> bool:
+    """Check a bound identity (email/name) against the Governors cache."""
+    try:
+        from .governor_registry import load_governors
+
+        data = load_governors()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Governor cache lookup failed: %s", exc)
+        return False
+
+    email_l = (email or "").strip().lower()
+    name_l = (name or "").strip().lower()
+    for g in data.get("governors", []):
+        if email_l and (g.get("email") or "").strip().lower() == email_l:
+            return True
+        if name_l and (g.get("name") or "").strip().lower() == name_l:
+            return True
+    return False
 
 
 # ── Identity resolver ────────────────────────────────────────────────────
@@ -114,13 +180,12 @@ def resolve_identity(
     """Resolve a Telegram user's identity to a role.
 
     Resolution order:
-    1. If telegram_id is in the governor allowlist → GOVERNOR
-    2. If display_name matches a known governor name → GOVERNOR
-    3. Otherwise → GUEST
-
-    Phase 1 will add: telegram_id → Column X (Contributors contact) →
-    Governors cache → {guest, governor}. The env-var approach is the
-    v0 bridge until that plumbing exists.
+    1. If telegram_id is in the env governor allowlist → GOVERNOR
+    2. If telegram_id is bound (Column X) to a contributor in the
+       Governors cache → GOVERNOR (a verified non-governor member falls
+       through to GUEST, but keeps their real name for audit)
+    3. If display_name matches a known governor name → GOVERNOR (env bridge)
+    4. Otherwise → GUEST
 
     Args:
         telegram_id: Numeric Telegram user ID (from message.from.id).
@@ -141,7 +206,20 @@ def resolve_identity(
             name=display_name or telegram_username or str(telegram_id),
         )
 
-    # 2. Display name match (weaker — Telegram display names can be changed)
+    # 2. Bound identity via Column X → Governors cache (Phase 1 read-side).
+    bound_name: str | None = None
+    if telegram_id is not None:
+        bound = _resolve_binding(telegram_id)
+        if bound is not None:
+            bound_name = bound["name"] or None
+            if _binding_is_governor(bound["email"], bound["name"]):
+                return Identity(
+                    telegram_id=telegram_id,
+                    role=Role.GOVERNOR,
+                    name=bound_name or display_name or telegram_username,
+                )
+
+    # 3. Display name match (weaker — Telegram display names can be changed)
     if display_name and display_name.strip() in governor_names:
         return Identity(
             telegram_id=telegram_id,
@@ -149,13 +227,14 @@ def resolve_identity(
             name=display_name.strip(),
         )
 
-    # 3. Guest default
+    # 4. Guest default (prefer a verified binding name for audit clarity)
     return Identity(
         telegram_id=telegram_id,
         role=Role.GUEST,
-        name=display_name or telegram_username or str(telegram_id)
-        if telegram_id
-        else None,
+        name=bound_name
+        or display_name
+        or telegram_username
+        or (str(telegram_id) if telegram_id else None),
     )
 
 

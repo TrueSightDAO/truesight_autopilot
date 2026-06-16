@@ -445,14 +445,19 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                         msg_id = result.get("message_id")
                     break
                 elif resp.status_code == 429:
-                    retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+                    retry_after = (
+                        resp.json().get("parameters", {}).get("retry_after", 5)
+                    )
                     logger.warning(
                         "sendMessage 429 (attempt %d/3): retry after %ds",
-                        attempt + 1, retry_after,
+                        attempt + 1,
+                        retry_after,
                     )
                     time.sleep(min(retry_after + 1, 30))
                 else:
-                    logger.warning("sendMessage %s: %s", resp.status_code, resp.text[:200])
+                    logger.warning(
+                        "sendMessage %s: %s", resp.status_code, resp.text[:200]
+                    )
                     # Fallback: send the raw chunk as plain text. Covers both
                     # "message thread not found" and any HTML parse error.
                     # NOTE: do NOT include message_thread_id in the fallback — if the
@@ -470,7 +475,7 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
             except Exception as e:  # noqa: BLE001
                 logger.warning("sendMessage failed (attempt %d/3): %s", attempt + 1, e)
                 if attempt < 2:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
     return msg_id
 
 
@@ -501,19 +506,24 @@ def send_voice(chat_id: int, file_path: str, thread_id: int | None = None) -> bo
                     )
                     return True
                 elif resp.status_code == 429:
-                    retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+                    retry_after = (
+                        resp.json().get("parameters", {}).get("retry_after", 5)
+                    )
                     logger.warning(
                         "sendVoice 429 (attempt %d/3): retry after %ds",
-                        attempt + 1, retry_after,
+                        attempt + 1,
+                        retry_after,
                     )
                     time.sleep(min(retry_after + 1, 30))
                 else:
-                    logger.warning("sendVoice %s: %s", resp.status_code, resp.text[:200])
+                    logger.warning(
+                        "sendVoice %s: %s", resp.status_code, resp.text[:200]
+                    )
                     return False
         except Exception as e:
             logger.warning("sendVoice failed (attempt %d/3): %s", attempt + 1, e)
             if attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
     return False
 
 
@@ -1127,6 +1137,95 @@ def _auto_process_attachment(
     return None
 
 
+# ── Identity verification on-ramp (Phase 1) ──────────────────────────────
+# Maps a Telegram user_id mid-verification to the email they're verifying.
+# A pending entry routes the user's next DM (the emailed code) to consume.
+_pending_verifications: dict[int, dict[str, Any]] = {}
+_VERIFY_PENDING_TTL = 15 * 60  # match identity_binding's challenge expiry
+
+
+def _maybe_handle_verification(
+    chat_id: int, user_id: int, username: str | None, text: str
+) -> bool:
+    """DM-only identity verification on-ramp (Phase 1).
+
+    Open to UNBOUND users (runs before the allowlist gate) but strictly
+    limited to: starting `/verify <email>`, pasting a code while one is
+    pending, or `/cancel`. Anything else returns False so the caller falls
+    through to the normal security gate. The email + code exchange happens
+    only in DM so they are never group-visible.
+
+    Returns True iff the message was consumed by the verification flow.
+    """
+    from .identity_binding import consume_challenge, mint_challenge
+
+    # Expire a stale pending verification.
+    pending = _pending_verifications.get(user_id)
+    if pending and (time.time() - pending["ts"]) > _VERIFY_PENDING_TTL:
+        _pending_verifications.pop(user_id, None)
+        pending = None
+
+    # Start a new verification.
+    if text.startswith("/verify"):
+        email = text[len("/verify") :].strip()
+        if not email or "@" not in email:
+            send_message(
+                chat_id,
+                "Usage: `/verify you@example.com`\n\n"
+                "I'll email an 8-character code to that address (it must be on "
+                "file in the DAO ledger). Paste the code back here to link this "
+                "Telegram account to your contributor identity.",
+            )
+            return True
+        result = mint_challenge(email, telegram_id=user_id)
+        if result.get("success"):
+            _pending_verifications[user_id] = {"email": email, "ts": time.time()}
+            send_message(
+                chat_id,
+                f"📧 If *{email}* is registered, I've emailed it an 8-character "
+                "code (valid 15 minutes). Paste it here to finish linking. "
+                "Send /cancel to stop.",
+            )
+        else:
+            send_message(
+                chat_id,
+                f"⚠️ {result.get('error', 'Could not start verification.')}",
+            )
+        return True
+
+    if not pending:
+        return False
+
+    # Pending verification: handle cancel, then treat the message as the code.
+    if text.lower() in ("/cancel", "cancel"):
+        _pending_verifications.pop(user_id, None)
+        send_message(chat_id, "Verification cancelled.")
+        return True
+    if text.startswith("/"):
+        # Let other slash-commands through rather than burning an attempt.
+        return False
+
+    code = text.strip().upper().replace(" ", "")
+    result = consume_challenge(pending["email"], code, user_id, username)
+    if result.get("success"):
+        _pending_verifications.pop(user_id, None)
+        # New binding — bust the policy binding cache so it takes effect now.
+        try:
+            from .policy import refresh_governor_cache
+
+            refresh_governor_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        send_message(
+            chat_id,
+            f"✅ Verified! This Telegram account is now linked to "
+            f"*{pending['email']}* in the DAO ledger.",
+        )
+    else:
+        send_message(chat_id, f"❌ {result.get('error', 'Verification failed.')}")
+    return True
+
+
 def handle_message(
     msg: dict[str, Any], allowed: set[int], public_key: str | None
 ) -> None:
@@ -1152,7 +1251,16 @@ def handle_message(
                 record_topic_name(thread_id, _ftc["name"])
             except Exception:
                 pass
-    user_id = (msg.get("from") or {}).get("id")
+    sender = msg.get("from") or {}
+    user_id = sender.get("id")
+    username = sender.get("username")
+    display_name = (
+        " ".join(
+            p for p in (sender.get("first_name"), sender.get("last_name")) if p
+        ).strip()
+        or None
+    )
+    chat_type = chat.get("type")
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
     attachment_file_id = extract_attachment_file_id(msg)
@@ -1164,20 +1272,50 @@ def handle_message(
     ):
         return
 
+    # Identity verification on-ramp (Phase 1): DM-only, open to unbound users.
+    # Runs BEFORE the gate so a new contributor can link their identity; only
+    # consumes /verify, a pending code paste, or /cancel.
+    if (
+        chat_type == "private"
+        and text
+        and _maybe_handle_verification(chat_id, user_id, username, text)
+    ):
+        return
+
     # Security gate
     if not is_allowed(user_id, allowed):
-        if not allowed:
-            # Bootstrap: no allowlist configured yet — reveal the sender's own ID.
-            logger.warning("Unconfigured allowlist; message from user_id=%s", user_id)
-            send_message(
-                chat_id,
-                f"Your Telegram user ID is {user_id}.\nAdd it to TELEGRAM_ALLOWED_USER_IDS and restart to enable me.",
-                thread_id,
+        # A governor verified via /verify (Column X → Governors cache) is admitted
+        # even if their telegram_id was never added to the env allowlist.
+        admitted = False
+        try:
+            from .policy import Role, resolve_identity
+
+            ident = resolve_identity(
+                telegram_id=user_id,
+                telegram_username=username,
+                display_name=display_name,
             )
-        else:
-            logger.warning("Rejected message from non-allowlisted user_id=%s", user_id)
-            send_message(chat_id, "⛔ Not authorized.", thread_id)
-        return
+            admitted = ident.role == Role.GOVERNOR
+        except Exception:  # noqa: BLE001 — never let policy errors open the gate
+            admitted = False
+
+        if not admitted:
+            if not allowed:
+                # Bootstrap: no allowlist configured yet — reveal the sender's own ID.
+                logger.warning(
+                    "Unconfigured allowlist; message from user_id=%s", user_id
+                )
+                send_message(
+                    chat_id,
+                    f"Your Telegram user ID is {user_id}.\nAdd it to TELEGRAM_ALLOWED_USER_IDS and restart to enable me.",
+                    thread_id,
+                )
+            else:
+                logger.warning(
+                    "Rejected message from non-allowlisted user_id=%s", user_id
+                )
+                send_message(chat_id, "⛔ Not authorized.", thread_id)
+            return
 
     # Voice note → transcribe locally (faster-whisper)
     is_voice = bool(voice_file_id and not text)
@@ -1213,6 +1351,8 @@ def handle_message(
             "`7` General DAO Assistant\n\n"
             "**Commands**\n"
             "`/help` — this message\n"
+            "`/verify <email>` — (DM) link this Telegram account to your DAO "
+            "ledger identity via an emailed code\n"
             "`/research <topic>` — autonomous CrewAI research (needs role 1 or 4)\n"
             "`/reset` — clear context, keep role, start fresh\n"
             "Type a role number anytime to switch roles.\n\n"
