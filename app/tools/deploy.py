@@ -212,6 +212,81 @@ def _capture_forensic_evidence() -> dict:
     }
 
 
+def _is_process_stale(remote_dir: str) -> bool:
+    """Check if the running process is stale relative to source files on disk.
+
+    Reads the process start time from /proc/self/stat (field 22, start time in
+    clock ticks since boot) and compares it to the mtime of a key source file
+    (app/tools/deploy.py). If the process started BEFORE the file was last
+    modified, the process is running old code and needs a restart — even if
+    HEAD matches origin/main.
+
+    Returns True if the process is stale (should proceed with deploy),
+    False if the process is fresh enough (no restart needed).
+    """
+    try:
+        # ── Get process start time (jiffies since boot) from /proc/self/stat ──
+        # Field 22 (1-indexed) is starttime in clock ticks. /proc/self/stat
+        # format: pid (comm) state ppid ... (field 22 = starttime)
+        with open("/proc/self/stat") as f:
+            stat_parts = f.read().split()
+        if len(stat_parts) < 22:
+            logger.debug("Cannot determine process start time — /proc/self/stat has <22 fields")
+            return False
+        proc_start_jiffies = int(stat_parts[21])  # field 22, 0-indexed = 21
+
+        # ── Get boot time (seconds since epoch) ──────────────────────────────
+        # /proc/stat has "btime <unix_timestamp>" line
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    boot_time = int(line.split()[1])
+                    break
+            else:
+                logger.debug("Cannot determine boot time — no btime in /proc/stat")
+                return False
+
+        # ── Get CLK_TCK (clock ticks per second) ────────────────────────────
+        clk_tck = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+
+        # ── Compute process start time as unix timestamp ─────────────────────
+        proc_start_epoch = boot_time + (proc_start_jiffies / clk_tck)
+
+        # ── Get mtime of a key source file ───────────────────────────────────
+        # Use app/tools/deploy.py as the reference — if this file changed,
+        # the running process is definitely stale.
+        ref_file = os.path.join(remote_dir, "app", "tools", "deploy.py")
+        if not os.path.isfile(ref_file):
+            logger.debug("Reference file %s not found — cannot check staleness", ref_file)
+            return False
+        file_mtime = os.path.getmtime(ref_file)
+
+        # ── Compare ──────────────────────────────────────────────────────────
+        # If the process started more than 2 seconds before the file was
+        # modified, it's stale. The 2s margin accounts for sub-second timing
+        # jitter between the two measurements.
+        stale = proc_start_epoch < (file_mtime - 2.0)
+        if stale:
+            logger.info(
+                "Process stale: started at %.1f, file mtime %.1f (diff=%.1fs)",
+                proc_start_epoch,
+                file_mtime,
+                file_mtime - proc_start_epoch,
+            )
+        else:
+            logger.debug(
+                "Process fresh: started at %.1f, file mtime %.1f (diff=%.1fs)",
+                proc_start_epoch,
+                file_mtime,
+                file_mtime - proc_start_epoch,
+            )
+        return stale
+
+    except Exception as e:
+        logger.warning("Process-staleness check failed (%s) — assuming fresh", e)
+        return False
+
+
 def _write_deploy_marker(commit: str, elapsed: float) -> None:
     """Write a marker file so the NEW process can notify the governor on startup.
 
