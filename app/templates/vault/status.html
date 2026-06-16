@@ -209,13 +209,16 @@ fetch('/vault/api/runtime-config')
             html += '<tr><td><strong>Fallback Model</strong></td><td><code>' + esc(data.llm.fallback_model) + '</code></td></tr>';
         }
 
-        // Environment (non-secret)
-        if (data.environment) {
-            Object.entries(data.environment).forEach(([k, v]) => {
-                html += '<tr><td><code>' + esc(k) + '</code></td><td><code>' + esc(v) + '</code></td></tr>';
-            });
-        }
-
+        // Infrastructure
+        html += '</tbody></table>';
+        html += '<h3 style="font-size: 1rem; margin: 1.5rem 0 0.5rem;">Infrastructure</h3>';
+        html += '<table style="table-layout: fixed;"><colgroup><col style="width: 30%;"><col style="width: 70%;"></colgroup><thead><tr><th>Component</th><th>URL / Location</th></tr></thead><tbody>';
+        html += '<tr><td><strong>Edgar API</strong></td><td><a href="' + esc(data.edgar_url) + '" target="_blank" rel="noopener">' + esc(data.edgar_url) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Main Ledger</strong></td><td><a href="' + esc(data.ledger_url) + '" target="_blank" rel="noopener">' + esc(data.ledger_name) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Context Repo</strong></td><td><a href="' + esc(data.context_repo) + '" target="_blank" rel="noopener">' + esc(data.context_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Transcript Repo</strong></td><td><a href="' + esc(data.transcript_repo) + '" target="_blank" rel="noopener">' + esc(data.transcript_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Code Repo</strong></td><td><a href="' + esc(data.code_repo) + '" target="_blank" rel="noopener">' + esc(data.code_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Vault</strong></td><td><a href="' + esc(data.vault_url) + '" target="_blank" rel="noopener">' + esc(data.vault_url) + ' ↗</a></td></tr>';
         html += '</tbody></table>';
         el.innerHTML = html;
     })

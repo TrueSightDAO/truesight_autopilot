@@ -512,6 +512,10 @@ async def runtime_config(
         "code_repo": "https://github.com/TrueSightDAO/truesight_autopilot",
         "context_repo": context_repo,
         "transcript_repo": transcript_repo,
+        "edgar_url": "https://edgar.truesight.me",
+        "ledger_url": "https://docs.google.com/spreadsheets/d/1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU",
+        "ledger_name": "Main Ledger (Ledger history)",
+        "vault_url": "https://sophia.truesight.me/vault",
         "llm": {
             "provider": llm_provider,
             "model": litellm_model or deepseek_model,
