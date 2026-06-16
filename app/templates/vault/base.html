@@ -46,8 +46,12 @@
             padding: 1.5rem;
             margin-bottom: 1.5rem;
             overflow-wrap: break-word;
+            /* Contain wide tables: scroll inside the card rather than bleeding past its right border. */
+            overflow-x: auto;
         }
         .card h2 { font-size: 1.2rem; margin-bottom: 1rem; color: var(--saffron-dark); }
+        /* Explicit scroll wrapper for tables (used by status.html; safe to wrap any table). */
+        .card-table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .btn {
             display: inline-block;
             padding: 0.5rem 1rem;

@@ -55,6 +55,19 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
     }
 
 
+def _optional_identity(request: Request) -> dict | None:
+    """Resolve identity from the JWT cookie if present, else None.
+
+    Used by pages that render for both signed-in and anonymous visitors so the
+    nav can show "Sign out" vs "Sign in" correctly (base.html keys off `identity`).
+    """
+    try:
+        public_key = verify_jwt(request)
+    except HTTPException:
+        return None
+    return _resolve_identity_from_jwt(public_key)
+
+
 def _require_vault_governor(request: Request) -> dict:
     """Dependency: verify JWT and check governor status.
 
@@ -89,16 +102,11 @@ async def vault_page(request: Request):
     If not authenticated, shows the login prompt.
     If authenticated as non-governor, shows the contribution nudge.
     """
-    identity = None
     error = None
     credentials = []
 
-    # Try to authenticate from the JWT cookie
-    try:
-        public_key = verify_jwt(request)
-        identity = _resolve_identity_from_jwt(public_key)
-    except HTTPException:
-        pass  # Not authenticated — show login page
+    # Resolve identity from the JWT cookie (None if not signed in).
+    identity = _optional_identity(request)
 
     if identity and identity["is_governor"]:
         # Load vault and list credentials
@@ -156,7 +164,7 @@ async def vault_status_page(request: Request):
     return _templates.TemplateResponse(
         request,
         "status.html",
-        {},
+        {"identity": _optional_identity(request)},
     )
 
 
@@ -166,7 +174,7 @@ async def vault_followups_page(request: Request):
     return _templates.TemplateResponse(
         request,
         "followups.html",
-        {},
+        {"identity": _optional_identity(request)},
     )
 
 
