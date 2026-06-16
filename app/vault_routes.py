@@ -390,26 +390,26 @@ async def get_audit_log(request: Request):
 
 @router.get("/api/system-status")
 async def get_system_status():
-    """Get system status — active tracks, deploy readiness."""
-    try:
-        from .track_registry import get_all_tracks
+    """Get system status — active tracks, deploy readiness.
 
-        tracks = get_all_tracks()
-    except ImportError:
-        # track_registry not present in this build yet — degrade to "no tracks"
-        # instead of 500ing the whole status endpoint.
-        tracks = []
-    active = [t for t in tracks if t.status == "active"]
+    Tracks come from the canonical deploy_watcher registry (the same one
+    main.py writes chat-turn tracks to). `can_deploy()` accounts for
+    heartbeat timeouts, so a stuck/expired track does not block forever.
+    """
+    from .deploy_watcher import _seconds_since, can_deploy, get_active_tracks
+
+    active = get_active_tracks()
+    ok, _blocking = can_deploy()
     return {
-        "can_deploy": len(active) == 0,
-        "total_tracks": len(tracks),
+        "can_deploy": ok,
+        "total_tracks": len(active),
         "active_tracks": [
             {
-                "label": t.label,
-                "track_type": t.track_type,
-                "status": t.status,
-                "elapsed_s": t.elapsed_s,
-                "max_duration_s": t.max_duration_s,
+                "label": t.get("label"),
+                "track_type": t.get("track_type"),
+                "status": t.get("status"),
+                "elapsed_s": _seconds_since(t.get("started_at", "")),
+                "max_duration_s": t.get("expected_max_duration_s"),
             }
             for t in active
         ],
@@ -440,19 +440,13 @@ async def trigger_deploy(request: Request):
     body = await request.json()
     force = body.get("force", False)
 
-    try:
-        from .track_registry import get_all_tracks
+    from .deploy_watcher import can_deploy
 
-        tracks = get_all_tracks()
-    except ImportError:
-        # track_registry not present yet — no tracks means no active-track block.
-        tracks = []
-    active = [t for t in tracks if t.status == "active"]
-
-    if not force and len(active) > 0:
+    ok, blocking = can_deploy(force=force)
+    if not ok:
         return {
             "success": False,
-            "message": f"Cannot deploy: {len(active)} active track(s) running. Use force deploy to override.",
+            "message": f"Cannot deploy: {len(blocking)} active track(s) running. Use force deploy to override.",
         }
 
     # Signal the deploy watcher
