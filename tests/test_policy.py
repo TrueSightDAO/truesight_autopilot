@@ -24,9 +24,16 @@ from app.policy import (
 
 @pytest.fixture(autouse=True)
 def _reset_governor_cache():
-    """Reset the governor cache before each test so env changes take effect."""
+    """Reset caches before each test, and keep the binding lookup hermetic.
+
+    By default the Column X lookup returns "unbound" so policy tests never
+    touch the Sheets API; binding tests override with their own patch.
+    """
     refresh_governor_cache()
-    yield
+    with patch(
+        "app.identity_binding.check_binding_status", return_value={"bound": False}
+    ):
+        yield
     refresh_governor_cache()
 
 
@@ -220,3 +227,102 @@ class TestRefreshGovernorCache:
             refresh_governor_cache()
             identity = resolve_identity(telegram_id=222)
             assert identity.role == Role.GOVERNOR
+
+
+# ── Column X binding resolution (Phase 1 read-side) ───────────────────────
+
+
+_GOV_CACHE = {
+    "governors": [
+        {"name": "Gary Teh", "email": "gary@truesight.me", "public_key": "PK"}
+    ]
+}
+
+
+class TestBindingResolution:
+    def test_bound_governor_via_column_x(self):
+        """A telegram_id bound (Column X) to a contributor in the Governors
+        cache resolves to GOVERNOR even with an empty env allowlist."""
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": ""}):
+            with patch(
+                "app.identity_binding.check_binding_status",
+                return_value={
+                    "bound": True,
+                    "email": "gary@truesight.me",
+                    "name": "Gary Teh",
+                },
+            ):
+                with patch(
+                    "app.governor_registry.load_governors", return_value=_GOV_CACHE
+                ):
+                    identity = resolve_identity(telegram_id=55555)
+        assert identity.role == Role.GOVERNOR
+        assert identity.name == "Gary Teh"
+
+    def test_bound_member_is_guest_but_keeps_name(self):
+        """A verified non-governor member falls through to GUEST, but the
+        binding name is kept for audit."""
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": ""}):
+            with patch(
+                "app.identity_binding.check_binding_status",
+                return_value={
+                    "bound": True,
+                    "email": "member@example.com",
+                    "name": "Member Person",
+                },
+            ):
+                with patch(
+                    "app.governor_registry.load_governors", return_value=_GOV_CACHE
+                ):
+                    identity = resolve_identity(telegram_id=55555)
+        assert identity.role == Role.GUEST
+        assert identity.name == "Member Person"
+
+    def test_unbound_id_is_guest(self):
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": ""}):
+            with patch(
+                "app.identity_binding.check_binding_status",
+                return_value={"bound": False},
+            ):
+                identity = resolve_identity(telegram_id=55555, display_name="Nobody")
+        assert identity.role == Role.GUEST
+
+    def test_env_allowlist_short_circuits_binding_lookup(self):
+        """An env-allowlisted id never triggers a Sheets binding lookup."""
+        calls = {"n": 0}
+
+        def _spy(_tid):
+            calls["n"] += 1
+            return {"bound": False}
+
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": "55555"}):
+            with patch("app.identity_binding.check_binding_status", _spy):
+                identity = resolve_identity(telegram_id=55555)
+        assert identity.role == Role.GOVERNOR
+        assert calls["n"] == 0
+
+    def test_binding_failure_degrades_to_guest(self):
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": ""}):
+            with patch(
+                "app.identity_binding.check_binding_status",
+                side_effect=RuntimeError("no creds"),
+            ):
+                identity = resolve_identity(telegram_id=55555)
+        assert identity.role == Role.GUEST
+
+    def test_binding_result_is_cached(self):
+        """A second resolve for the same id is served from cache."""
+        calls = {"n": 0}
+
+        def _spy(_tid):
+            calls["n"] += 1
+            return {"bound": True, "email": "gary@truesight.me", "name": "Gary Teh"}
+
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": ""}):
+            with patch("app.identity_binding.check_binding_status", _spy):
+                with patch(
+                    "app.governor_registry.load_governors", return_value=_GOV_CACHE
+                ):
+                    resolve_identity(telegram_id=55555)
+                    resolve_identity(telegram_id=55555)
+        assert calls["n"] == 1
