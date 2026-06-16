@@ -39,7 +39,35 @@ from typing import Any
 # ── paths ────────────────────────────────────────────────────────────────
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_FOLLOWUPS_MD = _REPO_ROOT / "agentic_ai_context" / "OPEN_FOLLOWUPS.md"
+
+
+def _resolve_followups_md() -> Path:
+    """Locate OPEN_FOLLOWUPS.md across the known agentic_ai_context layouts.
+
+    Mirrors app.context.get_context_file: the configured context mirror first
+    (the box syncs the repo to ``<context_repos_dir>/agentic_ai_context``, e.g.
+    ``/opt/truesight_autopilot/context/agentic_ai_context``), then a clone next
+    to this checkout, then the developer's ``~/Applications`` clone. Falls back
+    to the configured location so a missing-file error points at the canonical
+    path. Resolving against the live config (rather than a hard-coded
+    ``<repo>/agentic_ai_context``) is what stopped /vault/followups 500-ing on
+    the box, where the repo isn't a sibling of this checkout.
+    """
+    from .config import settings
+
+    candidates = [
+        settings.context_repos_dir / "agentic_ai_context",
+        _REPO_ROOT / "agentic_ai_context",
+        _REPO_ROOT.parent / "agentic_ai_context",
+        Path.home() / "Applications" / "agentic_ai_context",
+    ]
+    for c in candidates:
+        if (c / "OPEN_FOLLOWUPS.md").exists():
+            return c / "OPEN_FOLLOWUPS.md"
+    return settings.context_repos_dir / "agentic_ai_context" / "OPEN_FOLLOWUPS.md"
+
+
+_FOLLOWUPS_MD = _resolve_followups_md()
 _STATE_DIR = _REPO_ROOT / "followups"
 _STATE_FILE = _STATE_DIR / "state.json"
 
