@@ -127,6 +127,54 @@ def test_wellformed_history_untouched():
     assert json.dumps(history) == before
 
 
+def _tool_messages_well_anchored(history):
+    """DeepSeek invariant: every `tool` msg must sit in a contiguous run that begins
+    immediately after an assistant message carrying `tool_calls`."""
+    for i, msg in enumerate(history):
+        if msg.get("role") == "tool":
+            j = i - 1
+            while j >= 0 and history[j].get("role") == "tool":
+                j -= 1
+            if (
+                j < 0
+                or history[j].get("role") != "assistant"
+                or not history[j].get("tool_calls")
+            ):
+                return False
+    return True
+
+
+def test_drops_nonadjacent_tool_message_thread5712():
+    """The 2026-06-16 brick: a tool result whose owning assistant `tool_calls` exists
+    but is separated by a `user` message. DeepSeek 400s ("must be a response to a
+    preceding message with tool_calls"). The old "id known anywhere" Pass 1 kept it;
+    adjacency-aware Pass 1 drops it and Pass 2 re-anchors a synthetic result."""
+    history = [
+        {"role": "user", "content": "go"},
+        _assistant(["call_X"]),
+        {"role": "user", "content": "status?"},  # breaks adjacency
+        _tool("call_X", "late result"),
+    ]
+    m._sanitise_tool_messages(history)
+    assert _tool_messages_well_anchored(history), history
+    assert _dangling_indices(history) == []
+
+
+def test_multi_tool_run_after_toolcalls_preserved():
+    """A contiguous multi-result run immediately after the assistant is valid and
+    must survive adjacency-aware Pass 1 unchanged."""
+    history = [
+        _assistant(["c0", "c1"]),
+        _tool("c0", "r0"),
+        _tool("c1", "r1"),
+        {"role": "assistant", "content": "done"},
+    ]
+    before = json.dumps(history)
+    m._sanitise_tool_messages(history)
+    assert json.dumps(history) == before
+    assert _tool_messages_well_anchored(history)
+
+
 # ── 0c: atomic write + 0b: healing on load ────────────────────────────────────
 
 

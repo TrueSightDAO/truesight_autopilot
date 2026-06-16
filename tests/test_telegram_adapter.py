@@ -132,6 +132,40 @@ def test_call_chat_whitespace_response_falls_back(monkeypatch):
     assert out.strip() != "" and "empty response" in out.lower()
 
 
+def test_call_chat_with_progress_surfaces_error_event(monkeypatch):
+    # When the /chat stream raises (e.g. a malformed-history 400) it emits an
+    # `error` event and no `done`. The adapter must surface that error text, NOT
+    # the bare "empty response" banner (the 2026-06-16 thread-5712 regression).
+    monkeypatch.setattr(ta, "create_jwt", lambda pk: "tok")
+    monkeypatch.setattr(ta, "_wait_for_brain", lambda: True)
+    monkeypatch.setattr(ta, "send_message", lambda *a, **k: 999)  # status_id
+    monkeypatch.setattr(ta, "edit_message_text", lambda *a, **k: True)
+    monkeypatch.setattr(ta, "delete_message", lambda *a, **k: None)
+
+    class _FakeStream:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_lines(self):
+            yield (
+                'data: {"type": "error", "content": "DeepseekException - Messages '
+                "with role 'tool' must be a response to a preceding message with "
+                'tool_calls"}'
+            )
+
+    monkeypatch.setattr(ta.httpx, "stream", lambda *a, **k: _FakeStream())
+    text, displayed = ta.call_chat_with_progress(1, None, "status?", "tg:1:5712", "PK")
+    assert displayed is True
+    assert "empty response" not in text.lower()
+    assert "error" in text.lower() and "self-heal" in text.lower()
+    assert "DeepseekException" in text
+
+
 def test_chunk_text_splits_long_on_newlines():
     block = "line\n" * 2000  # ~10k chars, well over 4096
     chunks = ta.chunk_text(block)
