@@ -53,6 +53,7 @@ from .daily_briefing import handle_daily_briefing
 from .edgar_logger import EdgarLogger as EdgarDirectClient
 from .email_poller import EmailPoller
 from .fix_agent import FixAgent
+from .followup_loop import followup_loop
 from .github_client import GitHubClient
 from .grok_client import GROK_MODEL, grok_analyze_images
 from .llm_client import LLMClient, LLMError
@@ -429,6 +430,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_context_sync_loop())
         except Exception as e:
             logger.warning("Context sync failed to start: %s", e)
+        try:
+            asyncio.create_task(followup_loop())
+        except Exception as e:
+            logger.warning("Follow-up loop failed to start: %s", e)
     else:
         logger.info("DRY_RUN=true — no background tasks started")
 
