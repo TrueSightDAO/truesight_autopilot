@@ -865,6 +865,22 @@ def call_chat_with_progress(
                     )
                     last_edit = time.time()
 
+                elif etype == "error":
+                    # The /chat stream raised before producing a `done` (e.g. the LLM
+                    # 400s on a malformed-history turn). Surface it instead of the bare
+                    # "empty response" banner — the corrupted transcript self-heals on
+                    # the next turn via _sanitise_tool_messages, so a resend works.
+                    err = (
+                        event.get("content") or "the LLM rejected the request"
+                    ).strip()
+                    if len(err) > 300:
+                        err = err[:300] + "…"
+                    final_response = (
+                        "⚠️ Autopilot hit an error (the thread self-heals — please "
+                        f"resend): {err}"
+                    )
+                    break
+
                 elif etype == "done":
                     final_response = (event.get("response") or "").strip()
                     if event.get("proposal"):

@@ -4343,23 +4343,40 @@ def _sanitise_tool_messages(history: list[dict]) -> None:
     directions means a raced transcript degrades gracefully instead of 400-ing every
     subsequent reply in that thread forever.
     """
-    # Pass 1 — drop orphaned tool messages (result with no owning tool_calls).
-    known_call_ids: set = set()
+    # Pass 1 — drop orphaned tool messages. A ``tool`` message is valid ONLY as part
+    # of a contiguous run immediately following an assistant ``tool_calls`` (DeepSeek:
+    # "Messages with role tool must be a response to a preceding message with
+    # tool_calls"). It is NOT enough for the id to be owned by SOME earlier assistant —
+    # a ``user`` / plain-``assistant`` message between the ``tool_calls`` and the result
+    # breaks adjacency and 400s the whole turn (the 2026-06-16 thread-5712 brick, which
+    # the old "id known anywhere" check let through). Track the open tool zone and drop
+    # any tool message outside it; Pass 2 then re-attaches a synthetic result adjacently.
+    open_call_ids: set = (
+        set()
+    )  # ids opened by the most recent ADJACENT assistant tool_calls
+    in_tool_zone = False
     i = 0
     while i < len(history):
-        m = history[i]
-        if m.get("role") == "assistant":
-            for tc in m.get("tool_calls", []) or []:
-                known_call_ids.add(tc.get("id", ""))
-        if m.get("role") == "tool":
-            if m.get("tool_call_id", "") not in known_call_ids:
-                logger.info(
-                    "Dropped orphaned tool message at index %d id=%s",
-                    i,
-                    m.get("tool_call_id", ""),
-                )
-                history.pop(i)
+        msg = history[i]
+        role = msg.get("role")
+        if role == "tool":
+            if in_tool_zone and msg.get("tool_call_id", "") in open_call_ids:
+                i += 1  # valid result inside the open zone
                 continue
+            logger.info(
+                "Dropped orphaned tool message at index %d id=%s",
+                i,
+                msg.get("tool_call_id", ""),
+            )
+            history.pop(i)
+            continue
+        if role == "assistant" and (msg.get("tool_calls") or []):
+            open_call_ids = {tc.get("id", "") for tc in msg["tool_calls"]}
+            in_tool_zone = True
+        else:
+            # user / system / plain-assistant closes any open tool zone
+            open_call_ids = set()
+            in_tool_zone = False
         i += 1
 
     # Pass 2 — heal orphaned tool_calls (assistant tool_calls lacking results).
