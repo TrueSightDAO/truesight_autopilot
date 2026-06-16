@@ -1,8 +1,13 @@
-"""Governor registry loader — reads dao_members.json from treasury-cache (GitHub raw)."""
+"""Governor registry loader — reads dao_members.json from treasury-cache (GitHub raw).
+
+PR3 adds resolve_key() for content-addressed point-lookup via public_keys/<sha256>.json.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -11,8 +16,15 @@ import httpx
 
 from .config import settings
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_MEMBERS_URL = "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/dao_members.json"
 _CACHE_TTL_SECONDS = int(os.getenv("GOVERNORS_CACHE_TTL", "300"))
+
+# Per-key cache: sha256 -> (fetched_at, data_or_None)
+# Short TTL (60s) so a freshly-registered key is recognized quickly.
+_PER_KEY_CACHE_TTL = int(os.getenv("PER_KEY_CACHE_TTL", "60"))
+_per_key_cache: dict[str, tuple[float, dict | None]] = {}
 
 _cache: dict[str, any] = {
     "data": None,
@@ -23,6 +35,11 @@ _cache: dict[str, any] = {
 
 def _now() -> float:
     return time.time()
+
+
+def _sha256(s: str) -> str:
+    """Compute SHA-256 hex digest of a string."""
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def _load_local(path: Path) -> dict | None:
@@ -38,6 +55,35 @@ def _fetch_remote(url: str) -> dict:
     resp = httpx.get(url, timeout=15.0)
     resp.raise_for_status()
     return resp.json()
+
+
+def _fetch_contents_api(path: str, token: str | None = None) -> dict | None:
+    """Fetch a file from treasury-cache via the GitHub contents API (fresh, no CDN cache).
+
+    Returns the parsed JSON content, or None on 404 / error.
+    Authenticated requests get 5 000/hr rate limit vs 60/hr unauth.
+    """
+    url = f"https://api.github.com/repos/TrueSightDAO/treasury-cache/contents/{path}?ref=main"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "TrueSightDAO-autopilot/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = httpx.get(url, headers=headers, timeout=10.0)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        body = resp.json()
+        # Contents API returns base64-encoded content
+        import base64
+
+        decoded = base64.b64decode(body["content"].replace("\n", "")).decode("utf-8")
+        return json.loads(decoded)
+    except Exception as exc:
+        logger.warning("contents API fetch failed for %s: %s", path, exc)
+        return None
 
 
 def _governor_names() -> set[str]:
@@ -68,6 +114,56 @@ def _extract_governor_keys(members_data: dict) -> list[dict]:
     return governors
 
 
+def resolve_key(public_key_b64: str) -> dict | None:
+    """Resolve a public key to its identity via content-addressed point-lookup.
+
+    Returns a dict with {name, is_governor, email, roles} or None if the key
+    is not found or not ACTIVE.
+
+    Steps:
+    1. h = sha256(public_key)
+    2. Check per-key in-memory cache (60s TTL)
+    3. Fetch public_keys/<h>.json via GitHub contents API (fresh, authenticated)
+    4. Validate status == "ACTIVE"
+    5. Map roles -> is_governor
+    6. Miss/404 -> None
+    """
+    h = _sha256(public_key_b64)
+    now = _now()
+
+    # 1. Check per-key cache
+    cached = _per_key_cache.get(h)
+    if cached is not None and (now - cached[0]) < _PER_KEY_CACHE_TTL:
+        return cached[1]
+
+    # 2. Fetch from GitHub contents API
+    token = os.getenv("TRUESIGHT_DAO_AUTOPILOT", "") or os.getenv("GITHUB_TOKEN", "")
+    key_data = _fetch_contents_api(f"public_keys/{h}.json", token=token)
+
+    if key_data is None:
+        # 404 or error — cache as None (short TTL so retries happen quickly)
+        _per_key_cache[h] = (now, None)
+        return None
+
+    # 3. Validate status
+    status = (key_data.get("status") or "").upper()
+    if status != "ACTIVE":
+        _per_key_cache[h] = (now, None)
+        return None
+
+    # 4. Build identity
+    roles = key_data.get("roles", [])
+    identity = {
+        "name": key_data.get("contributor", "Unknown"),
+        "is_governor": "governor" in roles,
+        "email": "",  # email omitted from per-key files (privacy decision)
+        "roles": roles,
+    }
+
+    _per_key_cache[h] = (now, identity)
+    return identity
+
+
 def load_governors(force_refresh: bool = False) -> dict:
     global _cache
 
@@ -95,11 +191,7 @@ def load_governors(force_refresh: bool = False) -> dict:
         _cache["url"] = cache_url
         return data
     except Exception as exc:
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Failed to fetch remote dao_members.json: %s", exc
-        )
+        logger.warning("Failed to fetch remote dao_members.json: %s", exc)
 
     local_path = settings.static_governors_json
     if local_path is not None:
@@ -122,6 +214,29 @@ def load_governors(force_refresh: bool = False) -> dict:
 
 
 def is_governor(public_key_b64: str) -> bool:
+    """Check if a public key belongs to a registered governor.
+
+    Uses resolve_key() for fast point-lookup first. Falls back to
+    load_governors() enumeration if resolve_key returns None.
+
+    Freshness: if resolve_key returns None (miss or non-ACTIVE), does ONE
+    force-fresh contents-API lookup before refusing. This retires the
+    2026-06-16 staleness bug where a freshly-registered key was denied
+    for up to 5 minutes.
+    """
+    # 1. Try fast point-lookup
+    identity = resolve_key(public_key_b64)
+    if identity is not None and identity.get("is_governor"):
+        return True
+
+    # 2. Force-fresh lookup: clear the per-key cache and retry
+    h = _sha256(public_key_b64)
+    _per_key_cache.pop(h, None)
+    identity = resolve_key(public_key_b64)
+    if identity is not None and identity.get("is_governor"):
+        return True
+
+    # 3. Fallback to monolith enumeration
     data = load_governors()
     governors = data.get("governors", [])
     for g in governors:
@@ -131,4 +246,10 @@ def is_governor(public_key_b64: str) -> bool:
 
 
 def refresh_cache() -> dict:
+    """Force-refresh the monolith cache."""
     return load_governors(force_refresh=True)
+
+
+def clear_per_key_cache() -> None:
+    """Clear the per-key cache (e.g. after a deploy or manual refresh)."""
+    _per_key_cache.clear()
