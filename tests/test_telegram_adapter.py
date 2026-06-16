@@ -118,6 +118,9 @@ def test_chunk_text_whitespace_only_becomes_placeholder():
 
 def test_call_chat_whitespace_response_falls_back(monkeypatch):
     monkeypatch.setattr(ta, "create_jwt", lambda pk: "tok")
+    # call_chat short-circuits to a "restarting" message unless the brain is up;
+    # in this hermetic test there is no brain, so force the readiness gate open.
+    monkeypatch.setattr(ta, "_wait_for_brain", lambda: True)
 
     def fake_post(url, json=None, headers=None, timeout=None):  # noqa: A002
         return httpx.Response(

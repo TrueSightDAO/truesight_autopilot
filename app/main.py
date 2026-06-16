@@ -1138,6 +1138,48 @@ def _strip_dsml(text: str) -> tuple[str, bool]:
     return sanitized.strip(), True
 
 
+# The streaming `done.response` must never be empty or leaked — otherwise Telegram
+# renders a bare "⚠️ Autopilot produced an empty response" banner. The non-streaming
+# /chat handler is already guarded (re-force + non-empty fallback); these keep the
+# streaming path symmetric. Root-caused 2026-06-16: a round-cap-exhausted turn forces
+# a text-only completion, DeepSeek emits DSML tool-call syntax AS content, `_strip_dsml`
+# empties it, and the streaming path had no backstop → blank done.response.
+_EMPTY_TURN_FALLBACK = (
+    "I worked through the maximum number of tool rounds but couldn't land a final "
+    "answer — the request is likely too large to finish in one turn. Let's break it "
+    "into smaller steps and I'll take them one at a time."
+)
+
+
+def _needs_clean_retry(text: str) -> bool:
+    """True when a final answer is blank, a placeholder literal, or leaked
+    tool-call / DSML syntax — i.e. it must be regenerated as clean prose."""
+    if not text or not text.strip():
+        return True
+    if "<tool_call>" in text or _DSML_OPEN_TOKEN in text:
+        return True
+    return text.strip() in ("(empty response)", "(no response)")
+
+
+def _ensure_nonempty_final(assistant_text: str, force_clean) -> tuple[str, bool]:
+    """Guarantee a non-empty, non-leaked final answer for the streaming path.
+
+    `force_clean` is a zero-arg callable that runs ONE `tools=None` completion and
+    returns its extracted text. If the (already DSML-stripped) `assistant_text` is
+    blank / leaked / a placeholder literal, force one clean completion; if that is
+    still unusable, fall back to a fixed non-empty message. Returns
+    `(final_text, forced_again)` so the caller can flag `wanted_more_rounds`.
+    Mirrors the non-streaming `/chat` guard."""
+    forced_again = False
+    text = assistant_text
+    if _needs_clean_retry(text):
+        forced_again = True
+        text, _ = _strip_dsml(force_clean() or "")
+    if _needs_clean_retry(text):
+        text = _EMPTY_TURN_FALLBACK
+    return text, forced_again
+
+
 # Canonical labels from dao_client modules — each event type has exact field names.
 # Source: truesight_dao_client/modules/{report_inventory_movement,report_sales,...}.py
 _CANONICAL_LABELS: dict[str, list[str]] = {
@@ -2421,6 +2463,22 @@ async def _run_tool_round_loop(
         logger.info(
             "[%d] %sStripped DSML leakage from final response", req_id, log_prefix
         )
+
+    # Never let a blank / leaked final answer reach the stream — the non-streaming
+    # /chat path is already guarded, this keeps the streaming (Telegram) path
+    # symmetric so it can't surface an empty `done.response` banner.
+    def _force_clean() -> str:
+        logger.info(
+            "[%d] %sForcing clean text-only completion (blank/leaked final answer)",
+            req_id,
+            log_prefix,
+        )
+        return client.extract_text(client.chat(system_prompt, history, tools=None))
+
+    assistant_text, forced_again = _ensure_nonempty_final(assistant_text, _force_clean)
+    if forced_again:
+        state["wanted_more_rounds"] = True
+
     if state["wanted_more_rounds"]:
         yield _sse_event(
             "wanted_more_rounds",
