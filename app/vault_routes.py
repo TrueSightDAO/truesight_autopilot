@@ -437,6 +437,90 @@ async def system_status(
     return JSONResponse(status)
 
 
+
+@router.get("/api/runtime-config")
+async def runtime_config(
+    request: Request, identity: dict = Depends(_require_vault_governor)
+):
+    """Get runtime configuration — commit hash, context repo, transcript repo, LLM provider, etc.
+    
+    Useful for debugging and for operators setting up their own instance.
+    """
+    import subprocess
+    import os
+    from pathlib import Path
+
+    def _get_git_info():
+        try:
+            r = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+                cwd=Path(__file__).resolve().parent.parent,
+            )
+            commit = r.stdout.strip() if r.returncode == 0 else "unknown"
+        except Exception:
+            commit = "unknown"
+
+        try:
+            r = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=5,
+                cwd=Path(__file__).resolve().parent.parent,
+            )
+            origin = r.stdout.strip() if r.returncode == 0 else "unknown"
+        except Exception:
+            origin = "unknown"
+
+        try:
+            r = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+                cwd=Path(__file__).resolve().parent.parent,
+            )
+            branch = r.stdout.strip() if r.returncode == 0 else "unknown"
+        except Exception:
+            branch = "unknown"
+
+        return {"commit": commit, "origin": origin, "branch": branch}
+
+    git_info = _get_git_info()
+
+    # Context repos
+    context_repo = os.getenv("AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git")
+    transcript_repo = "https://github.com/TrueSightDAO/truesight_autopilot_transcript"
+
+    # LLM config
+    llm_provider = os.getenv("LLM_PROVIDER", "deepseek")
+    litellm_model = os.getenv("LITELLM_MODEL", "")
+    deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    bigmodel_model = os.getenv("BIGMODEL_MODEL", "glm-4.5")
+
+    # Non-secret env vars
+    safe_env = {}
+    secret_suffixes = ("KEY", "SECRET", "TOKEN", "PAT", "PASSWORD", "HASH", "API_", "TOKENS_DIR")
+    for k, v in sorted(os.environ.items()):
+        if any(k.upper().endswith(s) or k.upper().startswith(s) for s in secret_suffixes):
+            continue
+        if k.startswith("_"):
+            continue
+        safe_env[k] = v
+
+    return {
+        "service": "TrueSight DAO Autopilot",
+        "version": "1.0.0",
+        "git": git_info,
+        "code_repo": "https://github.com/TrueSightDAO/truesight_autopilot",
+        "context_repo": context_repo,
+        "transcript_repo": transcript_repo,
+        "llm": {
+            "provider": llm_provider,
+            "model": litellm_model or deepseek_model,
+            "fallback_model": bigmodel_model,
+        },
+        "environment": safe_env,
+    }
+
+
 @router.post("/api/deploy")
 async def trigger_deploy(
     request: Request, identity: dict = Depends(_require_vault_governor)
