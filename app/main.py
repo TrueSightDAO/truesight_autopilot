@@ -171,6 +171,7 @@ def _unregister_chat_turn_track(session_id: str) -> None:
     except Exception as e:  # noqa: BLE001
         logger.debug("chat-turn track unregister failed (%s)", e)
 
+
 # Per-session live-progress record — updated by _run_tool_round_loop so a
 # second message in the same thread can introspect what the running turn is
 # doing. Read-only from outside the turn (lock-bypassing for progress queries).
