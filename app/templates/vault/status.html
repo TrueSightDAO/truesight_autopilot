@@ -63,25 +63,43 @@
     </table>
     </div>
 
-    <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Self-Replication <span style="font-size: 0.75rem; background: var(--success); color: white; padding: 0.15rem 0.4rem; border-radius: 3px; vertical-align: middle;">near-term</span></h3>
+    <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Self-Replication <span style="font-size: 0.75rem; background: var(--success); color: white; padding: 0.15rem 0.4rem; border-radius: 3px; vertical-align: middle;">ready</span></h3>
     <p style="font-size: 0.9rem; color: var(--text-muted);">
         A governor can already say:<br>
-        <em>"Sophia, spawn a new instance for Bilal on that server."</em><br><br>
-        All the pieces exist today:
+        <em>"Sophia, spawn a new instance for Bilal"</em> (clone) or<br>
+        <em>"Sophia, fork the ecosystem for Liz"</em> (new DAO).<br><br>
+        There are <strong>two paths</strong>:
     </p>
-    <ol style="margin-left: 1.5rem; line-height: 1.8; font-size: 0.9rem; color: var(--text-muted);">
-        <li><strong>SSH into target server</strong> — SSH keys already in the vault</li>
-        <li><strong>Clone the codebase</strong> — <code>git clone</code> from GitHub</li>
-        <li><strong>Register a new DAO identity</strong> — <code>register_identity()</code> tool exists</li>
-        <li><strong>Fork the context repo</strong> — GitHub API with PAT in the vault</li>
-        <li><strong>Create an empty transcript repo</strong> — GitHub API</li>
-        <li><strong>Provision credentials into the new vault</strong> — the governor adds the 3 non-negotiables + AWS key via the vault UI, then I seed the rest</li>
-        <li><strong>Start the service</strong> — <code>systemctl</code> on the target host</li>
-    </ol>
+
+    <div style="display: flex; gap: 1rem; margin: 1rem 0; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 200px; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; background: #f8f6f2;">
+            <h4 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--saffron-dark);">Clone</h4>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+                Same DAO, new operator. New Sophia shares the existing Edgar API and ledger.
+            </p>
+            <ul style="font-size: 0.85rem; color: var(--text-muted); margin-left: 1rem; line-height: 1.6;">
+                <li>~10 minutes</li>
+                <li>Governor provides 3 credentials</li>
+                <li>Shares existing infrastructure</li>
+            </ul>
+        </div>
+        <div style="flex: 1; min-width: 200px; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; background: #f8f6f2;">
+            <h4 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--saffron-dark);">Fork</h4>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+                New DAO, new rules. New Sophia + new Edgar + new DB + blank context.
+            </p>
+            <ul style="font-size: 0.85rem; color: var(--text-muted); margin-left: 1rem; line-height: 1.6;">
+                <li>~1 hour</li>
+                <li>Governor writes their own rules</li>
+                <li>Completely independent ecosystem</li>
+            </ul>
+        </div>
+    </div>
+
     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
-        <strong>Try it:</strong> Just say <em>"Sophia, spawn a new instance for [name] on [host]"</em> and I'll follow the
+        <strong>Try it:</strong> Say <em>"Sophia, spawn a new instance for [name]"</em> or <em>"Sophia, fork the ecosystem for [name]"</em>.
+        I'll follow the
         <a href="https://github.com/TrueSightDAO/agentic_ai_context/blob/main/SELF_REPLICATION_SOP.md" target="_blank" rel="noopener">Self-Replication SOP</a>.
-        The target server needs SSH access and Python 3.10+.
         The new instance's <code>/vault/status</code> page will show its own runtime config.
     </p>
 
