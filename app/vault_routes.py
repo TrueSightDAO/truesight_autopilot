@@ -391,9 +391,14 @@ async def get_audit_log(request: Request):
 @router.get("/api/system-status")
 async def get_system_status():
     """Get system status — active tracks, deploy readiness."""
-    from .track_registry import get_all_tracks
+    try:
+        from .track_registry import get_all_tracks
 
-    tracks = get_all_tracks()
+        tracks = get_all_tracks()
+    except ImportError:
+        # track_registry not present in this build yet — degrade to "no tracks"
+        # instead of 500ing the whole status endpoint.
+        tracks = []
     active = [t for t in tracks if t.status == "active"]
     return {
         "can_deploy": len(active) == 0,
@@ -435,9 +440,13 @@ async def trigger_deploy(request: Request):
     body = await request.json()
     force = body.get("force", False)
 
-    from .track_registry import get_all_tracks
+    try:
+        from .track_registry import get_all_tracks
 
-    tracks = get_all_tracks()
+        tracks = get_all_tracks()
+    except ImportError:
+        # track_registry not present yet — no tracks means no active-track block.
+        tracks = []
     active = [t for t in tracks if t.status == "active"]
 
     if not force and len(active) > 0:
