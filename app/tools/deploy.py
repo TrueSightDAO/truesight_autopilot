@@ -360,6 +360,14 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
     # long Kopi Bay onboarding turn held the lock). Checking the hash first also
     # answers the common "is the latest already deployed?" question without
     # bouncing the service at all.
+    #
+    # However, a hash match alone is NOT sufficient: when code is pulled by a
+    # merge PR's auto-pull (not by the deploy tool itself), HEAD matches
+    # origin/main while the running process still has the OLD code in memory
+    # (Python doesn't auto-reload modules). So before returning noop, we also
+    # check whether the running process is stale — i.e., started before a key
+    # source file was last modified. If stale, we proceed with the deploy
+    # (restart) to load the new code.
     if os.environ.get(_PHASE_ENV) != _PHASE_TWO and _is_local():
         try:
             _rd = settings.ec2_remote_dir
@@ -367,17 +375,29 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
             local_sha = _run_local("git rev-parse HEAD", cwd=_rd, timeout=10)
             origin_sha = _run_local("git rev-parse origin/main", cwd=_rd, timeout=10)
             if local_sha and local_sha == origin_sha:
-                logger.info("Deploy NO-OP — already on latest %s", local_sha[:8])
-                return json.dumps(
-                    {
-                        "status": "noop",
-                        "commit": local_sha,
-                        "message": (
-                            f"Already on the latest commit {local_sha[:8]} — "
-                            "no deploy needed. Did NOT restart. Do not retry."
-                        ),
-                    }
-                )
+                # ── Process-staleness check ────────────────────────────────
+                # If the running process started BEFORE a key source file was
+                # last modified on disk, the process is stale — it's running
+                # old code despite HEAD matching origin/main. In that case,
+                # proceed with the deploy (restart) instead of returning noop.
+                _stale = _is_process_stale(_rd)
+                if _stale:
+                    logger.info(
+                        "Process is stale (started before source file was modified) — "
+                        "proceeding with deploy despite HEAD matching origin/main"
+                    )
+                else:
+                    logger.info("Deploy NO-OP — already on latest %s", local_sha[:8])
+                    return json.dumps(
+                        {
+                            "status": "noop",
+                            "commit": local_sha,
+                            "message": (
+                                f"Already on the latest commit {local_sha[:8]} — "
+                                "no deploy needed. Did NOT restart. Do not retry."
+                            ),
+                        }
+                    )
         except DeployError as e:
             logger.warning(
                 "Deploy hash-precheck failed (%s) — proceeding with deploy", e
