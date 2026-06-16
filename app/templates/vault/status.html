@@ -63,23 +63,25 @@
     </table>
     </div>
 
-    <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Self-Replication (coming soon)</h3>
+    <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Self-Replication <span style="font-size: 0.75rem; background: var(--success); color: white; padding: 0.15rem 0.4rem; border-radius: 3px; vertical-align: middle;">near-term</span></h3>
     <p style="font-size: 0.9rem; color: var(--text-muted);">
-        In the future, a governor will be able to say:<br>
-        <em>"Sophia, spawn a new instance for Bilal on that server with his own context repo."</em><br><br>
-        The autopilot would then:
+        A governor can already say:<br>
+        <em>"Sophia, spawn a new instance for Bilal on that server."</em><br><br>
+        All the pieces exist today:
     </p>
     <ol style="margin-left: 1.5rem; line-height: 1.8; font-size: 0.9rem; color: var(--text-muted);">
-        <li>SSH into the target server and clone the codebase</li>
-        <li>Register a new DAO identity for the instance</li>
-        <li>Fork the context repo and seed it with starter templates</li>
-        <li>Create an empty transcript repo</li>
-        <li>Provision the required credentials into the vault</li>
-        <li>Start the service and report back with the login URL</li>
+        <li><strong>SSH into target server</strong> — SSH keys already in the vault</li>
+        <li><strong>Clone the codebase</strong> — <code>git clone</code> from GitHub</li>
+        <li><strong>Register a new DAO identity</strong> — <code>register_identity()</code> tool exists</li>
+        <li><strong>Fork the context repo</strong> — GitHub API with PAT in the vault</li>
+        <li><strong>Create an empty transcript repo</strong> — GitHub API</li>
+        <li><strong>Provision credentials into the new vault</strong> — the governor adds the 3 non-negotiables + AWS key via the vault UI, then I seed the rest</li>
+        <li><strong>Start the service</strong> — <code>systemctl</code> on the target host</li>
     </ol>
     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
-        This requires the target server to be reachable via SSH and have Docker/Python installed.
-        The <code>/vault/status</code> page on the new instance will show its own runtime config.
+        <strong>Try it:</strong> Just say <em>"Sophia, spawn a new instance for [name] on [host]"</em> and I'll walk through the steps.
+        The target server needs SSH access and Python 3.10+.
+        The new instance's <code>/vault/status</code> page will show its own runtime config.
     </p>
 
     <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Architecture Note</h3>
