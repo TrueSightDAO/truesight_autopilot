@@ -5,7 +5,8 @@ Pipeline:
    Column G of Contributors Digital Signatures, email the plaintext code.
 2. Consume + bind: user pastes the code in DM → hash matches Column G →
    set Column D = verified, Verification Key Consumed = true,
-   write Column H (Telegram ID) = numeric telegram_id.
+   write Column X (Telegram ID) = numeric telegram_id and
+   Column H (Telegram Handle) = @username.
 3. Emit [IDENTITY BINDING EVENT] for audit.
 
 Security invariants:
@@ -42,7 +43,8 @@ MAX_REQUESTS_PER_WINDOW = 3
 
 # Google Sheet column indices (0-based)
 COL_EMAIL = 3  # D — email address
-COL_TELEGRAM_ID = 7  # H — Telegram ID (numeric)
+COL_TELEGRAM_HANDLE = 7  # H — Telegram Handle (@username)
+COL_TELEGRAM_ID = 23  # X — Telegram ID (numeric)
 COL_DIGITAL_SIG = 17  # R — Digital Signature (public key)
 COL_VERIFIED = 3  # D in Digital Signatures sheet — Status
 COL_VERIFICATION_KEY = 6  # G — Verification Key (hash)
@@ -399,9 +401,13 @@ def consume_challenge(
 
     sheet_name, row_idx, row = contributor
 
-    # Update the contact sheet with Telegram ID (Column H)
+    # Update the contact sheet with Telegram ID (Column X) and handle (Column H)
     if sheet_name == SHEET_CONTACT:
         _update_sheet_cell(SHEET_CONTACT, row_idx, COL_TELEGRAM_ID, str(telegram_id))
+        if telegram_username:
+            _update_sheet_cell(
+                SHEET_CONTACT, row_idx, COL_TELEGRAM_HANDLE, telegram_username
+            )
 
     # Update the signatures sheet
     if sheet_name == SHEET_SIGNATURES:
@@ -476,9 +482,10 @@ def revoke_binding(email: str, revoked_by: str) -> dict[str, Any]:
 
     sheet_name, row_idx, row = contributor
 
-    # Clear Telegram ID from contact sheet
+    # Clear Telegram ID (Column X) and handle (Column H) from contact sheet
     if sheet_name == SHEET_CONTACT:
         _update_sheet_cell(SHEET_CONTACT, row_idx, COL_TELEGRAM_ID, "")
+        _update_sheet_cell(SHEET_CONTACT, row_idx, COL_TELEGRAM_HANDLE, "")
 
     # Reset verification status
     if sheet_name == SHEET_SIGNATURES:
