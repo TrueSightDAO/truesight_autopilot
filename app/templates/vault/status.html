@@ -51,7 +51,9 @@
     </ol>
 
     <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Required Credentials</h3>
-    <table>
+    <div class="card-table-wrap">
+    <table class="replicate-creds-table">
+        <colgroup><col style="width:22%"><col style="width:33%"><col style="width:45%"></colgroup>
         <thead><tr><th>Credential</th><th>Env Var</th><th>Why</th></tr></thead>
         <tbody>
             <tr><td>LLM API Key</td><td><code>DEEPSEEK_API_KEY</code> or <code>LITELLM_API_KEY</code></td><td>Required to reason and respond. Without it, the autopilot cannot function.</td></tr>
@@ -59,6 +61,7 @@
             <tr><td>Telegram Bot Token</td><td><code>TELEGRAM_BOT_TOKEN</code></td><td>Required to receive and send messages. Get one from <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>.</td></tr>
         </tbody>
     </table>
+    </div>
 
     <h3 style="font-size: 1rem; margin: 1rem 0 0.5rem;">Self-Replication (coming soon)</h3>
     <p style="font-size: 0.9rem; color: var(--text-muted);">
