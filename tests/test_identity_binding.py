@@ -219,10 +219,13 @@ class TestRevokeBinding:
 class TestCheckBindingStatus:
     def test_bound_telegram_id(self):
         with patch("app.identity_binding._get_sheets_service") as mock_service:
+            row = [""] * 24
+            row[0] = "Gary Teh"  # A — name
+            row[3] = "gary@test.com"  # D — email
+            row[7] = "@garyteh"  # H — Telegram Handle
+            row[23] = "12345"  # X — Telegram ID
             mock_service.return_value.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
-                "values": [
-                    ["Gary Teh", "", "", "gary@test.com", "", "", "", "12345"],
-                ]
+                "values": [row]
             }
             result = check_binding_status(12345)
             assert result["bound"] is True
@@ -230,10 +233,13 @@ class TestCheckBindingStatus:
 
     def test_unbound_telegram_id(self):
         with patch("app.identity_binding._get_sheets_service") as mock_service:
+            row = [""] * 24
+            row[0] = "Gary Teh"  # A — name
+            row[3] = "gary@test.com"  # D — email
+            row[7] = "@garyteh"  # H — Telegram Handle
+            row[23] = "67890"  # X — Telegram ID
             mock_service.return_value.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
-                "values": [
-                    ["Gary Teh", "", "", "gary@test.com", "", "", "", "67890"],
-                ]
+                "values": [row]
             }
             result = check_binding_status(12345)
             assert result["bound"] is False
