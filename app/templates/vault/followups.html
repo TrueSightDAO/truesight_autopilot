@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Monitored Follow-ups{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h2>Monitored Follow-ups</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1rem;">
+        Shows all active <code>```followup</code> blocks from
+        <code>OPEN_FOLLOWUPS.md</code> and their scheduling state.
+        The follow-up loop checks these hourly and escalates when conditions strike
+        or deadlines pass.
+    </p>
+    <div id="followups-table">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">Loading…</p>
+    </div>
+</div>
+
+<div class="card">
+    <h2>How it works</h2>
+    <ul style="line-height: 1.8; font-size: 0.9rem; margin-left: 1.25rem;">
+        <li><strong>Probe strikes</strong> — when a condition (e.g. email reply, elapsed days) is met, Sophia spins a full turn in the originating Telegram thread.</li>
+        <li><strong>Escalation</strong> — if the escalation deadline passes without a strike, Sophia pings the thread once as a reminder.</li>
+        <li><strong>Resolution</strong> — once struck or manually closed, the follow-up moves to <code>## Recently shipped</code> in OPEN_FOLLOWUPS.md.</li>
+    </ul>
+</div>
+
+<script>
+    async function loadFollowups() {
+        const el = document.getElementById('followups-table');
+        try {
+            const resp = await fetch('/vault/api/followups');
+            if (!resp.ok) {
+                el.innerHTML = '<p style="color: var(--danger);">Failed to load follow-ups (HTTP ' + resp.status + ').</p>';
+                return;
+            }
+            const data = await resp.json();
+
+            if (!data.followups || data.followups.length === 0) {
+                el.innerHTML = '<div class="empty-state"><p>No active follow-ups.</p><p style="font-size: 0.85rem;">Add a <code>```followup</code> block to <code>OPEN_FOLLOWUPS.md</code> to start monitoring.</p></div>';
+                return;
+            }
+
+            let html = '<table><thead><tr>' +
+                '<th>Title</th>' +
+                '<th>Status</th>' +
+                '<th>Condition</th>' +
+                '<th>Schedule</th>' +
+                '<th>Thread</th>' +
+                '<th>Created</th>' +
+                '<th>Attempts</th>' +
+                '</tr></thead><tbody>';
+
+            data.followups.forEach(f => {
+                const statusBadge = f.status === 'open'
+                    ? '<span class="badge" style="background: #e8f5e9; color: #2e7d32;">Open</span>'
+                    : f.status === 'resolved'
+                        ? '<span class="badge" style="background: #e3f2fd; color: #1565c0;">Resolved</span>'
+                        : '<span class="badge" style="background: #fce4ec; color: #c62828;">Aborted</span>';
+
+                const condition = f.condition || {};
+                const kind = condition.kind || 'unknown';
+                const schedule = f.schedule || {};
+                const check = schedule.check || 'daily';
+                const escalate = schedule.escalate_after_days || '-';
+
+                const threadLink = f.thread_id
+                    ? '<a href="https://t.me/c/' + (f.chat_id ? f.chat_id.replace('-100', '') : '') + '/' + f.thread_id + '" target="_blank">#' + f.thread_id + '</a>'
+                    : '-';
+
+                const state = data.state[f.id] || {};
+                const attempts = state.attempts || 0;
+
+                html += '<tr>' +
+                    '<td><strong>' + escapeHtml(f.title || f.id) + '</strong></td>' +
+                    '<td>' + statusBadge + '</td>' +
+                    '<td>' + escapeHtml(kind) + '</td>' +
+                    '<td>' + escapeHtml(check) + ' / ' + escalate + 'd</td>' +
+                    '<td>' + threadLink + '</td>' +
+                    '<td style="font-size: 0.8rem;">' + (f.created_at || '-') + '</td>' +
+                    '<td>' + attempts + '</td>' +
+                    '</tr>';
+            });
+
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        } catch (e) {
+            el.innerHTML = '<p style="color: var(--danger);">Network error loading follow-ups.</p>';
+        }
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    loadFollowups();
+</script>
+{% endblock %}

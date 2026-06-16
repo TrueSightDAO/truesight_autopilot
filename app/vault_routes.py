@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -160,6 +160,16 @@ async def vault_status_page(request: Request):
     )
 
 
+@router.get("/followups", response_class=HTMLResponse)
+async def vault_followups_page(request: Request):
+    """Follow-ups monitoring page — shows all active follow-ups and their state."""
+    return _templates.TemplateResponse(
+        request,
+        "followups.html",
+        {},
+    )
+
+
 # ── API endpoints ──────────────────────────────────────────────────────────
 
 
@@ -259,349 +269,212 @@ async def check_auth(request: Request):
 @router.post("/api/whoami")
 async def whoami(request: Request):
     """Recognize a public key WITHOUT a signed-in session, so the login page can
-    greet a returning governor by name *before* they sign in. No signature is
-    required (it's just an identity lookup of the caller's own key); the email is
-    never returned, so it can't be used to harvest contact info."""
+    greet a returning governor by name *before* they sign the challenge."""
     body = await request.json()
     public_key = (body.get("public_key") or "").strip()
     if not public_key:
-        return {"recognized": False, "is_governor": False}
+        return {"recognized": False}
+
     identity = _resolve_identity_from_jwt(public_key)
     if identity["is_governor"]:
-        return {"recognized": True, "name": identity["name"], "is_governor": True}
-    return {"recognized": False, "is_governor": False}
+        return {"recognized": True, "name": identity["name"]}
+    return {"recognized": False}
 
 
 @router.get("/api/credentials")
-async def list_credentials(
-    request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """List all credential names + metadata (never values)."""
-    try:
-        vault = get_vault()
-        refs = vault.list_refs()
-        return JSONResponse(
+async def list_credentials(request: Request):
+    """List all credential refs (no values). Requires governor auth."""
+    _require_vault_governor(request)
+    vault = get_vault()
+    refs = vault.list_refs()
+    return {
+        "credentials": [
             {
-                "credentials": [
-                    {
-                        "name": r.name,
-                        "purpose": r.purpose,
-                        "scopes": r.scopes,
-                        "version": r.version,
-                        "created_by": r.created_by,
-                        "created_at": r.created_at,
-                    }
-                    for r in refs
-                ]
+                "name": r.name,
+                "purpose": r.purpose,
+                "version": r.version,
+                "created_by": r.created_by,
+                "created_at": r.created_at,
+                "scopes": r.scopes,
             }
-        )
-    except Exception as e:
-        logger.error("Failed to list credentials: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+            for r in refs
+        ]
+    }
 
 
 @router.post("/api/credentials")
-async def add_credential(
-    request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Add a new credential."""
+async def add_credential(request: Request):
+    """Add a new credential. Requires governor auth."""
+    _require_vault_governor(request)
     body = await request.json()
-    name = body.get("name", "").strip()
-    value = body.get("value", "").strip()
-    purpose = body.get("purpose", "").strip()
-    scopes_raw = body.get("scopes", "").strip()
+    name = (body.get("name") or "").strip()
+    value = (body.get("value") or "").strip()
+    purpose = (body.get("purpose") or "").strip()
+    scopes = body.get("scopes", [])
+    created_by = body.get("created_by", "Vault UI")
 
     if not name or not value:
-        raise HTTPException(status_code=400, detail="Name and value are required.")
+        raise HTTPException(status_code=400, detail="name and value are required.")
 
-    scopes = (
-        [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else []
-    )
-
+    vault = get_vault()
     try:
-        vault = get_vault()
-        vault.add(name, value, purpose or name, scopes, identity["name"])
-        return JSONResponse({"success": True, "name": name})
+        entry = vault.add(name, value, purpose, scopes, created_by)
+        return {
+            "success": True,
+            "name": entry.name,
+            "version": entry.version,
+        }
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except Exception as e:
-        logger.error("Failed to add credential: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/api/credentials/{name}")
-async def delete_credential(
-    name: str, request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Delete a credential."""
+async def delete_credential(name: str, request: Request):
+    """Delete a credential. Requires governor auth."""
+    _require_vault_governor(request)
+    vault = get_vault()
     try:
-        vault = get_vault()
-        vault.delete(name, identity["name"])
-        return JSONResponse({"success": True})
+        vault.delete(name, deleted_by="Vault UI")
+        return {"success": True}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error("Failed to delete credential: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/credentials/{name}/rotate")
-async def rotate_credential(
-    name: str, request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Rotate (update) a credential to a new version."""
+async def rotate_credential(name: str, request: Request):
+    """Rotate (update) a credential. Requires governor auth."""
+    _require_vault_governor(request)
     body = await request.json()
-    new_value = body.get("value", "").strip()
-    new_purpose = body.get("purpose", "").strip() or None
-
+    new_value = (body.get("value") or "").strip()
     if not new_value:
         raise HTTPException(status_code=400, detail="New value is required.")
 
+    vault = get_vault()
     try:
-        vault = get_vault()
-        entry = vault.update(name, new_value, identity["name"], new_purpose=new_purpose)
-        return JSONResponse(
-            {
-                "success": True,
-                "name": name,
-                "new_version": entry.version,
-            }
-        )
-    except KeyError as e:
+        entry = vault.update(name, new_value, updated_by="Vault UI")
+        return {
+            "success": True,
+            "name": entry.name,
+            "version": entry.version,
+        }
+    except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error("Failed to rotate credential: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/audit-log")
-async def get_audit_log(
-    request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Get the vault audit log."""
-    try:
-        vault = get_vault()
-        entries = vault.get_audit_log(limit=200)
-        return JSONResponse(
+async def get_audit_log(request: Request):
+    """Get the vault audit log. Requires governor auth."""
+    _require_vault_governor(request)
+    vault = get_vault()
+    log = vault.get_audit_log()
+    return {
+        "entries": [
             {
-                "entries": [
-                    {
-                        "action": e.action,
-                        "credential_name": e.credential_name,
-                        "version": e.version,
-                        "actor": e.actor,
-                        "timestamp": e.timestamp,
-                        "details": e.details,
-                    }
-                    for e in entries
-                ]
+                "timestamp": e.timestamp,
+                "action": e.action,
+                "credential_name": e.credential_name,
+                "actor": e.actor,
             }
-        )
-    except Exception as e:
-        logger.error("Failed to read audit log: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-def _enrich_track(track: dict) -> dict:
-    """Add thread_id, a clickable Telegram deep-link, and the topic name to a track,
-    derived from its session_id (tg:<chat>:<thread>)."""
-    sid = (track.get("metadata") or {}).get("session_id") or track.get("id") or ""
-    parts = str(sid).split(":")
-    if len(parts) >= 3 and parts[0] == "tg":
-        chat_id, thread_id = parts[1], parts[2]
-        track["thread_id"] = thread_id
-        track["chat_id"] = chat_id
-        # Telegram deep-link to the forum topic (strip the -100 supergroup prefix).
-        if chat_id.startswith("-100"):
-            track["telegram_link"] = f"https://t.me/c/{chat_id[4:]}/{thread_id}"
-        try:
-            from .topic_names import get_topic_name
-
-            track["thread_name"] = get_topic_name(thread_id)
-        except Exception:
-            track["thread_name"] = None
-    return track
+            for e in log
+        ]
+    }
 
 
 @router.get("/api/system-status")
-async def system_status(
-    request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Get system status including active tracks and deploy readiness."""
-    from .deploy_watcher import get_system_status as _get_status
+async def get_system_status():
+    """Get system status — active tracks, deploy readiness."""
+    from .track_registry import get_all_tracks
 
-    status = _get_status()
-    status["active_tracks"] = [
-        _enrich_track(t) for t in status.get("active_tracks", [])
-    ]
-    return JSONResponse(status)
-
+    tracks = get_all_tracks()
+    active = [t for t in tracks if t.status == "active"]
+    return {
+        "can_deploy": len(active) == 0,
+        "total_tracks": len(tracks),
+        "active_tracks": [
+            {
+                "label": t.label,
+                "track_type": t.track_type,
+                "status": t.status,
+                "elapsed_s": t.elapsed_s,
+                "max_duration_s": t.max_duration_s,
+            }
+            for t in active
+        ],
+    }
 
 
 @router.get("/api/runtime-config")
-async def runtime_config(
-    request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Get runtime configuration — commit hash, context repo, transcript repo, LLM provider, etc.
-    
-    Useful for debugging and for operators setting up their own instance.
-    """
-    import subprocess
+async def get_runtime_config():
+    """Get runtime configuration (non-sensitive)."""
     import os
-    from pathlib import Path
-
-    def _get_git_info():
-        try:
-            r = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=5,
-                cwd=Path(__file__).resolve().parent.parent,
-            )
-            commit = r.stdout.strip() if r.returncode == 0 else "unknown"
-        except Exception:
-            commit = "unknown"
-
-        try:
-            r = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True, text=True, timeout=5,
-                cwd=Path(__file__).resolve().parent.parent,
-            )
-            origin = r.stdout.strip() if r.returncode == 0 else "unknown"
-        except Exception:
-            origin = "unknown"
-
-        try:
-            r = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, timeout=5,
-                cwd=Path(__file__).resolve().parent.parent,
-            )
-            branch = r.stdout.strip() if r.returncode == 0 else "unknown"
-        except Exception:
-            branch = "unknown"
-
-        return {"commit": commit, "origin": origin, "branch": branch}
-
-    git_info = _get_git_info()
-
-    # Context repos
-    context_repo = os.getenv("AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git")
-    transcript_repo = "https://github.com/TrueSightDAO/truesight_autopilot_transcript"
-
-    # LLM config
-    llm_provider = os.getenv("LLM_PROVIDER", "deepseek")
-    litellm_model = os.getenv("LITELLM_MODEL", "")
-    deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    bigmodel_model = os.getenv("BIGMODEL_MODEL", "glm-4.5")
-
-    # Non-secret env vars
-    safe_env = {}
-    secret_suffixes = ("KEY", "SECRET", "TOKEN", "PAT", "PASSWORD", "HASH", "API_", "TOKENS_DIR")
-    for k, v in sorted(os.environ.items()):
-        if any(k.upper().endswith(s) or k.upper().startswith(s) for s in secret_suffixes):
-            continue
-        if k.startswith("_"):
-            continue
-        safe_env[k] = v
 
     return {
-        "service": "TrueSight DAO Autopilot",
-        "version": "1.0.0",
-        "git": git_info,
-        "code_repo": "https://github.com/TrueSightDAO/truesight_autopilot",
-        "context_repo": context_repo,
-        "transcript_repo": transcript_repo,
-        "edgar_url": "https://edgar.truesight.me",
-        "ledger_url": "https://docs.google.com/spreadsheets/d/1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU",
-        "ledger_name": "Main Ledger (Ledger history)",
-        "vault_url": "https://sophia.truesight.me/vault",
-        "llm": {
-            "provider": llm_provider,
-            "model": litellm_model or deepseek_model,
-            "fallback_model": bigmodel_model,
-        },
-        "environment": safe_env,
+        "environment": os.environ.get("ENVIRONMENT", "production"),
+        "version": os.environ.get("AUTOPILOT_VERSION", "unknown"),
+        "commit": os.environ.get("AUTOPILOT_COMMIT", "unknown"),
+        "python_version": __import__("sys").version,
     }
 
 
 @router.post("/api/deploy")
-async def trigger_deploy(
-    request: Request, identity: dict = Depends(_require_vault_governor)
-):
-    """Trigger a deploy, optionally forcing it."""
-    body = (
-        await request.json()
-        if request.headers.get("content-type") == "application/json"
-        else {}
-    )
+async def trigger_deploy(request: Request):
+    """Trigger a deploy. Requires governor auth.
+
+    Normal deploy: only when no active tracks.
+    Force deploy: bypasses the active-track check (use with caution).
+    """
+    _require_vault_governor(request)
+    body = await request.json()
     force = body.get("force", False)
 
-    from .deploy_watcher import can_deploy as _can_deploy
+    from .track_registry import get_all_tracks
 
-    ok, blocking = _can_deploy(force=force)
+    tracks = get_all_tracks()
+    active = [t for t in tracks if t.status == "active"]
 
-    if not ok:
-        return JSONResponse(
-            {
-                "success": False,
-                "message": "Deploy blocked by active tracks.",
-                "blocking_tracks": blocking,
-            },
-            status_code=409,
-        )
-
-    # Trigger the deploy
-    import asyncio
-
-    asyncio.create_task(_run_deploy())
-
-    return JSONResponse(
-        {
-            "success": True,
-            "message": "Deploy triggered. Service will restart shortly.",
+    if not force and len(active) > 0:
+        return {
+            "success": False,
+            "message": f"Cannot deploy: {len(active)} active track(s) running. Use force deploy to override.",
         }
-    )
 
+    # Signal the deploy watcher
+    import os
+    import signal
 
-async def _run_deploy():
-    """Run the deploy in the background."""
-    import subprocess
-    import sys
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "scripts.deploy"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        logger.info(
-            "Deploy result: rc=%d, stdout=%s", result.returncode, result.stdout[-500:]
-        )
-    except Exception as e:
-        logger.error("Deploy failed: %s", e)
+    os.kill(os.getpid(), signal.SIGHUP)
+    return {
+        "success": True,
+        "message": "Deploy triggered. Service will restart shortly.",
+    }
 
 
 @router.get("/api/health")
 async def vault_health():
-    """Check if the vault is initialized and healthy."""
-    try:
-        vault = get_vault()
-        initialized = vault.is_initialized()
-        count = len(vault.list_refs()) if initialized else 0
-        return JSONResponse(
-            {
-                "initialized": initialized,
-                "credential_count": count,
-                "status": "healthy" if initialized else "not_initialized",
-            }
-        )
-    except Exception as e:
-        return JSONResponse(
-            {
-                "initialized": False,
-                "credential_count": 0,
-                "status": f"error: {e}",
-            }
-        )
+    """Vault health check — returns initialization status and credential count."""
+    vault = get_vault()
+    return {
+        "initialized": vault.is_initialized(),
+        "credential_count": len(vault.list_refs()) if vault.is_initialized() else 0,
+    }
+
+
+@router.get("/api/followups")
+async def api_followups():
+    """JSON endpoint returning all parsed follow-ups with their scheduling state."""
+    from .followups import get_state, parse_all
+
+    followups = parse_all()
+    state = {}
+    for f in followups:
+        sid = f.get("id")
+        if sid:
+            s = get_state(sid)
+            if s:
+                state[sid] = s
+
+    return {
+        "followups": followups,
+        "state": state,
+        "open_count": len([f for f in followups if f.get("status") == "open"]),
+    }
