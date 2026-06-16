@@ -666,6 +666,16 @@ async def root():
   <a class="btn" href="https://oracle.truesight.me" target="_blank">Cast the I Ching</a>
   <a class="btn" href="/vault/" style="margin-top: 0.75rem;">Credential Vault</a>
 
+  <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(185,137,76,0.25); max-width: 480px; margin-left: auto; margin-right: auto;">
+    <p style="font-size: 0.85rem; color: #b9894c; margin-bottom: 0.5rem; font-style: italic;">
+      Fork the Ecosystem
+    </p>
+    <p style="font-size: 0.8rem; color: #b9894c; opacity: 0.7; line-height: 1.5; margin-bottom: 0.75rem;">
+      TrueSight DAO is designed to be forked. A governor can spawn a new instance of Sophia with her own context, her own ledger, and her own rules &mdash; in about 10 minutes. Everything runs on Google Sheets + GitHub Actions &mdash; no servers to manage.
+    </p>
+    <a href="/vault/status" style="font-size: 0.8rem; color: #b9894c; text-decoration: underline;">Read the SOP &rarr;</a>
+  </div>
+
   <div class="footer">
     <a href="https://truesight.me">TrueSight DAO</a> &middot; regenerative &amp; sovereign
   </div>
