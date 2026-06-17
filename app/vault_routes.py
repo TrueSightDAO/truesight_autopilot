@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from .auth import verify_jwt
-from .governor_registry import load_governors
+from .governor_registry import resolve_key
 from .vault import get_vault
 
 logger = logging.getLogger(__name__)
@@ -33,12 +33,24 @@ _templates = Jinja2Templates(directory=str(_templates_dir))
 def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
     """Resolve a JWT subject (public key) to a governor identity.
 
-    Returns dict with {name, is_governor, email} or raises 403.
+    Uses resolve_key() for a fast SHA-256 content-addressed lookup
+    against per-key files in treasury-cache. Falls back to the old
+    load_governors() monolith only if resolve_key returns None.
+
+    Returns dict with {name, is_governor, email}.
     """
 
-    data = load_governors()
+    result = resolve_key(public_key_b64)
+    if result is not None:
+        return {
+            "name": result.get("name", "Unknown"),
+            "is_governor": "governor" in result.get("roles", []),
+            "email": result.get("email", ""),
+        }
 
-    # First try direct public key match
+    # Fallback: try the old monolith (for enumeration callers)
+    from .governor_registry import load_governors as _load_govs
+    data = _load_govs()
     for g in data.get("governors", []):
         if g.get("public_key") == public_key_b64:
             return {
