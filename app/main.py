@@ -27,6 +27,7 @@ from fastapi.responses import (
 )
 
 from .auth import create_jwt, verify_jwt, verify_payload
+from .auto_advance import next_action
 from .config import settings
 from .context import get_context_file, refresh_context_repos, refresh_system_prompt
 from .deploy_watcher import register_track as _dw_register_track
@@ -2142,6 +2143,52 @@ def _detail_for(name: str, args: object, result: str) -> str:
     return _summarise_tool_result(result if isinstance(result, str) else "")
 
 
+# Plan filename inside the adapter's injected handoff-context block, e.g.
+# "...is the active handoff for `SOPHIA_AUTO_ADVANCE_PLAN.md`."
+_PLAN_FILE_RE = re.compile(r"active handoff for `([^`]+\.md)`")
+
+
+def _extract_plan_file(history: list[dict]) -> str | None:
+    """Most-recent handoff plan filename mentioned in the injected handoff
+    context block in the conversation, or None when this isn't a handoff."""
+    plan: str | None = None
+    for m in history or []:
+        for found in _PLAN_FILE_RE.findall(str(m.get("content", "") or "")):
+            plan = found
+    return plan
+
+
+def _compute_advance_signal(
+    history: list[dict], tool_trace: list[dict]
+) -> dict | None:
+    """Auto-advance signal for the turn just completed (or None).
+
+    Returns None when auto-advance is off, this is not a handoff thread, or the
+    plan can't be read. Fails CLOSED — any error yields None (no auto-advance);
+    the pure decision logic lives in app/auto_advance.next_action."""
+    if not settings.auto_advance:
+        return None
+    try:
+        plan_file = _extract_plan_file(history)
+        if not plan_file:
+            return None
+        plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
+        plan_text = plan_path.read_text(encoding="utf-8")
+        opened_pr = any(
+            (t or {}).get("name") == "open_fix_pr" for t in (tool_trace or [])
+        )
+        dec = next_action(plan_text, opened_pr)
+        return {
+            "decision": dec.decision,
+            "gate_reason": dec.gate_reason,
+            "next_unit": dec.next_unit,
+            "plan": plan_file,
+        }
+    except Exception:  # noqa: BLE001 — advance is best-effort; never break the turn
+        logger.debug("auto-advance signal computation failed", exc_info=True)
+        return None
+
+
 def _build_turn_report(tool_trace: list[dict]) -> str:
     """Markdown footer enumerating the side-effecting actions this turn took,
     GROUPED by tool with counts (so 16 ssh_run calls are one line, not sixteen
@@ -2579,6 +2626,9 @@ async def _stream_chat(
         done_data["proposals"] = proposals
     elif proposal:
         done_data["proposal"] = proposal
+    advance = _compute_advance_signal(history, state.get("tool_trace", []))
+    if advance:
+        done_data["advance"] = advance
     yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
 
     # Persist assistant response to session history
@@ -3923,6 +3973,9 @@ async def _chat_blocking_turn(
     response_data: dict[str, Any] = {"response": assistant_text}
     if proposal:
         response_data["proposal"] = proposal
+    advance = _compute_advance_signal(history, tool_trace)
+    if advance:
+        response_data["advance"] = advance
     return JSONResponse(response_data)
 
 
