@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from .auth import verify_jwt
-from .governor_registry import load_governors
+from .governor_registry import load_governors, resolve_key
 from .vault import get_vault
 
 logger = logging.getLogger(__name__)
@@ -34,11 +34,21 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
     """Resolve a JWT subject (public key) to a governor identity.
 
     Returns dict with {name, is_governor, email} or raises 403.
+
+    Uses content-addressed per-key point-lookup first (public_keys/<sha256>.json),
+    then falls back to the monolith dao_members.json enumeration.
     """
+
+    identity = resolve_key(public_key_b64)
+    if identity and identity.get("is_governor"):
+        return {
+            "name": identity.get("name", "Unknown"),
+            "is_governor": True,
+            "email": identity.get("email", ""),
+        }
 
     data = load_governors()
 
-    # First try direct public key match
     for g in data.get("governors", []):
         if g.get("public_key") == public_key_b64:
             return {
@@ -47,7 +57,6 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
                 "email": g.get("email", ""),
             }
 
-    # Key is verified but not in governors cache — authenticated non-governor
     return {
         "name": "Verified Contributor",
         "is_governor": False,
