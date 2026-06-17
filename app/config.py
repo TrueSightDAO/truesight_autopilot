@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     max_pr_per_day: int = Field(default=5, validation_alias="MAX_PR_PER_DAY")
 
+    # Auto-advance (SOPHIA_AUTO_ADVANCE_PLAN.md): when ON, after a PR turn on a
+    # handoff thread the brain emits an "advance" signal and the adapter
+    # continues to the next plan unit without a human prompt, stopping at gates.
+    # OFF by default — behavior is one-PR-then-wait until explicitly enabled.
+    auto_advance: bool = Field(default=False, validation_alias="AUTO_ADVANCE")
+    # Backstop: max consecutive auto-advanced turns before forcing a pause.
+    auto_advance_max_turns: int = Field(
+        default=8, validation_alias="AUTO_ADVANCE_MAX_TURNS"
+    )
+
     # CORS
     cors_origins: list[str] = ["*"]  # TODO: restrict to dapp.truesight.me in production
 
