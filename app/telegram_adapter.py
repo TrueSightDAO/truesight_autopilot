@@ -101,11 +101,38 @@ def _is_progress_query(text: str | None) -> bool:
     return bool(_PROGRESS_QUERY_RE.search(t))
 
 
+def _fetch_progress_snapshot(session_id: str, public_key: str) -> str | None:
+    """Fetch the running turn's live-progress snapshot from the brain over HTTP.
+
+    The Telegram adapter is a SEPARATE process from the FastAPI brain, so the
+    in-process ``_live_progress`` dict (populated by the running turn inside the
+    brain) is ALWAYS empty in this process — reading it directly is the bug that
+    made every mid-turn ack generic (fixed 2026-06-17). We must cross the process
+    boundary via ``/chat/progress`` (which now accepts the Bearer JWT and keys the
+    session the same way ``/chat`` does). Returns the snapshot, or None when
+    nothing is running or the call fails (caller then sends a plain ack)."""
+    try:
+        token = create_jwt(public_key)
+        resp = httpx.get(
+            f"{settings.autopilot_chat_url.rstrip('/')}/chat/progress",
+            headers={"Authorization": f"Bearer {token}", "X-Session-Id": session_id},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("running") and data.get("snapshot"):
+                return data["snapshot"]
+    except Exception:  # noqa: BLE001 — progress is best-effort; never break the ack
+        pass
+    return None
+
+
 def _ack_queued_if_busy(
     chat_id: int,
     thread_id: int | None,
     lock: threading.Lock,
     session_id: str | None = None,
+    public_key: str | None = None,
 ) -> None:
     """If a turn is already running in this topic, immediately tell the governor
     their new message was received and queued — it will be handled after the
@@ -113,20 +140,17 @@ def _ack_queued_if_busy(
     silently on the lock, so it looks dropped. (The new message's own turn still
     runs in arrival order once the lock frees.)
 
-    If *session_id* is provided, includes a live-progress snapshot from the
-    running turn (current tool, round, elapsed, done-so-far) so the ack is
-    informative rather than blind."""
+    If *session_id* and *public_key* are provided, includes a live-progress
+    snapshot from the running turn (current tool, round, elapsed, done-so-far)
+    so the ack is informative rather than blind. The snapshot is fetched over
+    HTTP because the brain runs in a different process (see
+    ``_fetch_progress_snapshot``)."""
     if lock.locked():
         progress = ""
-        if session_id:
-            try:
-                from .main import _render_progress
-
-                snap = _render_progress(session_id)
-                if snap:
-                    progress = f"\n\nRight now: {snap}"
-            except Exception:
-                pass
+        if session_id and public_key:
+            snap = _fetch_progress_snapshot(session_id, public_key)
+            if snap:
+                progress = f"\n\nRight now: {snap}"
         send_message(
             chat_id,
             "📥 Got it — I'm still finishing the previous task in this topic. "
@@ -1431,7 +1455,7 @@ def handle_message(
             # Prep (download + extraction above) ran in parallel; the turn itself
             # is serialized per topic so it can't race a concurrent turn's writes.
             lock = _thread_dispatch_lock(chat_id, thread_id)
-            _ack_queued_if_busy(chat_id, thread_id, lock, session_id)
+            _ack_queued_if_busy(chat_id, thread_id, lock, session_id, public_key)
             with lock:
                 response, text_shown = call_chat_with_progress(
                     chat_id, thread_id, msg_text, session_id, public_key
@@ -1501,7 +1525,7 @@ def handle_message(
             except Exception:
                 pass  # fall through to normal queue if progress fetch fails
 
-        _ack_queued_if_busy(chat_id, thread_id, lock, session_id)
+        _ack_queued_if_busy(chat_id, thread_id, lock, session_id, public_key)
         with lock:
             response, text_shown = call_chat_with_progress(
                 chat_id, thread_id, dispatch_text, session_id, public_key

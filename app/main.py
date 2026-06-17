@@ -3174,10 +3174,17 @@ async def get_chat_progress(request: Request) -> JSONResponse:
     """Read-only progress path — returns the live-progress snapshot for the
     caller's session. Does NOT acquire the per-session lock, so a progress
     query never blocks behind the running turn. Returns an empty snapshot
-    when nothing is running."""
+    when nothing is running.
+
+    Accepts EITHER an X-Public-Key header (signed-payload callers) OR a Bearer
+    JWT (the Telegram adapter — a separate process). public_key MUST be resolved
+    the same way /chat does, or _session_key() produces a different session id
+    than the one the running turn stored progress under, and the snapshot always
+    comes back empty (the bug fixed 2026-06-17: the adapter only sends a JWT, so
+    the old X-Public-Key-only check 400'd and progress never surfaced)."""
     public_key = request.headers.get("X-Public-Key", "")
     if not public_key:
-        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+        public_key = verify_jwt(request)  # raises 401 if no valid token
     session_id = _session_key(public_key, request)
     snap = _render_progress(session_id)
     if snap:
