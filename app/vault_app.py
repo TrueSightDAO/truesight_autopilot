@@ -8,13 +8,29 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from .vault_routes import router as vault_router
 from .auth_routes import router as auth_router
 
 logger = logging.getLogger("autopilot.vault_app")
+
+
+class NoCacheHTMLMiddleware(BaseHTTPMiddleware):
+    """Add Cache-Control: no-store to all HTML responses so the browser never
+    serves a stale vault page after a deploy. Prevents the "old JS + new API
+    schema" mismatch that produces "Failed to load..." errors post-deploy."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
 
 app = FastAPI(
     title="TrueSight DAO Vault",
@@ -30,6 +46,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# No-cache for HTML — prevents stale-vault-page-after-deploy bugs
+app.add_middleware(NoCacheHTMLMiddleware)
 
 # Mount vault routes at /vault
 app.include_router(vault_router)
