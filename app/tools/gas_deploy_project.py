@@ -206,27 +206,26 @@ from ..tool_registry import ToolSpec  # noqa: E402
 TOOL_SPEC = ToolSpec(
     name="gas_deploy_project",
     description=(
-        "Deploy a single Google Apps Script project end-to-end via the "
-        "tokenomics `scripts/deploy_gas_project.py` script. Reads "
-        "`google_app_scripts/<theme>/manifest.json` to figure out which "
-        "source files to sync into `clasp_mirrors/<scriptId>/`, runs "
-        "`clasp push`, then fires `post_push_hooks[]`. "
+        "Deploy a single Google Apps Script project via "
+        "`clasp push` from `google_app_scripts/<scriptId>/`. "
+        "Each folder under `google_app_scripts/` whose name is a GAS "
+        "scriptId IS the project — the files in the folder are exactly "
+        "what gets deployed. No sync, no mapping, no mirror layer. "
+        "Runs `clasp push --force` directly from the project folder. "
         "**Dry-run by default** (no GAS change). "
         "Pass `push=true` to actually push. Pass `with_hooks=true` "
         "(only with `push=true`) to also fire promoted post-push hooks "
         "— candidate cache-refresh hooks are NEVER fired automatically. "
-        "Use `--list`-style introspection by calling with a fake scriptId "
-        "first to see the dry-run shape. Operator must have a tokenomics "
-        "checkout, `clasp`, and `clasp login` already set up on the host. "
-        "Returns the full deploy script stdout/stderr so the model can "
-        "diagnose what happened."
+        "Operator must have a tokenomics checkout, `clasp`, and "
+        "`clasp login` already set up on the host. "
+        "Returns the full deploy script stdout/stderr."
     ),
     parameters={
         "type": "object",
         "properties": {
             "script_id": {
                 "type": "string",
-                "description": "The GAS scriptId (the long ID under `clasp_mirrors/<scriptId>/`).",
+                "description": "The GAS scriptId (the folder name under `google_app_scripts/<scriptId>/`).",
             },
             "push": {
                 "type": "boolean",
