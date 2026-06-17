@@ -1,16 +1,22 @@
 """Governor registry loader — reads dao_members.json from treasury-cache (GitHub raw).
-\nResolve_key() uses raw.githubusercontent.com for content-addressed point-lookup
+
+resolve_key() uses raw.githubusercontent.com for content-addressed point-lookup
 via public_keys/<sha256>.json.
 """
+
 from __future__ import annotations
+
 import hashlib
 import json
 import logging
 import os
 import time
-from pathlab import Path
+from pathlib import Path
+
 import httpx
+
 from .config import settings
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MEMBERS_URL = "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/dao_members.json"
@@ -28,12 +34,15 @@ _cache: dict[str, any] = {
     "url": None,
 }
 
+
 def _now() -> float:
     return time.time()
+
 
 def _sha256(s: str) -> str:
     """Compute SHA-256 hex digest of a string."""
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
 
 def _load_local(path: Path) -> dict | None:
     if path.exists():
@@ -42,6 +51,7 @@ def _load_local(path: Path) -> dict | None:
         except Exception:
             pass
     return None
+
 
 def _fetch_remote(url: str) -> dict | None:
     """Fetch a JSON file from a URL. Returns None on 404 or error."""
@@ -55,9 +65,11 @@ def _fetch_remote(url: str) -> dict | None:
         logger.warning("fetch failed for %s: %s", url, exc)
         return None
 
+
 def _governor_names() -> set[str]:
     raw = os.getenv("GOVERNOR_NAMES", "Gary Teh")
     return {name.strip() for name in raw.split(",") if name.strip()}
+
 
 def _extract_governor_keys(members_data: dict) -> list[dict]:
     allowed = _governor_names()
@@ -81,12 +93,16 @@ def _extract_governor_keys(members_data: dict) -> list[dict]:
             )
     return governors
 
+
 def resolve_key(public_key_b64: str) -> dict | None:
     """Resolve a public key to its identity via content-addressed point-lookup.
+
     Returns a dict with {name, is_governor, email, roles} or None if the key
     is not found or not ACTIVE.
+
     Uses raw.githubusercontent.com (CDN-cached, ~5 min TTL). The force-fresh
-    retry in is_governor() handles the edge case of a freshly-registered key."""
+    retry in is_governor() handles the edge case of a freshly-registered key.
+    """
     h = _sha256(public_key_b64)
     now = _now()
 
@@ -118,8 +134,10 @@ def resolve_key(public_key_b64: str) -> dict | None:
         "email": "",  # email omitted from per-key files (privacy decision)
         "roles": roles,
     }
+
     _per_key_cache[h] = (now, identity)
     return identity
+
 
 def load_governors(force_refresh: bool = False) -> dict:
     global _cache
@@ -171,10 +189,13 @@ def load_governors(force_refresh: bool = False) -> dict:
         "governors": [],
     }
 
+
 def is_governor(public_key_b64: str) -> bool:
     """Check if a public key belongs to a registered governor.
+
     Uses resolve_key() for fast point-lookup first. Falls back to
     load_governors() enumeration if resolve_key returns None.
+
     Freshness: if resolve_key returns None (miss or non-ACTIVE), does ONE
     force-fresh lookup (clears per-key cache and retries) before refusing.
     This handles the ~5-min CDN cache on raw.githubusercontent.com.
@@ -199,9 +220,11 @@ def is_governor(public_key_b64: str) -> bool:
             return True
     return False
 
+
 def refresh_cache() -> dict:
     """Force-refresh the monolith cache."""
     return load_governors(force_refresh=True)
+
 
 def clear_per_key_cache() -> None:
     """Clear the per-key cache (e.g. after a deploy or manual refresh)."""
