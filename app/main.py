@@ -1339,7 +1339,8 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
     """Coerce LLM-generated attribute keys to canonical dao_client labels.
 
     Steps:
-    1. Map alias names to canonical labels
+    1. Map alias names to canonical labels (event-aware: "item" → "Item" for
+       SALES EVENT, "item" → "Inventory Item" for INVENTORY MOVEMENT)
     2. Drop non-canonical descriptive keys
     3. Keep only canonical labels for the event type
     """
@@ -1356,13 +1357,32 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
     if not isinstance(attributes, dict):
         attributes = {}
 
+    # Event-aware alias resolution: for SALES EVENT, "item" maps to "Item"
+    # (not "Inventory Item" which is the INVENTORY MOVEMENT alias).
+    # Check if the lowercased key matches a canonical label directly first.
     normalized = {}
     for key, value in attributes.items():
         # Skip descriptive-only keys
         if key.lower() in _NON_CANONICAL_KEYS:
             continue
-        # Map aliases to canonical names
-        canonical_key = _FIELD_ALIASES.get(key.lower(), key)
+
+        # Event-aware alias resolution: try direct canonical match first
+        key_lower = key.lower()
+        canonical_key = key  # default: keep original key
+
+        # Check if the key (case-insensitive) directly matches a canonical label
+        direct_match = None
+        for cl in canonical_set:
+            if cl.lower() == key_lower:
+                direct_match = cl
+                break
+
+        if direct_match:
+            canonical_key = direct_match
+        else:
+            # Fall back to alias mapping
+            canonical_key = _FIELD_ALIASES.get(key_lower, key)
+
         # If event has defined canonical labels, only keep matching ones
         if canonical_set and canonical_key not in canonical_set:
             # For events with no defined labels (QR CODE UPDATE), keep all
