@@ -747,7 +747,13 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
 
 
 def call_chat_with_progress(
-    chat_id: int, thread_id: int | None, message: str, session_id: str, public_key: str
+    chat_id: int,
+    thread_id: int | None,
+    message: str,
+    session_id: str,
+    public_key: str,
+    *,
+    advance_out: dict | None = None,
 ) -> tuple[str, bool]:
     """POST to /chat (SSE) and send styled interim progress updates to Telegram.
 
@@ -907,6 +913,11 @@ def call_chat_with_progress(
 
                 elif etype == "done":
                     final_response = (event.get("response") or "").strip()
+                    # Surface the auto-advance signal (PR2) to the caller without
+                    # changing this function's return shape (which has 8 return
+                    # sites): the loop in _run_turn_with_auto_advance reads it.
+                    if advance_out is not None:
+                        advance_out["advance"] = event.get("advance")
                     if event.get("proposal"):
                         final_response += "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
                     break
@@ -941,6 +952,97 @@ def call_chat_with_progress(
         logger.exception("call_chat_with_progress failed")
         edit_message_text(chat_id, status_id, f"⚠️ Error: {e}", thread_id)
         return f"⚠️ Error: {e}", True
+
+
+def _run_turn_with_auto_advance(
+    chat_id: int,
+    thread_id: int | None,
+    dispatch_text: str,
+    session_id: str,
+    public_key: str,
+    is_voice: bool,
+    transcribed_text: str | None,
+) -> None:
+    """Run the governor's turn, then (when AUTO_ADVANCE is on) keep running the
+    plan's next units automatically until a gate, completion, failure, the
+    consecutive-turn cap, or a governor message that grabs the lock.
+
+    With AUTO_ADVANCE off this runs exactly one turn — identical to the previous
+    behavior. The decision comes from the brain's `advance` signal (PR2); this
+    loop only obeys it. Each unit is its own /chat turn (own round budget, own
+    compaction, ≤ _CHAT_TIMEOUT), with a heartbeat between units so the governor
+    is never left in the dark."""
+    lock = _thread_dispatch_lock(chat_id, thread_id)
+    current_msg = dispatch_text
+    auto_count = 0
+    while True:
+        advance_box: dict = {}
+        with lock:
+            response, text_shown = call_chat_with_progress(
+                chat_id,
+                thread_id,
+                current_msg,
+                session_id,
+                public_key,
+                advance_out=advance_box,
+            )
+        if response:
+            _handle_voice_reply(
+                chat_id,
+                thread_id,
+                response,
+                transcribed_text if is_voice else None,
+                text_already_sent=text_shown,
+            )
+
+        advance = advance_box.get("advance")
+        if not settings.auto_advance or not advance:
+            return  # auto-advance off or no signal -> single turn, done
+
+        decision = advance.get("decision")
+        nxt = advance.get("next_unit") or "the next unit"
+        if decision == "auto":
+            if auto_count >= settings.auto_advance_max_turns:
+                send_message(
+                    chat_id,
+                    f"⏸️ Hit the auto-advance cap "
+                    f"({settings.auto_advance_max_turns} consecutive PRs). "
+                    f"Reply 'go' to continue with {nxt}.",
+                    thread_id,
+                )
+                return
+            # A governor message waiting on the lock takes priority over
+            # auto-continuing — let it interrupt the chain.
+            if lock.locked():
+                return
+            auto_count += 1
+            send_message(
+                chat_id,
+                f"▶️ Continuing to {nxt} "
+                f"(auto-advance {auto_count}/{settings.auto_advance_max_turns}).",
+                thread_id,
+            )
+            current_msg = (
+                f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
+                f"RESUME HERE marker in {advance.get('plan', 'the plan')} points at. "
+                f"Do exactly that one PR (open the PR, report the contribution, tick "
+                f"the resume tracker), then stop. Honor any gate marker."
+            )
+            continue
+        if decision == "gate":
+            reason = advance.get("gate_reason") or "(no reason given)"
+            send_message(
+                chat_id,
+                f"⏸️ Paused before {nxt}.\nGate: {reason}\nReply 'go' to continue.",
+                thread_id,
+            )
+            return
+        if decision == "done":
+            send_message(
+                chat_id, "✅ Plan complete — all units finished.", thread_id
+            )
+            return
+        return  # unknown decision -> fail closed (stop)
 
 
 def call_chat_with_typing(
@@ -1526,22 +1628,17 @@ def handle_message(
                 pass  # fall through to normal queue if progress fetch fails
 
         _ack_queued_if_busy(chat_id, thread_id, lock, session_id, public_key)
-        with lock:
-            response, text_shown = call_chat_with_progress(
-                chat_id, thread_id, dispatch_text, session_id, public_key
-            )
-        # Send voice reply for ALL governor messages (text and voice), not just voice.
-        # The assistant's response is synthesized as speech and sent as a voice note.
-        # For voice messages, language is detected from the user's transcribed text.
-        # For text messages, language is detected from the assistant's response.
-        if response:
-            _handle_voice_reply(
-                chat_id,
-                thread_id,
-                response,
-                transcribed_text if is_voice else None,
-                text_already_sent=text_shown,
-            )
+        # Run the turn (and auto-advance through the plan's next units when
+        # AUTO_ADVANCE is on). Sends the text + voice reply per turn internally.
+        _run_turn_with_auto_advance(
+            chat_id,
+            thread_id,
+            dispatch_text,
+            session_id,
+            public_key,
+            is_voice,
+            transcribed_text,
+        )
     except Exception as e:  # noqa: BLE001 — never crash the loop on one message
         logger.exception("call_chat failed")
         send_message(chat_id, f"⚠️ Error talking to autopilot: {e}", thread_id)
