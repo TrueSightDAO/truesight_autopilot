@@ -224,7 +224,7 @@ def test_handle_message_allowed_calls_chat(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: (
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
             captured.update(
                 chat_id=chat_id,
                 thread_id=thread_id,
@@ -256,7 +256,7 @@ def test_handle_message_reply_thread_not_treated_as_topic(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: (
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
             captured.update(session_id=session_id, thread_id=thread_id) or ("", True)
         ),
     )
@@ -278,7 +278,7 @@ def test_handle_message_photo_routes_with_path(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: (
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
             captured.update(message=message) or ("", True)
         ),
     )
@@ -501,7 +501,7 @@ def test_verified_governor_admitted_through_gate(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda chat_id, thread_id, message, session_id, public_key: (
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
             captured.update(hit=True) or ("", True)
         ),
     )
