@@ -165,13 +165,13 @@ fetch('/vault/api/system-status')
     .then(r => r.ok ? r.json() : null)
     .then(data => {
         const el = document.getElementById('deployed-version');
-        if (!data || !data.commit_hash) {
+        const hash = data?.commit_hash;
+        if (!hash) {
             el.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">Could not determine deployed version.</p>';
             return;
         }
-        const hash = data.commit_hash;
         const shortHash = hash.slice(0, 7);
-        el.innerHTML = '<p><strong>Commit:</strong> <a href="https://github.com/TrueSightDAO/truesight_autopilot/commit/' + hash + '" target="_blank" rel="noopener" style="font-family: monospace; font-size: 1.1rem;">' + shortHash + '</a></p>';
+        el.innerHTML = '<p><strong>Commit:</strong> <a href="https://github.com/TrueSightDAO/truesight_autopilot/commit/' + esc(hash) + '" target="_blank" rel="noopener" style="font-family: monospace; font-size: 1.1rem;">' + shortHash + '</a></p>';
     })
     .catch(() => {
         document.getElementById('deployed-version').innerHTML = '<p style="color: var(--danger);">Failed to load deployed version.</p>';
@@ -187,38 +187,41 @@ fetch('/vault/api/runtime-config')
             return;
         }
         const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+        const d = data; // shorthand
         let html = '<table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>';
 
         // Service info
-        html += '<tr><td><strong>Service</strong></td><td>' + esc(data.service) + '</td></tr>';
-        html += '<tr><td><strong>Version</strong></td><td>' + esc(data.version) + '</td></tr>';
+        html += '<tr><td><strong>Service</strong></td><td>' + esc(d.service) + '</td></tr>';
+        html += '<tr><td><strong>Version</strong></td><td>' + esc(d.version) + '</td></tr>';
 
         // Git info
-        html += '<tr><td><strong>Git Commit</strong></td><td><a href="' + esc(data.code_repo) + '/commit/' + esc(data.git.commit) + '" target="_blank" rel="noopener"><code>' + esc(data.git.commit.slice(0, 7)) + '</code></a></td></tr>';
-        html += '<tr><td><strong>Git Branch</strong></td><td><code>' + esc(data.git.branch) + '</code></td></tr>';
-        html += '<tr><td><strong>Code Repo</strong></td><td><a href="' + esc(data.code_repo) + '" target="_blank" rel="noopener">' + esc(data.code_repo) + ' ↗</a></td></tr>';
+        const git = d.git || {};
+        html += '<tr><td><strong>Git Commit</strong></td><td><a href="' + esc(d.code_repo) + '/commit/' + esc(git.commit) + '" target="_blank" rel="noopener"><code>' + esc((git.commit || '').slice(0, 7)) + '</code></a></td></tr>';
+        html += '<tr><td><strong>Git Branch</strong></td><td><code>' + esc(git.branch) + '</code></td></tr>';
+        html += '<tr><td><strong>Code Repo</strong></td><td><a href="' + esc(d.code_repo) + '" target="_blank" rel="noopener">' + esc(d.code_repo) + ' ↗</a></td></tr>';
 
         // Context & transcript
-        html += '<tr><td><strong>Context Repo</strong></td><td><a href="' + esc(data.context_repo) + '" target="_blank" rel="noopener">' + esc(data.context_repo) + ' ↗</a></td></tr>';
-        html += '<tr><td><strong>Transcript Repo</strong></td><td><a href="' + esc(data.transcript_repo) + '" target="_blank" rel="noopener">' + esc(data.transcript_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Context Repo</strong></td><td><a href="' + esc(d.context_repo) + '" target="_blank" rel="noopener">' + esc(d.context_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Transcript Repo</strong></td><td><a href="' + esc(d.transcript_repo) + '" target="_blank" rel="noopener">' + esc(d.transcript_repo) + ' ↗</a></td></tr>';
 
         // LLM
-        html += '<tr><td><strong>LLM Provider</strong></td><td><code>' + esc(data.llm.provider) + '</code></td></tr>';
-        html += '<tr><td><strong>LLM Model</strong></td><td><code>' + esc(data.llm.model) + '</code></td></tr>';
-        if (data.llm.fallback_model) {
-            html += '<tr><td><strong>Fallback Model</strong></td><td><code>' + esc(data.llm.fallback_model) + '</code></td></tr>';
+        const llm = d.llm || {};
+        html += '<tr><td><strong>LLM Provider</strong></td><td><code>' + esc(llm.provider) + '</code></td></tr>';
+        html += '<tr><td><strong>LLM Model</strong></td><td><code>' + esc(llm.model) + '</code></td></tr>';
+        if (llm.fallback_model) {
+            html += '<tr><td><strong>Fallback Model</strong></td><td><code>' + esc(llm.fallback_model) + '</code></td></tr>';
         }
 
         // Infrastructure
         html += '</tbody></table>';
         html += '<h3 style="font-size: 1rem; margin: 1.5rem 0 0.5rem;">Infrastructure</h3>';
         html += '<table style="table-layout: fixed;"><colgroup><col style="width: 30%;"><col style="width: 70%;"></colgroup><thead><tr><th>Component</th><th>URL / Location</th></tr></thead><tbody>';
-        html += '<tr><td><strong>Edgar API</strong></td><td><a href="' + esc(data.edgar_url) + '" target="_blank" rel="noopener">' + esc(data.edgar_url) + ' ↗</a></td></tr>';
-        html += '<tr><td><strong>Main Ledger</strong></td><td><a href="' + esc(data.ledger_url) + '" target="_blank" rel="noopener">' + esc(data.ledger_name) + ' ↗</a></td></tr>';
-        html += '<tr><td><strong>Context Repo</strong></td><td><a href="' + esc(data.context_repo) + '" target="_blank" rel="noopener">' + esc(data.context_repo) + ' ↗</a></td></tr>';
-        html += '<tr><td><strong>Transcript Repo</strong></td><td><a href="' + esc(data.transcript_repo) + '" target="_blank" rel="noopener">' + esc(data.transcript_repo) + ' ↗</a></td></tr>';
-        html += '<tr><td><strong>Code Repo</strong></td><td><a href="' + esc(data.code_repo) + '" target="_blank" rel="noopener">' + esc(data.code_repo) + ' ↗</a></td></tr>';
-        html += '<tr><td><strong>Vault</strong></td><td><a href="' + esc(data.vault_url) + '" target="_blank" rel="noopener">' + esc(data.vault_url) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Edgar API</strong></td><td><a href="' + esc(d.edgar_url) + '" target="_blank" rel="noopener">' + esc(d.edgar_url) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Main Ledger</strong></td><td><a href="' + esc(d.ledger_url) + '" target="_blank" rel="noopener">' + esc(d.ledger_name) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Context Repo</strong></td><td><a href="' + esc(d.context_repo) + '" target="_blank" rel="noopener">' + esc(d.context_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Transcript Repo</strong></td><td><a href="' + esc(d.transcript_repo) + '" target="_blank" rel="noopener">' + esc(d.transcript_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Code Repo</strong></td><td><a href="' + esc(d.code_repo) + '" target="_blank" rel="noopener">' + esc(d.code_repo) + ' ↗</a></td></tr>';
+        html += '<tr><td><strong>Vault</strong></td><td><a href="' + esc(d.vault_url) + '" target="_blank" rel="noopener">' + esc(d.vault_url) + ' ↗</a></td></tr>';
         html += '</tbody></table>';
         el.innerHTML = html;
     })

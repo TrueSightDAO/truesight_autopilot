@@ -400,6 +400,27 @@ async def get_audit_log(request: Request):
     }
 
 
+def _git_info() -> dict:
+    """Return {commit, branch} from git, or fallbacks if unavailable."""
+    import subprocess
+    import os as _os
+
+    remote_dir = _os.environ.get("EC2_REMOTE_DIR", "/opt/truesight_autopilot")
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=remote_dir, text=True, timeout=5
+        ).strip()
+    except Exception:
+        commit = _os.environ.get("AUTOPILOT_COMMIT", "unknown")
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=remote_dir, text=True, timeout=5
+        ).strip()
+    except Exception:
+        branch = "main"
+    return {"commit": commit, "branch": branch}
+
+
 @router.get("/api/system-status")
 async def get_system_status():
     """Get system status — active tracks, deploy readiness.
@@ -412,9 +433,11 @@ async def get_system_status():
 
     active = get_active_tracks()
     ok, _blocking = can_deploy()
+    git = _git_info()
     return {
         "can_deploy": ok,
         "total_tracks": len(active),
+        "commit_hash": git["commit"],
         "active_tracks": [
             {
                 "label": t.get("label"),
@@ -430,13 +453,35 @@ async def get_system_status():
 
 @router.get("/api/runtime-config")
 async def get_runtime_config():
-    """Get runtime configuration (non-sensitive)."""
-    import os
+    """Get runtime configuration (non-sensitive).
 
+    Schema matches status.html JS — every field the frontend renders MUST
+    be present. Keep this in sync with the template.
+    """
+    import os as _os
+
+    from ..config import settings
+
+    git = _git_info()
     return {
-        "environment": os.environ.get("ENVIRONMENT", "production"),
-        "version": os.environ.get("AUTOPILOT_VERSION", "unknown"),
-        "commit": os.environ.get("AUTOPILOT_COMMIT", "unknown"),
+        "service": "TrueSight DAO Autopilot",
+        "version": _os.environ.get("AUTOPILOT_VERSION", "unknown"),
+        "code_repo": "https://github.com/TrueSightDAO/truesight_autopilot",
+        "git": {
+            "commit": git["commit"],
+            "branch": git["branch"],
+        },
+        "llm": {
+            "provider": settings.llm_provider,
+            "model": _os.environ.get("LITELLM_MODEL", settings.deepseek_model),
+            "fallback_model": _os.environ.get("LLM_FALLBACK_MODEL", ""),
+        },
+        "context_repo": settings.agentic_context_repo,
+        "transcript_repo": "https://github.com/TrueSightDAO/truesight_autopilot_transcript",
+        "edgar_url": "https://edgar.truesight.me",
+        "ledger_url": "https://docs.google.com/spreadsheets/d/1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU",
+        "ledger_name": "TrueSight DAO Ledger",
+        "vault_url": "https://sophia.truesight.me/vault",
         "python_version": __import__("sys").version,
     }
 
