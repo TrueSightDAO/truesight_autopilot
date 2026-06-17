@@ -64,7 +64,7 @@
                 const escalate = schedule.escalate_after_days || condition.escalate_after_days || '-';
 
                 const threadLink = f.thread_id
-                    ? '<a href="https://t.me/c/' + (f.chat_id ? f.chat_id.replace('-100', '') : '') + '/' + f.thread_id + '" target="_blank">#' + f.thread_id + '</a>'
+                    ? '<a href="https://t.me/c/' + (f.chat_id ? String(f.chat_id).replace('-100', '') : '') + '/' + f.thread_id + '" target="_blank">#' + f.thread_id + '</a>'
                     : '-';
 
                 const state = data.state[f.id] || {};
