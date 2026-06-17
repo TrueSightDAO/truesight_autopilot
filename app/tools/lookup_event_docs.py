@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from ..tool_registry import ToolSpec
+
 logger = logging.getLogger(__name__)
 
 EDGAR_LANDING_URL = "https://edgar.truesight.me/"
@@ -131,3 +133,26 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
         "available_events": list(FALLBACK_DOCS.keys()),
         "note": "Check the Edgar landing page (https://edgar.truesight.me/) for the full DAO Events Reference."
     }
+
+
+TOOL_SPEC = ToolSpec(
+    name="lookup_event_docs",
+    description=(
+        "Fetch DAO event documentation for a given event type (e.g. SALES EVENT, "
+        "INVENTORY MOVEMENT). Returns the format, required fields, optional fields, "
+        "and when-to-use rules. Fetches live from the Edgar landing page; falls back "
+        "to built-in docs if Edgar is unreachable. Always call this BEFORE calling "
+        "submit_contribution to ensure you use the correct event type and format."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "event_name": {
+                "type": "string",
+                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'CONTRIBUTION EVENT'",
+            }
+        },
+        "required": ["event_name"],
+    },
+    handler=lambda args, ctx: json.dumps(lookup_event_docs(args.get("event_name", ""))),
+)
