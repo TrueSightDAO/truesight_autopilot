@@ -297,7 +297,7 @@ async def whoami(request: Request):
 
     identity = _resolve_identity_from_jwt(public_key)
     if identity["is_governor"]:
-        return {"recognized": True, "name": identity["name"]}
+        return {"recognized": True, "name": identity["name"], "is_governor": True}
     return {"recognized": False}
 
 
