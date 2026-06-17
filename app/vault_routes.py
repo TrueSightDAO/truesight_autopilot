@@ -460,7 +460,7 @@ async def get_runtime_config():
     """
     import os as _os
 
-    from ..config import settings
+    from .config import settings
 
     git = _git_info()
     return {
