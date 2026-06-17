@@ -171,7 +171,7 @@ fetch('/vault/api/system-status')
             return;
         }
         const shortHash = hash.slice(0, 7);
-        el.innerHTML = '<p><strong>Commit:</strong> <a href="https://github.com/TrueSightDAO/truesight_autopilot/commit/' + esc(hash) + '" target="_blank" rel="noopener" style="font-family: monospace; font-size: 1.1rem;">' + shortHash + '</a></p>';
+        el.innerHTML = '<p><strong>Commit:</strong> <a href="https://github.com/TrueSightDAO/truesight_autopilot/commit/' + encodeURIComponent(hash) + '" target="_blank" rel="noopener" style="font-family: monospace; font-size: 1.1rem;">' + shortHash + '</a></p>';
     })
     .catch(() => {
         document.getElementById('deployed-version').innerHTML = '<p style="color: var(--danger);">Failed to load deployed version.</p>';
