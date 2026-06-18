@@ -61,6 +61,13 @@ def test_other_threads_busy_excludes_caller_and_stale(monkeypatch):
 def test_deploy_defers_when_a_thread_is_busy(monkeypatch):
     import time
 
+    # Mock the git hash check so it returns different SHAs (passes the check
+    # and reaches the idle-drain guard instead of short-circuiting with noop)
+    monkeypatch.setattr(dep, "_run_local", lambda cmd, cwd, timeout: (
+        "abc123" if "rev-parse HEAD" in cmd else "def456"
+    ))
+    monkeypatch.setattr(dep, "_is_process_stale", lambda rd: False)
+
     monkeypatch.setattr(
         m, "_active_streams", {"tg:other:2": time.time()}, raising=False
     )

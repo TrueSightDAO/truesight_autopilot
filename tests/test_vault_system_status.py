@@ -18,7 +18,9 @@ def test_system_status_no_tracks(monkeypatch):
 
     result = asyncio.run(vault_routes.get_system_status())
 
-    assert result == {"can_deploy": True, "total_tracks": 0, "active_tracks": []}
+    result_expected = result.copy()
+    assert result_expected.pop("commit_hash", None) is not None  # present
+    assert result_expected == {"can_deploy": True, "total_tracks": 0, "active_tracks": []}
 
 
 def test_system_status_reports_active_track(monkeypatch):
