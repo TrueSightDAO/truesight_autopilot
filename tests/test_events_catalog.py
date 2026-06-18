@@ -11,10 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import app.main as app_main
+
 from app.main import (
     _CANONICAL_LABELS,
     _VALIDATE_REQUIRED_FIELDS,
-    _catalog_last_refresh,
     _refresh_events_catalog,
 )
 
@@ -25,14 +26,14 @@ def _reset_globals():
     # Snapshot the original hardcoded values so we can restore them
     orig_labels = dict(_CANONICAL_LABELS)
     orig_required = dict(_VALIDATE_REQUIRED_FIELDS)
-    orig_ts = _catalog_last_refresh
+    orig_ts = app_main._catalog_last_refresh
     yield
     # Restore after test
     _CANONICAL_LABELS.clear()
     _CANONICAL_LABELS.update(orig_labels)
     _VALIDATE_REQUIRED_FIELDS.clear()
     _VALIDATE_REQUIRED_FIELDS.update(orig_required)
-    globals()["_catalog_last_refresh"] = orig_ts
+    app_main._catalog_last_refresh = orig_ts
 
 
 def _mock_response(status=200, data=None):
@@ -258,7 +259,7 @@ async def test_startup_preload_loads_catalog():
         "Sold by",
         "Startup Field",
     ]
-    assert _catalog_last_refresh > 0
+    assert app_main._catalog_last_refresh > 0
 
 
 @pytest.mark.asyncio
@@ -278,7 +279,7 @@ async def test_startup_preload_http_failure_keeps_fallbacks():
     assert _CANONICAL_LABELS == labels_before
     assert _VALIDATE_REQUIRED_FIELDS == required_before
     # Timestamp was NOT updated (fetch failed)
-    assert _catalog_last_refresh == 0.0
+    assert app_main._catalog_last_refresh == 0.0
 
 
 @pytest.mark.asyncio
@@ -296,4 +297,4 @@ async def test_startup_preload_network_error_keeps_fallbacks():
 
     assert _CANONICAL_LABELS == labels_before
     assert _VALIDATE_REQUIRED_FIELDS == required_before
-    assert _catalog_last_refresh == 0.0
+    assert app_main._catalog_last_refresh == 0.0
