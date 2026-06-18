@@ -1580,15 +1580,12 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
 
     normalized = {}
     for key, value in attributes.items():
-        # Skip descriptive-only keys
-        if key.lower() in _NON_CANONICAL_KEYS:
-            continue
+        key_lower = key.lower()
         # If the key already matches a canonical label (case-insensitive)
         # for *this* event type, keep it as-is — don't let a cross-event
         # alias remap it.  (Fixes the "Item" → "Inventory Item" collision
         # where SALES EVENT has "Item" but the alias targets INVENTORY
         # MOVEMENT's "Inventory Item".)
-        key_lower = key.lower()
         if canonical_set:
             matched = None
             for canonical in canonical_set:
@@ -1598,8 +1595,14 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
             if matched:
                 canonical_key = matched
             else:
+                # Only skip descriptive-only keys that DON'T match a canonical label
+                if key_lower in _NON_CANONICAL_KEYS:
+                    continue
                 canonical_key = _FIELD_ALIASES.get(key_lower, key)
         else:
+            # No canonical labels defined for this event — skip descriptive-only keys
+            if key_lower in _NON_CANONICAL_KEYS:
+                continue
             canonical_key = _FIELD_ALIASES.get(key_lower, key)
         # If event has defined canonical labels, only keep matching ones
         if canonical_set and canonical_key not in canonical_set:
