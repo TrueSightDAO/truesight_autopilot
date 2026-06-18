@@ -1206,6 +1206,12 @@ def _ensure_nonempty_final(assistant_text: str, force_clean) -> tuple[str, bool]
 
 _CATALOG_URL = "https://edgar.truesight.me/events-catalog"
 _catalog_last_refresh: float = 0.0  # epoch seconds
+_catalog_from_live: bool = False  # True when data came from Edgar (not snapshot)
+
+
+_SNAPSHOT_PATH = (
+    Path(__file__).resolve().parent / "data" / "events_catalog_snapshot.json"
+)
 
 
 async def _refresh_events_catalog() -> None:
@@ -1215,16 +1221,44 @@ async def _refresh_events_catalog() -> None:
     ``canonical_labels`` and ``required_fields`` overwrite whatever is
     in the local dicts.  If the event is new (not in the local dicts),
     it gets added.  Tracks ``added`` vs ``updated`` counts for logging.
+
+    When Edgar is unreachable (HTTP error, network error, timeout), falls
+    back to the committed snapshot at ``app/data/events_catalog_snapshot.json``
+    if it exists.  If the snapshot is also missing, the hardcoded fallback
+    dicts remain unchanged (current behaviour).
     """
-    global _catalog_last_refresh
+    global _catalog_last_refresh, _catalog_from_live
+    catalog = None
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(_CATALOG_URL)
             resp.raise_for_status()
             catalog = resp.json()
+            _catalog_from_live = True
     except Exception as exc:
         logger.warning("Failed to fetch events catalog from %s: %s", _CATALOG_URL, exc)
-        return
+        # Fall back to the committed snapshot
+        if _SNAPSHOT_PATH.exists():
+            try:
+                catalog = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                logger.info(
+                    "Loaded fallback snapshot from %s (%d events)",
+                    _SNAPSHOT_PATH,
+                    len(catalog.get("events", {})),
+                )
+            except Exception as snap_exc:
+                logger.warning(
+                    "Failed to load fallback snapshot from %s: %s",
+                    _SNAPSHOT_PATH,
+                    snap_exc,
+                )
+        else:
+            logger.warning(
+                "No fallback snapshot at %s — hardcoded fallbacks remain unchanged",
+                _SNAPSHOT_PATH,
+            )
+        if catalog is None:
+            return
 
     events = catalog.get("events", {})
     if not events:
@@ -1253,10 +1287,16 @@ async def _refresh_events_catalog() -> None:
                 _VALIDATE_REQUIRED_FIELDS[event_name] = required
                 added += 1
 
-    _catalog_last_refresh = time.time()
+    if _catalog_from_live:
+        _catalog_last_refresh = time.time()
+        _catalog_from_live = False
     logger.info(
         "Events catalog synced: %s/%s events loaded from Edgar (added=%s updated=%s version=%s)",
-        len(events), len(events), added, updated, catalog.get("version", "?")
+        len(events),
+        len(events),
+        added,
+        updated,
+        catalog.get("version", "?"),
     )
 
 
@@ -1491,7 +1531,7 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
 
 def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
     """Return list of missing required fields. Empty list = valid.
-    
+
     Uses _VALIDATE_REQUIRED_FIELDS which is populated from the live events catalog
     at startup (with hardcoded fallbacks).
     """
@@ -2272,9 +2312,7 @@ def _extract_plan_file(history: list[dict]) -> str | None:
     return plan
 
 
-def _compute_advance_signal(
-    history: list[dict], tool_trace: list[dict]
-) -> dict | None:
+def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict | None:
     """Auto-advance signal for the turn just completed (or None).
 
     Returns None when auto-advance is off, this is not a handoff thread, or the
