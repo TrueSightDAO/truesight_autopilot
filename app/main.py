@@ -1720,67 +1720,67 @@ async def _run_tool(
             if ledger:
                 command += f' --destination-inventory-file-location "{ledger}"'
 
-        if event_name == "QR CODE REGISTRATION":
-            qr_code = attributes.get("QR Code", "")
-            landing_page = attributes.get("Landing Page", "")
-            farm_name = attributes.get("Farm Name", "")
-            state = attributes.get("State", "")
-            country = attributes.get("Country", "")
-            year = attributes.get("Year", "")
-            currency = attributes.get("Currency", "")
-            status = attributes.get("Status", "SAMPLE")
-            manager = attributes.get("Manager", "")
-            creation_date = attributes.get("Creation Date", "")
-            summary = f"Register QR code {qr_code} for {farm_name}"
-            command = "truesight-dao-register-qr-code"
-            if qr_code:
-                command += f' --qr-code "{qr_code}"'
-            if landing_page:
-                command += f' --landing-page "{landing_page}"'
-            if farm_name:
-                command += f' --farm-name "{farm_name}"'
-            if state:
-                command += f' --state "{state}"'
-            if country:
-                command += f' --country "{country}"'
-            if year:
-                command += f' --year "{year}"'
-            if currency:
-                command += f' --currency "{currency}"'
-            if status:
-                command += f' --status "{status}"'
-            if manager:
-                command += f' --manager "{manager}"'
-            if creation_date:
-                command += f' --creation-date "{creation_date}"'
+            if event_name == "QR CODE REGISTRATION":
+                qr_code = attributes.get("QR Code", "")
+                landing_page = attributes.get("Landing Page", "")
+                farm_name = attributes.get("Farm Name", "")
+                state = attributes.get("State", "")
+                country = attributes.get("Country", "")
+                year = attributes.get("Year", "")
+                currency = attributes.get("Currency", "")
+                status = attributes.get("Status", "SAMPLE")
+                manager = attributes.get("Manager", "")
+                creation_date = attributes.get("Creation Date", "")
+                summary = f"Register QR code {qr_code} for {farm_name}"
+                command = "truesight-dao-register-qr-code"
+                if qr_code:
+                    command += f' --qr-code "{qr_code}"'
+                if landing_page:
+                    command += f' --landing-page "{landing_page}"'
+                if farm_name:
+                    command += f' --farm-name "{farm_name}"'
+                if state:
+                    command += f' --state "{state}"'
+                if country:
+                    command += f' --country "{country}"'
+                if year:
+                    command += f' --year "{year}"'
+                if currency:
+                    command += f' --currency "{currency}"'
+                if status:
+                    command += f' --status "{status}"'
+                if manager:
+                    command += f' --manager "{manager}"'
+                if creation_date:
+                    command += f' --creation-date "{creation_date}"'
 
-        proposal = {
-            "status": "pending_approval",
-            "proposal": {
-                "action": "submit_contribution",
-                "title": f"{event_name}: {qr}" if qr else event_name,
-                "summary": summary,
-                "command": command,
-                "tool_args": {"event_name": event_name, "attributes": attributes},
-            },
-            "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
-        }
-
-        # Persist pending approval to server + GitHub for durability
-        if qr and governor_name:
-            _add_pending(
-                governor_name,
-                {
-                    "title": f"{event_name}: {qr}" if qr else event_name,
-                    "qr_code": qr,
-                    "summary": summary,
+            proposal = {
+                "status": "pending_approval",
+                "proposal": {
                     "action": "submit_contribution",
+                    "title": f"{event_name}: {qr}" if qr else event_name,
+                    "summary": summary,
+                    "command": command,
+                    "tool_args": {"event_name": event_name, "attributes": attributes},
                 },
-            )
+                "message": "⏳ Waiting for your approval to submit this transaction. Click Approve to proceed, or Reject to cancel.",
+            }
 
-        return json.dumps(proposal)
+            # Persist pending approval to server + GitHub for durability
+            if qr and governor_name:
+                _add_pending(
+                    governor_name,
+                    {
+                        "title": f"{event_name}: {qr}" if qr else event_name,
+                        "qr_code": qr,
+                        "summary": summary,
+                        "action": "submit_contribution",
+                    },
+                )
 
-        # APPROVED — execute
+            return json.dumps(proposal)
+
+        # APPROVED (or gate off via REQUIRE_SUBMISSION_APPROVAL=false) — execute
         # Add agentic traceability: who approved this, with proof of their authenticated session
         if governor_name and event_name == "INVENTORY MOVEMENT":
             import hashlib
