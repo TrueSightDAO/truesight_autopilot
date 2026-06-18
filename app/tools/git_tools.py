@@ -16,8 +16,11 @@ Guardrails:
 - repo must be in ``settings.allowed_repos`` (same gate as ``open_fix_pr``).
 - the push target may NEVER be the repo's default branch (or main/master) —
   branch + PR always; merging stays behind ``merge_pr`` / a human.
-- the PAT is fed to git via an inline credential helper reading an env var —
-  it never lands in argv or on disk.
+- git operations use SSH (``~/.ssh/id_ed25519_truesight_autopilot`` on the
+  box) — no PAT needed for clone/push. PR creation still uses the GitHub
+  API via ``settings.github_pat``.
+- ``api_only_repos`` are refused (they're write-only data repos; use
+  Contents API instead — see GITHUB_AGENTIC_AI_SSH.md).
 """
 
 from __future__ import annotations
@@ -39,11 +42,10 @@ logger = logging.getLogger("autopilot.tools.git_tools")
 
 _GIT_AUTHOR_NAME = "Sophia (TrueSight Autopilot)"
 _GIT_AUTHOR_EMAIL = "sophia@truesight.me"
-# Inline helper: git asks it for credentials; it answers from $GIT_PAT.
-# Single-quoted shell function — the PAT stays in the subprocess env only.
-_CREDENTIAL_HELPER = (
-    '!f() { echo "username=x-access-token"; echo "password=${GIT_PAT}"; }; f'
-)
+# SSH key for TrueSightDAO git operations (authorised on GitHub as garyjob).
+# Uses GIT_SSH_COMMAND to point git at the dedicated key without touching
+# ~/.ssh/config or the agent — no PAT needed for clone/push.
+_SSH_KEY = str(Path.home() / ".ssh" / "id_ed25519_truesight_autopilot")
 _CLONE_TIMEOUT = 180
 _PUSH_TIMEOUT = 180
 _MAX_ERR_CHARS = 2000
@@ -54,37 +56,21 @@ def _err(reason: str, **extra: Any) -> dict[str, Any]:
 
 
 def _remote_url(repo: str) -> str:
-    """HTTPS remote for a TrueSightDAO repo. Patchable in tests (file:// URLs)."""
-    return f"https://github.com/TrueSightDAO/{repo}.git"
-
-
-def _resolve_pat() -> str:
-    """Vault-first: try github_krake_pat, fall back to settings.github_pat."""
-    try:
-        from ..vault import Vault
-        v = Vault()
-        if v.is_initialized():
-            v.initialize()
-            val = v.get_value("github_krake_pat")
-            if val:
-                logger.info("Resolved github PAT from vault")
-                return val
-    except Exception:
-        logger.debug("vault PAT lookup failed, falling back to env")
-    return settings.github_pat or ""
+    """SSH remote for a TrueSightDAO repo. Patchable in tests (file:// URLs)."""
+    return f"git@github.com:TrueSightDAO/{repo}.git"
 
 
 def _git(
     args: list[str], cwd: str | Path, timeout: int = 60
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["GIT_PAT"] = _resolve_pat()
-    env["GIT_TERMINAL_PROMPT"] = "0"  # fail fast instead of hanging on a prompt
+    env["GIT_SSH_COMMAND"] = (
+        f"ssh -i {_SSH_KEY} -o StrictHostKeyChecking=accept-new"
+    )
+    env["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
         [
             "git",
-            "-c",
-            f"credential.helper={_CREDENTIAL_HELPER}",
             "-c",
             f"user.name={_GIT_AUTHOR_NAME}",
             "-c",
@@ -161,9 +147,11 @@ def git_push_changes(
         )
     if not (writes or edits or deletes):
         return _err("nothing to do: provide writes, edits, and/or deletes")
-    pat = _resolve_pat()
-    if not pat:
-        return _err("No GitHub PAT found (tried vault github_krake_pat and env TRUESIGHT_DAO_AUTOPILOT)")
+
+    # SSH key must exist for real repos; file:// tests skip this
+    if _remote_url(repo).startswith("git@"):
+        if not os.path.isfile(_SSH_KEY):
+            return _err(f"SSH key not found at {_SSH_KEY}")
 
     workdir = Path(tempfile.mkdtemp(prefix=f"sophia-git-{repo}-"))
     try:
