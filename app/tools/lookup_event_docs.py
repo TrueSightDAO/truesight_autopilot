@@ -179,11 +179,21 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
     Fetch DAO event documentation for the given event type from Edgar's live catalog.
 
     Args:
-        event_name: The event type to look up (e.g. "SALES EVENT", "INVENTORY MOVEMENT")
+        event_name: The event type to look up (e.g. "SALES EVENT", "INVENTORY MOVEMENT").
+                    Can also be an intent phrase like "sell cacao" or "transfer custody"
+                    which will be resolved to the correct event type via intent_guidance.
 
     Returns:
-        Dict with event_name, category, canonical_labels, required_fields, description, dapp_page
+        Dict with event_name, category, canonical_labels, required_fields, description,
+        dapp_page, important_fields, and intent_guidance.
     """
+    # Resolve intent phrases to canonical event names
+    lower = event_name.strip().lower()
+    resolved = _INTENT_GUIDANCE.get(lower)
+    if resolved:
+        logger.info("lookup_event_docs: resolved intent '%s' -> '%s'", event_name, resolved)
+        event_name = resolved
+
     catalog = _fetch_catalog()
     entry = _find_event(catalog, event_name)
 
