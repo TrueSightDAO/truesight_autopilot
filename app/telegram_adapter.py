@@ -422,16 +422,33 @@ def download_telegram_file(file_id: str) -> str | None:
     """Download a Telegram file to a local path the autopilot tools can read.
     Returns the absolute path, or None on failure."""
     try:
-        meta = httpx.get(_api("getFile"), params={"file_id": file_id}, timeout=20.0)
-        meta.raise_for_status()
-        file_path = (meta.json().get("result") or {}).get("file_path")
-        if not file_path:
+        # Retry getFile up to 3 times — Telegram may need time to process large files
+        last_meta = None
+        for attempt in range(1, 4):
+            meta = httpx.get(_api("getFile"), params={"file_id": file_id}, timeout=20.0)
+            meta.raise_for_status()
+            last_meta = meta
+            result = meta.json().get("result") or {}
+            file_path = result.get("file_path")
+            if file_path:
+                break
+            if attempt < 3:
+                logger.info(
+                    "telegram getFile returned no file_path for %s (attempt %s/3, file_size=%s), retrying...",
+                    file_id, attempt, result.get("file_size", "unknown"),
+                )
+                time.sleep(3 * attempt)
+        else:
+            logger.warning(
+                "telegram getFile returned no file_path after 3 attempts for %s: %s",
+                file_id, last_meta.text if last_meta else "no response",
+            )
             return None
         ext = os.path.splitext(file_path)[1] or ".bin"
         os.makedirs(_ATTACH_DIR, exist_ok=True)
         dest = os.path.join(_ATTACH_DIR, f"{uuid.uuid4().hex}{ext}")
         url = f"{_TELEGRAM_API}/file/bot{settings.telegram_bot_api_key}/{file_path}"
-        with httpx.stream("GET", url, timeout=60.0) as resp:
+        with httpx.stream("GET", url, timeout=120.0) as resp:
             resp.raise_for_status()
             with open(dest, "wb") as fh:
                 for chunk in resp.iter_bytes():
@@ -439,7 +456,7 @@ def download_telegram_file(file_id: str) -> str | None:
         logger.info("downloaded telegram attachment → %s", dest)
         return dest
     except Exception as e:  # noqa: BLE001
-        logger.warning("telegram file download failed: %s", e)
+        logger.warning("telegram file download failed for %s: %s", file_id, e)
         return None
 
 
