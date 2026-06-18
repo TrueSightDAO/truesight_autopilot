@@ -1475,7 +1475,9 @@ _NON_CANONICAL_KEYS = {
 }
 
 
-def _normalize_via_catalog(attributes: dict, canonical_labels: list[str]) -> dict:
+def _normalize_via_catalog(
+    attributes: dict, canonical_labels: list[str], event_name: str = ""
+) -> dict:
     """Map LLM-supplied attribute keys to canonical labels using the catalog.
 
     Matching priority (first match wins):
@@ -1483,11 +1485,12 @@ def _normalize_via_catalog(attributes: dict, canonical_labels: list[str]) -> dic
     2. Case-insensitive match → use canonical label
     3. Space/underscore/hyphen normalized match → use canonical label
     4. Fallback to _FIELD_ALIASES for backward compat
-    5. Keys that don't match any canonical label are kept (not silently dropped)
+    5. Keys that don't match any canonical label are kept with a warning
 
     Args:
         attributes: Raw attribute dict from LLM
         canonical_labels: List of canonical label strings for this event type
+        event_name: Event type name for logging
 
     Returns:
         Dict with keys mapped to canonical labels where possible
@@ -1529,7 +1532,10 @@ def _normalize_via_catalog(attributes: dict, canonical_labels: list[str]) -> dic
             normalized[alias] = str(value)
             continue
 
-        # 5. Keep unmatched keys (PR5 will surface them)
+        # 5. Keep unmatched keys with a warning
+        logger.warning(
+            "Non-canonical key '%s' passed through for %s", key, event_name or "unknown"
+        )
         normalized[key] = str(value)
 
     return normalized
@@ -1567,7 +1573,7 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
 
     if settings.catalog_normalize:
         canonical_labels = _CANONICAL_LABELS.get(event_name, [])
-        return _normalize_via_catalog(attributes, canonical_labels)
+        return _normalize_via_catalog(attributes, canonical_labels, event_name)
 
     # ── Legacy path (CATALOG_NORMALIZE=False) ──
     canonical_set = set(_CANONICAL_LABELS.get(event_name, []))
