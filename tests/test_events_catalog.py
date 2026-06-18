@@ -221,3 +221,79 @@ async def test_catalog_updates_both_dicts():
         "Type",
         "New Required Field",
     ]
+
+
+# ── Startup preload tests (PR2: close the boot-window gap) ────────────────
+
+
+@pytest.mark.asyncio
+async def test_startup_preload_loads_catalog():
+    """Simulate the lifespan startup call: catalog is loaded before any
+    user message arrives, closing the ~120s boot-window."""
+    # Verify hardcoded fallback is present before preload
+    assert "SALES EVENT" in _CANONICAL_LABELS
+    original_labels = list(_CANONICAL_LABELS["SALES EVENT"])
+
+    catalog = {
+        "events": {
+            "SALES EVENT": {
+                "canonical_labels": ["Item", "Sales price", "Sold by", "Startup Field"],
+                "required_fields": ["Item", "Sales price"],
+            }
+        },
+        "version": "2.0",
+    }
+
+    with patch("app.main.httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+            return_value=_mock_response(data=catalog)
+        )
+        # This is the same call that lifespan() makes at startup
+        await _refresh_events_catalog()
+
+    # Catalog won — the startup preload populated the dicts
+    assert _CANONICAL_LABELS["SALES EVENT"] == [
+        "Item",
+        "Sales price",
+        "Sold by",
+        "Startup Field",
+    ]
+    assert _catalog_last_refresh > 0
+
+
+@pytest.mark.asyncio
+async def test_startup_preload_http_failure_keeps_fallbacks():
+    """When Edgar is unreachable at startup, the hardcoded fallbacks remain
+    unchanged — no crash, no regression."""
+    labels_before = dict(_CANONICAL_LABELS)
+    required_before = dict(_VALIDATE_REQUIRED_FIELDS)
+
+    with patch("app.main.httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+            return_value=_mock_response(status=503)
+        )
+        await _refresh_events_catalog()
+
+    # Hardcoded fallbacks are untouched
+    assert _CANONICAL_LABELS == labels_before
+    assert _VALIDATE_REQUIRED_FIELDS == required_before
+    # Timestamp was NOT updated (fetch failed)
+    assert _catalog_last_refresh == 0.0
+
+
+@pytest.mark.asyncio
+async def test_startup_preload_network_error_keeps_fallbacks():
+    """Network error (connection refused, timeout) at startup → fallbacks
+    remain, no crash."""
+    labels_before = dict(_CANONICAL_LABELS)
+    required_before = dict(_VALIDATE_REQUIRED_FIELDS)
+
+    with patch("app.main.httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+            side_effect=httpx.ConnectError("Connection refused")
+        )
+        await _refresh_events_catalog()
+
+    assert _CANONICAL_LABELS == labels_before
+    assert _VALIDATE_REQUIRED_FIELDS == required_before
+    assert _catalog_last_refresh == 0.0
