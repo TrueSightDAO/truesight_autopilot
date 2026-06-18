@@ -1529,7 +1529,10 @@ def _normalize_via_catalog(attributes: dict, canonical_labels: list[str]) -> dic
             normalized[alias] = str(value)
             continue
 
-        # 5. Keep unmatched keys (PR5 will surface them)
+        # 5. Keep unmatched keys with a warning
+        logger.warning(
+            "Non-canonical key '%s' passed through for %s", key, event_name
+        )
         normalized[key] = str(value)
 
     return normalized
