@@ -6,15 +6,13 @@ fallback dicts (_CANONICAL_LABELS and _VALIDATE_REQUIRED_FIELDS).
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from app.main import (
     _CANONICAL_LABELS,
-    _CATALOG_URL,
     _VALIDATE_REQUIRED_FIELDS,
     _catalog_last_refresh,
     _refresh_events_catalog,
@@ -41,8 +39,8 @@ def _mock_response(status=200, data=None):
     """Build a mock httpx response."""
     resp = AsyncMock(spec=httpx.Response)
     resp.status_code = status
-    resp.json = AsyncMock(return_value=data or {"events": {}, "version": "test"})
-    resp.raise_for_status = AsyncMock()
+    resp.json = MagicMock(return_value=data or {"events": {}, "version": "test"})
+    resp.raise_for_status = MagicMock()
     if status >= 400:
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
             "error", request=AsyncMock(), response=resp
