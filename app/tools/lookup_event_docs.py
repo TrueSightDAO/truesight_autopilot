@@ -1,8 +1,9 @@
 """lookup_event_docs tool — fetch DAO event documentation from Edgar events catalog.
 
-Returns the canonical labels, required fields, category, and description for a given
-event type. Fetches live from edgar.truesight.me/dao-protocol/events-catalog (JSON)
-so it's always current. Falls back to built-in docs if Edgar is unreachable.
+Returns the canonical labels, required fields, category, description, intent-to-event
+guidance, and important-fields hints for a given event type. Fetches live from
+edgar.truesight.me/dao-protocol/events-catalog (JSON) so it's always current.
+Falls back to built-in docs if Edgar is unreachable.
 
 This is the single source of truth — no hardcoded event definitions.
 """
@@ -22,6 +23,87 @@ CATALOG_URL = "https://edgar.truesight.me/events-catalog"
 
 # Cached catalog (refreshed on miss)
 _catalog: dict[str, Any] | None = None
+
+# ── Intent-to-event mapping ───────────────────────────────────────────────
+# Maps common governor intents to the correct DAO event type. The LLM should
+# consult this BEFORE calling submit_contribution so it picks the right event.
+_INTENT_GUIDANCE: dict[str, str] = {
+    "sell cacao": "SALES EVENT",
+    "sale": "SALES EVENT",
+    "retail sale": "SALES EVENT",
+    "end customer sale": "SALES EVENT",
+    "transfer custody": "INVENTORY MOVEMENT",
+    "transfer bag": "INVENTORY MOVEMENT",
+    "move inventory": "INVENTORY MOVEMENT",
+    "supply chain transfer": "INVENTORY MOVEMENT",
+    "record work": "CONTRIBUTION EVENT",
+    "log contribution": "CONTRIBUTION EVENT",
+    "record time": "CONTRIBUTION EVENT",
+    "add partner": "PARTNER ADD EVENT",
+    "onboard partner": "PARTNER ADD EVENT",
+    "check in with partner": "PARTNER CHECK-IN EVENT",
+    "partner check-in": "PARTNER CHECK-IN EVENT",
+    "register qr code": "QR CODE REGISTRATION",
+    "add contributor": "CONTRIBUTOR ADD EVENT",
+    "onboard contributor": "CONTRIBUTOR ADD EVENT",
+    "capital injection": "CAPITAL INJECTION EVENT",
+    "record payment": "PAYMENT EVENT",
+}
+
+# ── Important fields per event type ───────────────────────────────────────
+# Fields that are most commonly missed or incorrectly filled by the LLM.
+# The LLM should ensure these are always present when submitting.
+_IMPORTANT_FIELDS: dict[str, list[str]] = {
+    "SALES EVENT": [
+        "Cash proceeds collected by",
+        "Owner email",
+        "Sales price",
+        "Item",
+        "Sold by",
+    ],
+    "INVENTORY MOVEMENT": [
+        "Manager Name",
+        "Recipient Name",
+        "QR Code",
+        "Quantity",
+        "Destination inventory file location",
+    ],
+    "CONTRIBUTION EVENT": [
+        "Type",
+        "Amount",
+        "Contributor",
+    ],
+    "PARTNER ADD EVENT": [
+        "Partner Name",
+        "Partner Email",
+        "Partner Type",
+    ],
+    "PARTNER CHECK-IN EVENT": [
+        "Partner Name",
+        "Check-in Date",
+        "Notes",
+    ],
+    "QR CODE REGISTRATION": [
+        "QR Code",
+        "Item",
+        "Manager",
+    ],
+    "CONTRIBUTOR ADD EVENT": [
+        "Contributor Name",
+        "Contributor Email",
+        "Role",
+    ],
+    "CAPITAL INJECTION EVENT": [
+        "Amount",
+        "Source",
+        "Date",
+    ],
+    "PAYMENT EVENT": [
+        "Amount",
+        "Paid To",
+        "Paid By",
+    ],
+}
 
 # Minimal fallback for when Edgar is unreachable
 _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
