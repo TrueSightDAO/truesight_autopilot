@@ -1809,7 +1809,50 @@ async def _run_tool(
             except Exception:
                 pass
 
-        # 3. APPROVAL GATE: check if the most recent user message explicitly approved this submission.
+        # 3. LOOKUP-BEFORE-SUBMIT (G4b): enforce that lookup_event_docs was called for this
+        # event type before submitting. If no prior lookup exists in the conversation history,
+        # inject the catalog spec inline so the model gets the canonical labels and required
+        # fields without needing a separate tool round.
+        _lookup_injected = None
+        if history:
+            _found_lookup = False
+            for _msg in history:
+                if _msg.get("role") == "assistant" and _msg.get("tool_calls"):
+                    for _tc in _msg["tool_calls"]:
+                        _fn = (_tc.get("function") or {}).get("name", "")
+                        if _fn == "lookup_event_docs":
+                            try:
+                                _args = json.loads(
+                                    (_tc.get("function") or {}).get("arguments", "{}")
+                                )
+                                if _args.get("event_name", "").upper() == event_name.upper():
+                                    _found_lookup = True
+                                    break
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                    if _found_lookup:
+                        break
+            if not _found_lookup:
+                logger.warning(
+                    "lookup-before-submit: no prior lookup_event_docs for '%s' — injecting inline",
+                    event_name,
+                )
+                _injected = lookup_event_docs(event_name)
+                if isinstance(_injected, dict) and "error" not in _injected:
+                    _lookup_injected = {
+                        "canonical_labels": _injected.get("canonical_labels", []),
+                        "required_fields": _injected.get("required_fields", []),
+                        "description": _injected.get("description", ""),
+                    }
+                else:
+                    # Fallback: use the in-memory catalog dicts
+                    _lookup_injected = {
+                        "canonical_labels": _CANONICAL_LABELS.get(event_name, []),
+                        "required_fields": _VALIDATE_REQUIRED_FIELDS.get(event_name, []),
+                        "description": "",
+                    }
+
+        # 4. APPROVAL GATE: check if the most recent user message explicitly approved this submission.
         # Disabled by default (REQUIRE_SUBMISSION_APPROVAL=false) — signed submissions execute
         # directly; the gate only runs when explicitly re-enabled. See config.require_submission_approval.
         approved = not settings.require_submission_approval
