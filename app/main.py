@@ -1475,16 +1475,85 @@ _NON_CANONICAL_KEYS = {
 }
 
 
+def _normalize_via_catalog(attributes: dict, canonical_labels: list[str]) -> dict:
+    """Map LLM-supplied attribute keys to canonical labels using the catalog.
+
+    Matching priority (first match wins):
+    1. Exact match → use canonical label as-is
+    2. Case-insensitive match → use canonical label
+    3. Space/underscore/hyphen normalized match → use canonical label
+    4. Fallback to _FIELD_ALIASES for backward compat
+    5. Keys that don't match any canonical label are kept (not silently dropped)
+
+    Args:
+        attributes: Raw attribute dict from LLM
+        canonical_labels: List of canonical label strings for this event type
+
+    Returns:
+        Dict with keys mapped to canonical labels where possible
+    """
+    if not canonical_labels:
+        return dict(attributes)
+
+    # Build lookup tables for fast matching
+    # canonical_lower[label.lower()] = label
+    canonical_lower: dict[str, str] = {}
+    # canonical_normalized[re.sub(r'[ _-]+', ' ', label).lower().strip()] = label
+    canonical_norm: dict[str, str] = {}
+    for label in canonical_labels:
+        canonical_lower[label.lower()] = label
+        canonical_norm[_normalize_key(label)] = label
+
+    normalized: dict[str, str] = {}
+    for key, value in attributes.items():
+        # 1. Exact match
+        if key in canonical_labels:
+            normalized[key] = str(value)
+            continue
+
+        # 2. Case-insensitive match
+        key_lower = key.lower()
+        if key_lower in canonical_lower:
+            normalized[canonical_lower[key_lower]] = str(value)
+            continue
+
+        # 3. Space/underscore/hyphen normalized match
+        key_norm = _normalize_key(key)
+        if key_norm in canonical_norm:
+            normalized[canonical_norm[key_norm]] = str(value)
+            continue
+
+        # 4. Fallback to _FIELD_ALIASES
+        alias = _FIELD_ALIASES.get(key_lower)
+        if alias:
+            normalized[alias] = str(value)
+            continue
+
+        # 5. Keep unmatched keys (PR5 will surface them)
+        normalized[key] = str(value)
+
+    return normalized
+
+
+def _normalize_key(s: str) -> str:
+    """Normalize a key for fuzzy matching: lowercase, collapse space/underscore/hyphen."""
+    import re as _re
+
+    return _re.sub(r"[ _-]+", " ", s).lower().strip()
+
+
 def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
     """Coerce LLM-generated attribute keys to canonical dao_client labels.
 
-    Steps:
+    When CATALOG_NORMALIZE=True, uses the catalog-driven normalizer which
+    matches against the event's canonical_labels via exact/case-insensitive/
+    space-underscore-hyphen matching, falling back to _FIELD_ALIASES.
+
+    When CATALOG_NORMALIZE=False (default), uses the legacy behavior:
     1. Map alias names to canonical labels
     2. Drop non-canonical descriptive keys
     3. Keep only canonical labels for the event type
     """
-    canonical_set = set(_CANONICAL_LABELS.get(event_name, []))
-
     # Defensive: this is type-hinted `dict`, but a double-encoded tool call can
     # hand us a JSON string (or None). Coerce so a malformed arg can never crash
     # the tool loop and brick the thread.
@@ -1495,6 +1564,13 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
             attributes = {}
     if not isinstance(attributes, dict):
         attributes = {}
+
+    if settings.catalog_normalize:
+        canonical_labels = _CANONICAL_LABELS.get(event_name, [])
+        return _normalize_via_catalog(attributes, canonical_labels)
+
+    # ── Legacy path (CATALOG_NORMALIZE=False) ──
+    canonical_set = set(_CANONICAL_LABELS.get(event_name, []))
 
     normalized = {}
     for key, value in attributes.items():
