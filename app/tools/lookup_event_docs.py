@@ -1,8 +1,9 @@
 """lookup_event_docs tool — fetch DAO event documentation from Edgar events catalog.
 
-Returns the canonical labels, required fields, category, and description for a given
-event type. Fetches live from edgar.truesight.me/dao-protocol/events-catalog (JSON)
-so it's always current. Falls back to built-in docs if Edgar is unreachable.
+Returns the canonical labels, required fields, category, description, intent-to-event
+guidance, and important-fields hints for a given event type. Fetches live from
+edgar.truesight.me/dao-protocol/events-catalog (JSON) so it's always current.
+Falls back to built-in docs if Edgar is unreachable.
 
 This is the single source of truth — no hardcoded event definitions.
 """
@@ -22,6 +23,87 @@ CATALOG_URL = "https://edgar.truesight.me/events-catalog"
 
 # Cached catalog (refreshed on miss)
 _catalog: dict[str, Any] | None = None
+
+# ── Intent-to-event mapping ───────────────────────────────────────────────
+# Maps common governor intents to the correct DAO event type. The LLM should
+# consult this BEFORE calling submit_contribution so it picks the right event.
+_INTENT_GUIDANCE: dict[str, str] = {
+    "sell cacao": "SALES EVENT",
+    "sale": "SALES EVENT",
+    "retail sale": "SALES EVENT",
+    "end customer sale": "SALES EVENT",
+    "transfer custody": "INVENTORY MOVEMENT",
+    "transfer bag": "INVENTORY MOVEMENT",
+    "move inventory": "INVENTORY MOVEMENT",
+    "supply chain transfer": "INVENTORY MOVEMENT",
+    "record work": "CONTRIBUTION EVENT",
+    "log contribution": "CONTRIBUTION EVENT",
+    "record time": "CONTRIBUTION EVENT",
+    "add partner": "PARTNER ADD EVENT",
+    "onboard partner": "PARTNER ADD EVENT",
+    "check in with partner": "PARTNER CHECK-IN EVENT",
+    "partner check-in": "PARTNER CHECK-IN EVENT",
+    "register qr code": "QR CODE REGISTRATION",
+    "add contributor": "CONTRIBUTOR ADD EVENT",
+    "onboard contributor": "CONTRIBUTOR ADD EVENT",
+    "capital injection": "CAPITAL INJECTION EVENT",
+    "record payment": "PAYMENT EVENT",
+}
+
+# ── Important fields per event type ───────────────────────────────────────
+# Fields that are most commonly missed or incorrectly filled by the LLM.
+# The LLM should ensure these are always present when submitting.
+_IMPORTANT_FIELDS: dict[str, list[str]] = {
+    "SALES EVENT": [
+        "Cash proceeds collected by",
+        "Owner email",
+        "Sales price",
+        "Item",
+        "Sold by",
+    ],
+    "INVENTORY MOVEMENT": [
+        "Manager Name",
+        "Recipient Name",
+        "QR Code",
+        "Quantity",
+        "Destination inventory file location",
+    ],
+    "CONTRIBUTION EVENT": [
+        "Type",
+        "Amount",
+        "Contributor",
+    ],
+    "PARTNER ADD EVENT": [
+        "Partner Name",
+        "Partner Email",
+        "Partner Type",
+    ],
+    "PARTNER CHECK-IN EVENT": [
+        "Partner Name",
+        "Check-in Date",
+        "Notes",
+    ],
+    "QR CODE REGISTRATION": [
+        "QR Code",
+        "Item",
+        "Manager",
+    ],
+    "CONTRIBUTOR ADD EVENT": [
+        "Contributor Name",
+        "Contributor Email",
+        "Role",
+    ],
+    "CAPITAL INJECTION EVENT": [
+        "Amount",
+        "Source",
+        "Date",
+    ],
+    "PAYMENT EVENT": [
+        "Amount",
+        "Paid To",
+        "Paid By",
+    ],
+}
 
 # Minimal fallback for when Edgar is unreachable
 _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
@@ -87,6 +169,8 @@ def _build_result(event_name: str, entry: dict) -> dict[str, Any]:
         "description": entry.get("description", ""),
         "dapp_page": entry.get("dapp_page", ""),
         "source": "edgar-catalog (live)",
+        "important_fields": _IMPORTANT_FIELDS.get(event_name, []),
+        "intent_guidance": _INTENT_GUIDANCE,
     }
 
 
@@ -95,11 +179,21 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
     Fetch DAO event documentation for the given event type from Edgar's live catalog.
 
     Args:
-        event_name: The event type to look up (e.g. "SALES EVENT", "INVENTORY MOVEMENT")
+        event_name: The event type to look up (e.g. "SALES EVENT", "INVENTORY MOVEMENT").
+                    Can also be an intent phrase like "sell cacao" or "transfer custody"
+                    which will be resolved to the correct event type via intent_guidance.
 
     Returns:
-        Dict with event_name, category, canonical_labels, required_fields, description, dapp_page
+        Dict with event_name, category, canonical_labels, required_fields, description,
+        dapp_page, important_fields, and intent_guidance.
     """
+    # Resolve intent phrases to canonical event names
+    lower = event_name.strip().lower()
+    resolved = _INTENT_GUIDANCE.get(lower)
+    if resolved:
+        logger.info("lookup_event_docs: resolved intent '%s' -> '%s'", event_name, resolved)
+        event_name = resolved
+
     catalog = _fetch_catalog()
     entry = _find_event(catalog, event_name)
 
@@ -120,6 +214,8 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
                 "description": doc.get("description", ""),
                 "dapp_page": doc.get("dapp_page", ""),
                 "source": "fallback (Edgar unreachable)",
+                "important_fields": _IMPORTANT_FIELDS.get(key, []),
+                "intent_guidance": _INTENT_GUIDANCE,
             }
 
     # Completely unknown
@@ -128,7 +224,9 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
         "event_name": event_name,
         "error": f"Event type '{event_name}' not found in documentation.",
         "available_events": available,
-        "note": f"Check {CATALOG_URL} for the full DAO events catalog."
+        "note": f"Check {CATALOG_URL} for the full DAO events catalog.",
+        "intent_guidance": _INTENT_GUIDANCE,
+        "important_fields": _IMPORTANT_FIELDS,
     }
 
 
@@ -144,16 +242,17 @@ TOOL_SPEC = ToolSpec(
     description=(
         "Fetch DAO event documentation for a given event type (e.g. SALES EVENT, "
         "INVENTORY MOVEMENT). Returns canonical labels, required fields, category, "
-        "and when-to-use rules. Fetches live from Edgar's event catalog; falls back "
-        "to built-in docs if Edgar is unreachable. Always call this BEFORE calling "
-        "submit_contribution to ensure you use the correct event type and format."
+        "when-to-use rules, intent-to-event mapping guidance, and important-fields "
+        "hints. Fetches live from Edgar's event catalog; falls back to built-in docs "
+        "if Edgar is unreachable. Always call this BEFORE calling submit_contribution "
+        "to ensure you use the correct event type and format."
     ),
     parameters={
         "type": "object",
         "properties": {
             "event_name": {
                 "type": "string",
-                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT', 'CONTRIBUTOR ADD EVENT'",
+                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT', 'CONTRIBUTOR ADD EVENT'. You can also pass an intent phrase like 'sell cacao' or 'transfer custody' and the tool will resolve it to the correct event type.",
             }
         },
         "required": ["event_name"],

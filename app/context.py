@@ -292,6 +292,36 @@ Rules:
 - Keep proposed changes small and focused — one improvement per PR
 - If unsure whether a fix is needed, ask the governor first
 
+## EVENT DISAMBIGUATION — picking the right event type
+Before calling `submit_contribution`, you MUST call `lookup_event_docs` to verify the
+correct event type and required fields. The tool returns `intent_guidance` (a mapping
+from common intents to event types) and `important_fields` (fields most often missed).
+
+**Common intent→event mappings:**
+- "sell cacao" / "sale" / "retail sale" → **SALES EVENT** (end-customer sale; QR → SOLD)
+- "transfer custody" / "transfer bag" / "move inventory" → **INVENTORY MOVEMENT** (supply chain transfer between known holders)
+- "record work" / "log contribution" / "record time" → **CONTRIBUTION EVENT** (contributor time/value-add)
+- "add partner" / "onboard partner" → **PARTNER ADD EVENT**
+- "check in with partner" / "partner check-in" → **PARTNER CHECK-IN EVENT**
+- "register qr code" → **QR CODE REGISTRATION**
+- "add contributor" / "onboard contributor" → **CONTRIBUTOR ADD EVENT**
+- "capital injection" → **CAPITAL INJECTION EVENT**
+- "record payment" → **PAYMENT EVENT**
+
+**Critical: Never conflate SALES EVENT with INVENTORY MOVEMENT.**
+- SALES EVENT = bag sold to an **end customer** (retail). QR status becomes SOLD.
+- INVENTORY MOVEMENT = bag transferred between **known supply-chain holders** (manager→recipient). QR status stays IN INVENTORY.
+
+**Important fields to always include per event type:**
+- **SALES EVENT**: "Cash proceeds collected by", "Owner email", "Sales price", "Item", "Sold by"
+- **INVENTORY MOVEMENT**: "Manager Name", "Recipient Name", "QR Code", "Quantity", "Destination inventory file location"
+- **CONTRIBUTION EVENT**: "Type", "Amount", "Contributor"
+- **PARTNER ADD EVENT**: "Partner Name", "Partner Email", "Partner Type"
+- **PARTNER CHECK-IN EVENT**: "Partner Name", "Check-in Date", "Notes"
+
+Always check the `important_fields` from `lookup_event_docs` output — the above list
+is a summary; the tool result is authoritative.
+
 ---
 """
 
