@@ -173,21 +173,33 @@ def test_qr_lookup_and_correction(client: AutopilotClient) -> bool:
 
 
 def test_submission_approval_gate(client: AutopilotClient) -> bool:
-    """Test 3: submit_contribution must return pending_approval on first call."""
-    print(f"\n{BOLD}Test 3: Submission approval gate{RESET}")
+    """Test 3: submit_contribution honors REQUIRE_SUBMISSION_APPROVAL.
+
+    The gate is OFF by default (2026-06-18) — a signed submission executes
+    directly (the signature is the authorization). Set
+    REQUIRE_SUBMISSION_APPROVAL=true to restore the pending-approval card."""
+    gate_on = os.getenv("REQUIRE_SUBMISSION_APPROVAL", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    print(f"\n{BOLD}Test 3: Submission approval gate (gate_on={gate_on}){RESET}")
     resp = client.chat(
         "Submit the inventory movement from Kirsten to Gary Teh for 2024OSCAR_20260330_22. No dry run."
     )
     data = stream_to_end(resp)
-    ok = True
-    # On first call, submit_contribution should return pending_approval, not execute
-    # (We check the response text for evidence of proposal/waiting)
-    ok &= assert_true(
-        "submit_contribution" not in data["tools"]
-        or "pending_approval" in data["response"].lower(),
-        "Either didn't call submit_contribution, or it returned pending_approval",
+    if gate_on:
+        # Gate ON: must return pending_approval on first call, not execute.
+        return assert_true(
+            "submit_contribution" not in data["tools"]
+            or "pending_approval" in data["response"].lower(),
+            "Gate ON: submit_contribution should return pending_approval",
+        )
+    # Gate OFF (default): must NOT loop on a pending proposal — it executes.
+    return assert_true(
+        "pending_approval" not in data["response"].lower(),
+        "Gate OFF (default): submit_contribution should execute, not return pending_approval",
     )
-    return ok
 
 
 def test_duplicate_guard(client: AutopilotClient) -> bool:

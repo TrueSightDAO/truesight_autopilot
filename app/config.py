@@ -30,6 +30,16 @@ class Settings(BaseSettings):
         default=8, validation_alias="AUTO_ADVANCE_MAX_TURNS"
     )
 
+    # Approval gate for submit_contribution. OFF by default (Gary 2026-06-18):
+    # signed submissions execute directly — the RSA signature is the
+    # authorization, so the extra "Click Approve" step was redundant friction
+    # AND caused a retry loop (a no-QR CONTRIBUTION EVENT could never satisfy the
+    # QR-keyed gate -> permanent "pending" -> the model re-called it to the round
+    # cap). Set REQUIRE_SUBMISSION_APPROVAL=true to restore the Approve/Reject card.
+    require_submission_approval: bool = Field(
+        default=False, validation_alias="REQUIRE_SUBMISSION_APPROVAL"
+    )
+
     # CORS
     cors_origins: list[str] = ["*"]  # TODO: restrict to dapp.truesight.me in production
 
