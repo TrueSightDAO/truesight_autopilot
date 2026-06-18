@@ -1573,7 +1573,7 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
 
     if settings.catalog_normalize:
         canonical_labels = _CANONICAL_LABELS.get(event_name, [])
-        return _normalize_via_catalog(attributes, canonical_labels)
+        return _normalize_via_catalog(attributes, canonical_labels, event_name)
 
     # ── Legacy path (CATALOG_NORMALIZE=False) ──
     canonical_set = set(_CANONICAL_LABELS.get(event_name, []))
