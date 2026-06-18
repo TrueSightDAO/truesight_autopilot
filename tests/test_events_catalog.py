@@ -6,6 +6,8 @@ fallback dicts (_CANONICAL_LABELS and _VALIDATE_REQUIRED_FIELDS).
 
 from __future__ import annotations
 
+import json
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -233,7 +235,7 @@ async def test_startup_preload_loads_catalog():
     user message arrives, closing the ~120s boot-window."""
     # Verify hardcoded fallback is present before preload
     assert "SALES EVENT" in _CANONICAL_LABELS
-    original_labels = list(_CANONICAL_LABELS["SALES EVENT"])
+    _ = list(_CANONICAL_LABELS["SALES EVENT"])  # noqa: F841
 
     catalog = {
         "events": {
@@ -325,9 +327,7 @@ async def test_snapshot_loads_on_http_error(_snapshot_path):
         },
         "version": "snapshot-v1",
     }
-    _snapshot_path.write_text(
-        json.dumps(snapshot_data, indent=2), encoding="utf-8"
-    )
+    _snapshot_path.write_text(json.dumps(snapshot_data, indent=2), encoding="utf-8")
 
     try:
         with patch("app.main.httpx.AsyncClient") as mock_client:
@@ -384,9 +384,7 @@ async def test_snapshot_partial_events_merge(_snapshot_path):
         },
         "version": "snapshot-v2",
     }
-    _snapshot_path.write_text(
-        json.dumps(snapshot_data, indent=2), encoding="utf-8"
-    )
+    _snapshot_path.write_text(json.dumps(snapshot_data, indent=2), encoding="utf-8")
 
     try:
         with patch("app.main.httpx.AsyncClient") as mock_client:
@@ -424,9 +422,7 @@ async def test_snapshot_network_error_loads_snapshot(_snapshot_path):
         },
         "version": "snap-v3",
     }
-    _snapshot_path.write_text(
-        json.dumps(snapshot_data, indent=2), encoding="utf-8"
-    )
+    _snapshot_path.write_text(json.dumps(snapshot_data, indent=2), encoding="utf-8")
 
     try:
         with patch("app.main.httpx.AsyncClient") as mock_client:
