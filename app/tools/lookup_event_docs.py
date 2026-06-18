@@ -169,6 +169,8 @@ def _build_result(event_name: str, entry: dict) -> dict[str, Any]:
         "description": entry.get("description", ""),
         "dapp_page": entry.get("dapp_page", ""),
         "source": "edgar-catalog (live)",
+        "important_fields": _IMPORTANT_FIELDS.get(event_name, []),
+        "intent_guidance": _INTENT_GUIDANCE,
     }
 
 
