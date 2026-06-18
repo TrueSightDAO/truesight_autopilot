@@ -1436,7 +1436,7 @@ _FIELD_ALIASES: dict[str, str] = {
     "page": "Landing Page",
     "farm_name": "Farm Name",
     "farm": "Farm Name",
-    "manager": "Manager",
+    "manager": "Manager Name",
     "creation_date": "Creation Date",
     "date": "Creation Date",
     # Sales
