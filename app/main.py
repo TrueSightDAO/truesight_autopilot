@@ -1249,8 +1249,12 @@ async def _refresh_events_catalog() -> None:
 
 
 async def _catalog_refresh_loop() -> None:
-    """Background loop: refresh the events catalog every 12 hours."""
-    await asyncio.sleep(120)  # let other startup tasks finish first
+    """Background loop: refresh the events catalog every 12 hours.
+
+    The first fetch already ran during lifespan startup (see ``lifespan()``),
+    so this loop sleeps a short while before the first background refresh.
+    """
+    await asyncio.sleep(30)  # short delay before first background refresh
     while True:
         await _refresh_events_catalog()
         await asyncio.sleep(12 * 3600)  # 12 hours
