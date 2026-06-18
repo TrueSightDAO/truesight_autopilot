@@ -30,6 +30,15 @@ class Settings(BaseSettings):
         default=8, validation_alias="AUTO_ADVANCE_MAX_TURNS"
     )
 
+    # Catalog-driven field normalizer. When ON, _normalize_submission_labels uses
+    # the live events catalog's canonical_labels to map LLM-supplied attribute keys
+    # to canonical labels via exact/case-insensitive/space-underscore-hyphen matching,
+    # falling back to _FIELD_ALIASES for backward compat. OFF by default — existing
+    # _FIELD_ALIASES behavior is unchanged.
+    catalog_normalize: bool = Field(
+        default=False, validation_alias="CATALOG_NORMALIZE"
+    )
+
     # Approval gate for submit_contribution. OFF by default (Gary 2026-06-18):
     # signed submissions execute directly — the RSA signature is the
     # authorization, so the extra "Click Approve" step was redundant friction
