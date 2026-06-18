@@ -153,7 +153,7 @@ TOOL_SPEC = ToolSpec(
         "properties": {
             "event_name": {
                 "type": "string",
-                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT'",
+                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT', 'CONTRIBUTOR ADD EVENT'",
             }
         },
         "required": ["event_name"],

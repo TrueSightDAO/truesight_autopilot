@@ -102,13 +102,13 @@ from ..tool_registry import ToolSpec  # noqa: E402
 TOOL_SPECS = [
     ToolSpec(
         name="submit_contribution",
-        description="Submit a signed [CONTRIBUTION EVENT] or other event to Edgar (the DAO API).",
+        description="Submit a signed [CONTRIBUTION EVENT] or other event to Edgar (the DAO API). Supports CONTRIBUTOR ADD EVENT, INVENTORY MOVEMENT, SALES EVENT, QR CODE REGISTRATION, and more.",
         parameters={
             "type": "object",
             "properties": {
                 "event_name": {
                     "type": "string",
-                    "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT'.",
+                    "description": "Event name, e.g. 'CONTRIBUTION EVENT', 'INVENTORY MOVEMENT', 'CONTRIBUTOR ADD EVENT'.",
                 },
                 "attributes": {
                     "type": "object",
