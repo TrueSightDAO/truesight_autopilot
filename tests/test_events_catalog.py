@@ -298,3 +298,145 @@ async def test_startup_preload_network_error_keeps_fallbacks():
     assert _CANONICAL_LABELS == labels_before
     assert _VALIDATE_REQUIRED_FIELDS == required_before
     assert app_main._catalog_last_refresh == 0.0
+
+
+# ── Snapshot fallback tests (PR3: auto-generated fallback snapshot) ────────
+
+
+@pytest.fixture
+def _snapshot_path():
+    """Return the snapshot path and ensure it's cleaned up after the test."""
+    p = app_main._SNAPSHOT_PATH
+    existed = p.exists()
+    yield p
+    if not existed and p.exists():
+        p.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_loads_on_http_error(_snapshot_path):
+    """HTTP error + snapshot present → snapshot data is loaded into dicts."""
+    snapshot_data = {
+        "events": {
+            "SNAPSHOT EVENT": {
+                "canonical_labels": ["Snap Field A", "Snap Field B"],
+                "required_fields": ["Snap Field A"],
+            }
+        },
+        "version": "snapshot-v1",
+    }
+    _snapshot_path.write_text(
+        json.dumps(snapshot_data, indent=2), encoding="utf-8"
+    )
+
+    try:
+        with patch("app.main.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=_mock_response(status=503)
+            )
+            await _refresh_events_catalog()
+
+        assert "SNAPSHOT EVENT" in _CANONICAL_LABELS
+        assert _CANONICAL_LABELS["SNAPSHOT EVENT"] == ["Snap Field A", "Snap Field B"]
+        assert _VALIDATE_REQUIRED_FIELDS["SNAPSHOT EVENT"] == ["Snap Field A"]
+        # Timestamp was NOT updated (live fetch failed)
+        assert app_main._catalog_last_refresh == 0.0
+    finally:
+        _snapshot_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_missing_on_http_error_keeps_fallbacks(_snapshot_path):
+    """HTTP error + no snapshot file → hardcoded fallbacks remain unchanged."""
+    # Ensure snapshot does NOT exist
+    _snapshot_path.unlink(missing_ok=True)
+
+    labels_before = dict(_CANONICAL_LABELS)
+    required_before = dict(_VALIDATE_REQUIRED_FIELDS)
+
+    with patch("app.main.httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+            return_value=_mock_response(status=500)
+        )
+        await _refresh_events_catalog()
+
+    assert _CANONICAL_LABELS == labels_before
+    assert _VALIDATE_REQUIRED_FIELDS == required_before
+    assert app_main._catalog_last_refresh == 0.0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_partial_events_merge(_snapshot_path):
+    """Snapshot with some events that overlap hardcoded + some new ones
+    → snapshot wins for overlapping, new events are added, hardcoded-only
+    events are preserved."""
+    # Snapshot has a modified SALES EVENT and a new event
+    snapshot_data = {
+        "events": {
+            "SALES EVENT": {
+                "canonical_labels": ["Item", "Snapshot Price"],
+                "required_fields": ["Item"],
+            },
+            "SNAPSHOT ONLY EVENT": {
+                "canonical_labels": ["Only Field"],
+                "required_fields": ["Only Field"],
+            },
+        },
+        "version": "snapshot-v2",
+    }
+    _snapshot_path.write_text(
+        json.dumps(snapshot_data, indent=2), encoding="utf-8"
+    )
+
+    try:
+        with patch("app.main.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=_mock_response(status=503)
+            )
+            await _refresh_events_catalog()
+
+        # Snapshot wins for SALES EVENT
+        assert _CANONICAL_LABELS["SALES EVENT"] == ["Item", "Snapshot Price"]
+        assert _VALIDATE_REQUIRED_FIELDS["SALES EVENT"] == ["Item"]
+
+        # New event from snapshot is added
+        assert "SNAPSHOT ONLY EVENT" in _CANONICAL_LABELS
+        assert _CANONICAL_LABELS["SNAPSHOT ONLY EVENT"] == ["Only Field"]
+        assert _VALIDATE_REQUIRED_FIELDS["SNAPSHOT ONLY EVENT"] == ["Only Field"]
+
+        # Hardcoded-only events (not in snapshot) are preserved
+        assert "INVENTORY MOVEMENT" in _CANONICAL_LABELS
+        assert "CONTRIBUTION EVENT" in _CANONICAL_LABELS
+        assert "CAPITAL INJECTION EVENT" in _CANONICAL_LABELS
+    finally:
+        _snapshot_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_network_error_loads_snapshot(_snapshot_path):
+    """Network error (connection refused) + snapshot present → snapshot loaded."""
+    snapshot_data = {
+        "events": {
+            "NETWORK SNAP EVENT": {
+                "canonical_labels": ["Net Field"],
+                "required_fields": ["Net Field"],
+            }
+        },
+        "version": "snap-v3",
+    }
+    _snapshot_path.write_text(
+        json.dumps(snapshot_data, indent=2), encoding="utf-8"
+    )
+
+    try:
+        with patch("app.main.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                side_effect=httpx.ConnectError("Connection refused")
+            )
+            await _refresh_events_catalog()
+
+        assert "NETWORK SNAP EVENT" in _CANONICAL_LABELS
+        assert _CANONICAL_LABELS["NETWORK SNAP EVENT"] == ["Net Field"]
+        assert app_main._catalog_last_refresh == 0.0
+    finally:
+        _snapshot_path.unlink(missing_ok=True)
