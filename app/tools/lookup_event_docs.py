@@ -232,16 +232,17 @@ TOOL_SPEC = ToolSpec(
     description=(
         "Fetch DAO event documentation for a given event type (e.g. SALES EVENT, "
         "INVENTORY MOVEMENT). Returns canonical labels, required fields, category, "
-        "and when-to-use rules. Fetches live from Edgar's event catalog; falls back "
-        "to built-in docs if Edgar is unreachable. Always call this BEFORE calling "
-        "submit_contribution to ensure you use the correct event type and format."
+        "when-to-use rules, intent-to-event mapping guidance, and important-fields "
+        "hints. Fetches live from Edgar's event catalog; falls back to built-in docs "
+        "if Edgar is unreachable. Always call this BEFORE calling submit_contribution "
+        "to ensure you use the correct event type and format."
     ),
     parameters={
         "type": "object",
         "properties": {
             "event_name": {
                 "type": "string",
-                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT', 'CONTRIBUTOR ADD EVENT'",
+                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT', 'CONTRIBUTOR ADD EVENT'. You can also pass an intent phrase like 'sell cacao' or 'transfer custody' and the tool will resolve it to the correct event type.",
             }
         },
         "required": ["event_name"],
