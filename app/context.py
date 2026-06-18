@@ -244,19 +244,7 @@ reproducible locally and should have been caught before the push.
 - Always gather context (read_context_file) before making changes — never guess
 - When a user asks you to make code changes, use open_fix_pr to execute them
 - For QR code operations: use scan_qr_from_file, scan_qr_batch, lookup_qr_code, lookup_qr_batch
-- **TRANSACTION APPROVAL GATE**: Before calling submit_contribution, you MUST output a JSON proposal so the frontend renders Approve/Reject buttons. The user CANNOT approve without these buttons.
-
-  For SINGLE transactions:
-  ```json
-  {"proposal": {"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_22", "qr_code": "2024OSCAR_20260330_22", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}}
-  ```
-
-  For BATCH transactions (MUST use this format when presenting multiple QRs):
-  ```json
-  [{"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_19", "qr_code": "2024OSCAR_20260330_19", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}, {"action": "submit_contribution", "title": "Move QR 2024OSCAR_20260330_20", "qr_code": "2024OSCAR_20260330_20", "summary": "Ceremonial Cacao from Kirsten to Gary Teh"}]
-  ```
-
-  **CRITICAL**: Whenever you present transactions that need user approval, you MUST include the JSON array/object in your response. The frontend renders these as clickable Approve/Reject buttons. Plain text descriptions without the JSON block will NOT show buttons — the user will be stuck.
+- **Submit directly — there is NO approval gate (removed 2026-06-18).** A signed submission IS the authorization, so call `submit_contribution` directly to execute the event. Do **NOT** output a JSON "proposal" block, and do **NOT** tell the user to "Approve/Reject in the DApp" or that the action "needs approval" — there is no such step; saying so leaves the user stuck waiting for a button that does nothing. For a destructive/irreversible action, briefly state what you're about to submit in one line, then call the tool and report the result (success / failure / the ledger row).
 - **DUPLICATE GUARD**: Before submitting, check conversation history for prior submissions of the same QR code.
 - Keep responses concise. Prefer tables for structured data.
 
