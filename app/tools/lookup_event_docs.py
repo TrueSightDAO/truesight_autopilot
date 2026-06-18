@@ -1,12 +1,14 @@
-"""lookup_event_docs tool — fetch DAO event documentation from Edgar landing page.
+"""lookup_event_docs tool — fetch DAO event documentation from Edgar events catalog.
 
-Returns the format, required fields, and when-to-use rules for a given event type.
-Docs are fetched live from the Edgar landing page so they're always current.
+Returns the canonical labels, required fields, category, and description for a given
+event type. Fetches live from edgar.truesight.me/dao-protocol/events-catalog (JSON)
+so it's always current. Falls back to built-in docs if Edgar is unreachable.
+
+This is the single source of truth — no hardcoded event definitions.
 """
 
 import json
 import logging
-import re
 from typing import Any
 
 import httpx
@@ -15,132 +17,134 @@ from ..tool_registry import ToolSpec
 
 logger = logging.getLogger(__name__)
 
-EDGAR_LANDING_URL = "https://edgar.truesight.me/"
+# Primary: live JSON catalog from Edgar
+CATALOG_URL = "https://edgar.truesight.me/events-catalog"
 
-# Fallback docs in case Edgar is unreachable — mirrors the landing page content
-FALLBACK_DOCS = {
+# Cached catalog (refreshed on miss)
+_catalog: dict[str, Any] | None = None
+
+# Minimal fallback for when Edgar is unreachable
+_FALLBACK_DOCS: dict[str, dict[str, Any]] = {
     "SALES EVENT": {
-        "when_to_use": "Use when a bag is sold to an end customer (retail sale). Money changes hands. QR status will be updated to SOLD.",
-        "required_fields": ["Item (QR code)", "Sales price"],
-        "optional_fields": ["Owner email", "Stripe Session ID", "Shipping Provider", "Tracking number", "Sold by", "Cash proceeds collected by"],
-        "example": "[SALES EVENT]\n- Item: 2024OSCAR_20260121_32\n- Sales price: 17.50\n- Sold by: Gergana - The Way Home Shop\n- Cash proceeds collected by: Gary Teh"
+        "description": "Use when a bag is sold to an end customer (retail sale). QR status updated to SOLD.",
+        "required_fields": ["Item", "Sales price", "Sold by"],
+        "dapp_page": "report_sales.html",
     },
     "INVENTORY MOVEMENT": {
-        "when_to_use": "Use when a bag moves between known holders in the supply chain (e.g. from warehouse to retailer). NOT for end-customer sales.",
-        "required_fields": ["Manager Name (sender)", "Recipient Name", "Inventory Item (SKU)", "QR Code", "Quantity"],
-        "optional_fields": [],
-        "example": "[INVENTORY MOVEMENT]\n- Manager Name: Kirsten\n- Recipient Name: Gergana - The Way Home Shop\n- Inventory Item: Ceremonial Cacao Kraft Pouch - Oscar 2024\n- QR Code: 2024OSCAR_20260121_32\n- Quantity: 1"
+        "description": "Use when a bag moves between known holders in the supply chain. NOT for end-customer sales.",
+        "required_fields": ["Manager Name", "Recipient Name", "QR Code"],
+        "dapp_page": "report_inventory_movement.html",
     },
     "CONTRIBUTION EVENT": {
-        "when_to_use": "Use to record a contributor's time, work, or value-add to the DAO. Earns TDG tokens.",
-        "required_fields": ["Contributor", "Description of work", "Amount (minutes or USD)"],
-        "optional_fields": ["PR URLs", "TDG issued"],
-        "example": "[CONTRIBUTION EVENT]\n- Contributor: Sophia Truesight\n- Description: Built query endpoints for Edgar\n- Amount: 120 minutes\n- PR URLs: https://github.com/TrueSightDAO/dao_protocol/pull/116"
-    }
+        "description": "Use to record a contributor's time, work, or value-add to the DAO. Earns TDG.",
+        "required_fields": ["Type", "Amount"],
+        "dapp_page": "report_contribution.html",
+    },
 }
 
 
-def _parse_event_docs_from_html(html: str, event_name: str) -> dict[str, Any] | None:
-    """Parse the DAO Events Reference section from the Edgar landing page HTML."""
-    # Find the DAO Events Reference section
-    section_match = re.search(
-        r'<h2[^>]*>DAO Events Reference</h2>(.*?)(?=<h2|$)',
-        html, re.DOTALL | re.IGNORECASE
-    )
-    if not section_match:
-        return None
+def _fetch_catalog() -> dict[str, Any]:
+    """Fetch and return the live events catalog, or {} on failure."""
+    global _catalog
+    try:
+        resp = httpx.get(CATALOG_URL, timeout=15)
+        resp.raise_for_status()
+        _catalog = resp.json()
+        logger.info("events catalog loaded: %d events (version=%s)",
+                     len(_catalog.get("events", {})), _catalog.get("version"))
+        return _catalog
+    except Exception as exc:
+        logger.warning("Failed to fetch events catalog from %s: %s", CATALOG_URL, exc)
+        if _catalog is not None:
+            return _catalog
+        return {}
 
-    section = section_match.group(1)
 
-    # Find the specific event card
-    # Each event is in a <details> or <div> with the event name
-    event_pattern = re.compile(
-        rf'<details[^>]*>.*?{re.escape(event_name)}.*?(?=</details>)',
-        re.DOTALL | re.IGNORECASE
-    )
-    event_match = event_pattern.search(section)
-    if not event_match:
-        # Try simpler pattern — look for the event name as a heading
-        heading_pattern = re.compile(
-            rf'<h3[^>]*>.*?{re.escape(event_name)}.*?</h3>(.*?)(?=<h3|$)',
-            re.DOTALL | re.IGNORECASE
-        )
-        heading_match = heading_pattern.search(section)
-        if not heading_match:
-            return None
-        event_html = heading_match.group(0)
-    else:
-        event_html = event_match.group(0)
+def _find_event(catalog: dict, event_name: str) -> dict[str, Any] | None:
+    """Look up an event in the catalog, case-insensitive."""
+    events = catalog.get("events", {})
+    # Direct key match
+    if event_name in events:
+        return events[event_name]
+    # Case-insensitive match
+    upper = event_name.upper()
+    for key, val in events.items():
+        if key.upper() == upper:
+            return val
+    # Partial match (e.g. "REPACKAGING" matches "REPACKAGING BATCH EVENT")
+    for key, val in events.items():
+        if upper in key.upper() or key.upper() in upper:
+            return val
+    return None
 
-    # Extract text content, stripping HTML tags
-    text = re.sub(r'<[^>]+>', ' ', event_html)
-    text = re.sub(r'\s+', ' ', text).strip()
 
+def _build_result(event_name: str, entry: dict) -> dict[str, Any]:
     return {
         "event_name": event_name,
-        "raw_text": text,
-        "note": "Parsed from Edgar landing page. Verify against live docs for complete formatting."
+        "category": entry.get("category", "Other"),
+        "canonical_labels": entry.get("canonical_labels", []),
+        "required_fields": entry.get("required_fields", []),
+        "description": entry.get("description", ""),
+        "dapp_page": entry.get("dapp_page", ""),
+        "source": "edgar-catalog (live)",
     }
-
-
-def _get_fallback_doc(event_name: str) -> dict[str, Any] | None:
-    """Return fallback docs for known event types."""
-    for key, doc in FALLBACK_DOCS.items():
-        if event_name.upper() == key or event_name.upper() in key:
-            return {
-                "event_name": key,
-                "source": "fallback (Edgar unreachable)",
-                **doc
-            }
-    return None
 
 
 def lookup_event_docs(event_name: str) -> dict[str, Any]:
     """
-    Fetch DAO event documentation for the given event type.
-
-    Fetches from the Edgar landing page first. Falls back to built-in docs
-    if Edgar is unreachable.
+    Fetch DAO event documentation for the given event type from Edgar's live catalog.
 
     Args:
         event_name: The event type to look up (e.g. "SALES EVENT", "INVENTORY MOVEMENT")
 
     Returns:
-        Dict with event_name, when_to_use, required_fields, optional_fields, example
+        Dict with event_name, category, canonical_labels, required_fields, description, dapp_page
     """
-    try:
-        resp = httpx.get(EDGAR_LANDING_URL, timeout=10)
-        resp.raise_for_status()
-        html = resp.text
+    catalog = _fetch_catalog()
+    entry = _find_event(catalog, event_name)
 
-        parsed = _parse_event_docs_from_html(html, event_name)
-        if parsed:
-            logger.info(f"lookup_event_docs: found docs for {event_name} on Edgar landing page")
-            return parsed
+    if entry:
+        logger.info("lookup_event_docs: found %s in live catalog", event_name)
+        return _build_result(event_name, entry)
 
-        logger.warning(f"lookup_event_docs: event {event_name} not found on Edgar landing page, trying fallback")
-    except Exception as e:
-        logger.warning(f"lookup_event_docs: failed to fetch from Edgar: {e}, using fallback")
+    # Try fallback
+    upper = event_name.upper()
+    for key, doc in _FALLBACK_DOCS.items():
+        if upper == key or upper in key:
+            logger.info("lookup_event_docs: found %s in fallback docs", event_name)
+            return {
+                "event_name": key,
+                "category": "Other",
+                "canonical_labels": [],
+                "required_fields": doc.get("required_fields", []),
+                "description": doc.get("description", ""),
+                "dapp_page": doc.get("dapp_page", ""),
+                "source": "fallback (Edgar unreachable)",
+            }
 
-    # Fallback
-    fallback = _get_fallback_doc(event_name)
-    if fallback:
-        return fallback
-
+    # Completely unknown
+    available = list((catalog.get("events") or {}).keys()) or list(_FALLBACK_DOCS.keys())
     return {
         "event_name": event_name,
         "error": f"Event type '{event_name}' not found in documentation.",
-        "available_events": list(FALLBACK_DOCS.keys()),
-        "note": "Check the Edgar landing page (https://edgar.truesight.me/) for the full DAO Events Reference."
+        "available_events": available,
+        "note": f"Check {CATALOG_URL} for the full DAO events catalog."
     }
+
+
+def refresh_events_catalog() -> dict[str, Any]:
+    """Force-refresh the catalog. Called at startup by the lifespan handler."""
+    global _catalog
+    _catalog = None
+    return _fetch_catalog()
 
 
 TOOL_SPEC = ToolSpec(
     name="lookup_event_docs",
     description=(
         "Fetch DAO event documentation for a given event type (e.g. SALES EVENT, "
-        "INVENTORY MOVEMENT). Returns the format, required fields, optional fields, "
-        "and when-to-use rules. Fetches live from the Edgar landing page; falls back "
+        "INVENTORY MOVEMENT). Returns canonical labels, required fields, category, "
+        "and when-to-use rules. Fetches live from Edgar's event catalog; falls back "
         "to built-in docs if Edgar is unreachable. Always call this BEFORE calling "
         "submit_contribution to ensure you use the correct event type and format."
     ),
@@ -149,7 +153,7 @@ TOOL_SPEC = ToolSpec(
         "properties": {
             "event_name": {
                 "type": "string",
-                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'CONTRIBUTION EVENT'",
+                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT'",
             }
         },
         "required": ["event_name"],

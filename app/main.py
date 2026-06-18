@@ -26,6 +26,8 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
+import httpx
+
 from .auth import create_jwt, verify_jwt, verify_payload
 from .auto_advance import next_action
 from .config import settings
@@ -436,6 +438,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(followup_loop())
         except Exception as e:
             logger.warning("Follow-up loop failed to start: %s", e)
+        try:
+            asyncio.create_task(_catalog_refresh_loop())
+        except Exception as e:
+            logger.warning("Events catalog refresh loop failed to start: %s", e)
     else:
         logger.info("DRY_RUN=true — no background tasks started")
 
@@ -1181,8 +1187,70 @@ def _ensure_nonempty_final(assistant_text: str, force_clean) -> tuple[str, bool]
     return text, forced_again
 
 
-# Canonical labels from dao_client modules — each event type has exact field names.
-# Source: truesight_dao_client/modules/{report_inventory_movement,report_sales,...}.py
+# ── Events catalog sync ──────────────────────────────────────────────
+# Fetches the live canonical events catalog from Edgar and merges it into
+# the local _CANONICAL_LABELS and _validate_required_fields dicts.
+# Runs at startup (async, non-blocking) and refreshes every 12 hours.
+
+_CATALOG_URL = "https://edgar.truesight.me/events-catalog"
+_catalog_last_refresh: float = 0.0  # epoch seconds
+
+
+async def _refresh_events_catalog() -> None:
+    """Fetch the live events catalog and update in-memory dicts."""
+    global _catalog_last_refresh
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(_CATALOG_URL)
+            resp.raise_for_status()
+            catalog = resp.json()
+    except Exception as exc:
+        logger.warning("Failed to fetch events catalog from %s: %s", _CATALOG_URL, exc)
+        return
+
+    events = catalog.get("events", {})
+    if not events:
+        return
+
+    added = 0
+    updated = 0
+    for event_name, entry in events.items():
+        labels = entry.get("canonical_labels", [])
+        required = entry.get("required_fields", [])
+        if event_name not in _CANONICAL_LABELS or not _CANONICAL_LABELS.get(event_name):
+            _CANONICAL_LABELS[event_name] = labels
+            added += 1
+        elif len(labels) > len(_CANONICAL_LABELS.get(event_name, [])):
+            _CANONICAL_LABELS[event_name] = labels
+            updated += 1
+        if required and event_name not in _VALIDATE_REQUIRED_FIELDS:
+            _VALIDATE_REQUIRED_FIELDS[event_name] = required
+
+    _catalog_last_refresh = time.time()
+    logger.info(
+        "Events catalog synced: %s/%s events loaded from Edgar (added=%s updated=%s version=%s)",
+        len(events), len(events), added, updated, catalog.get("version", "?")
+    )
+
+
+async def _catalog_refresh_loop() -> None:
+    """Background loop: refresh the events catalog every 12 hours."""
+    await asyncio.sleep(120)  # let other startup tasks finish first
+    while True:
+        await _refresh_events_catalog()
+        await asyncio.sleep(12 * 3600)  # 12 hours
+
+
+# Canonical labels from dao_client modules — populated from live catalog at startup.
+# Event types not yet in the live catalog use these hardcoded fallbacks.
+_VALIDATE_REQUIRED_FIELDS: dict[str, list[str]] = {
+    "INVENTORY MOVEMENT": ["Manager Name", "Recipient Name", "QR Code"],
+    "SALES EVENT": ["Item", "Sales price", "Sold by"],
+    "CONTRIBUTION EVENT": ["Type", "Amount"],
+    "CAPITAL INJECTION EVENT": ["Ledger", "Amount"],
+    "QR CODE REGISTRATION": ["QR Code", "Landing Page", "Farm Name", "Manager"],
+}
+
 _CANONICAL_LABELS: dict[str, list[str]] = {
     "INVENTORY MOVEMENT": [
         "Manager Name",
@@ -1391,16 +1459,13 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
 
 
 def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
-    """Return list of missing required fields. Empty list = valid."""
-    required = {
-        "INVENTORY MOVEMENT": ["Manager Name", "Recipient Name", "QR Code"],
-        "SALES EVENT": ["Item", "Sales price", "Sold by"],
-        "CONTRIBUTION EVENT": ["Type", "Amount"],
-        "CAPITAL INJECTION EVENT": ["Ledger", "Amount"],
-        "QR CODE REGISTRATION": ["QR Code", "Landing Page", "Farm Name", "Manager"],
-    }
+    """Return list of missing required fields. Empty list = valid.
+    
+    Uses _VALIDATE_REQUIRED_FIELDS which is populated from the live events catalog
+    at startup (with hardcoded fallbacks).
+    """
     missing = []
-    for field in required.get(event_name, []):
+    for field in _VALIDATE_REQUIRED_FIELDS.get(event_name, []):
         if field not in attributes:
             missing.append(field)
     return missing
