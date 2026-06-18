@@ -204,6 +204,8 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
                 "description": doc.get("description", ""),
                 "dapp_page": doc.get("dapp_page", ""),
                 "source": "fallback (Edgar unreachable)",
+                "important_fields": _IMPORTANT_FIELDS.get(key, []),
+                "intent_guidance": _INTENT_GUIDANCE,
             }
 
     # Completely unknown
