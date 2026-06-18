@@ -412,6 +412,18 @@ async def lifespan(app: FastAPI):
         logger.warning("artifact GC on boot failed: %s", exc)
 
     if not settings.dry_run:
+        # ── Catalog preload: fetch events catalog synchronously at startup ──
+        # This ensures the catalog is loaded before any user message can arrive,
+        # closing the ~120s boot-window where only 9 hardcoded events were known.
+        # If Edgar is unreachable, the hardcoded fallbacks remain unchanged.
+        try:
+            await _refresh_events_catalog()
+        except Exception as exc:
+            logger.warning(
+                "Events catalog preload failed at startup (hardcoded fallbacks remain): %s",
+                exc,
+            )
+
         try:
             email_poller = EmailPoller()
             asyncio.create_task(email_poller.run_loop())
@@ -1249,8 +1261,12 @@ async def _refresh_events_catalog() -> None:
 
 
 async def _catalog_refresh_loop() -> None:
-    """Background loop: refresh the events catalog every 12 hours."""
-    await asyncio.sleep(120)  # let other startup tasks finish first
+    """Background loop: refresh the events catalog every 12 hours.
+
+    The first fetch already ran during lifespan startup (see ``lifespan()``),
+    so this loop sleeps a short while before the first background refresh.
+    """
+    await asyncio.sleep(30)  # short delay before first background refresh
     while True:
         await _refresh_events_catalog()
         await asyncio.sleep(12 * 3600)  # 12 hours
