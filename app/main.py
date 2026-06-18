@@ -1197,7 +1197,13 @@ _catalog_last_refresh: float = 0.0  # epoch seconds
 
 
 async def _refresh_events_catalog() -> None:
-    """Fetch the live events catalog and update in-memory dicts."""
+    """Fetch the live events catalog and update in-memory dicts.
+
+    The catalog always wins: if an event exists in the catalog, its
+    ``canonical_labels`` and ``required_fields`` overwrite whatever is
+    in the local dicts.  If the event is new (not in the local dicts),
+    it gets added.  Tracks ``added`` vs ``updated`` counts for logging.
+    """
     global _catalog_last_refresh
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -1217,14 +1223,23 @@ async def _refresh_events_catalog() -> None:
     for event_name, entry in events.items():
         labels = entry.get("canonical_labels", [])
         required = entry.get("required_fields", [])
-        if event_name not in _CANONICAL_LABELS or not _CANONICAL_LABELS.get(event_name):
-            _CANONICAL_LABELS[event_name] = labels
-            added += 1
-        elif len(labels) > len(_CANONICAL_LABELS.get(event_name, [])):
+
+        # Catalog always wins for canonical_labels
+        if event_name in _CANONICAL_LABELS:
             _CANONICAL_LABELS[event_name] = labels
             updated += 1
-        if required and event_name not in _VALIDATE_REQUIRED_FIELDS:
-            _VALIDATE_REQUIRED_FIELDS[event_name] = required
+        else:
+            _CANONICAL_LABELS[event_name] = labels
+            added += 1
+
+        # Catalog always wins for required_fields
+        if required:
+            if event_name in _VALIDATE_REQUIRED_FIELDS:
+                _VALIDATE_REQUIRED_FIELDS[event_name] = required
+                updated += 1
+            else:
+                _VALIDATE_REQUIRED_FIELDS[event_name] = required
+                added += 1
 
     _catalog_last_refresh = time.time()
     logger.info(
