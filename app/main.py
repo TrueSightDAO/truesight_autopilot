@@ -1208,6 +1208,9 @@ _CATALOG_URL = "https://edgar.truesight.me/events-catalog"
 _catalog_last_refresh: float = 0.0  # epoch seconds
 
 
+_SNAPSHOT_PATH = Path(__file__).resolve().parent / "data" / "events_catalog_snapshot.json"
+
+
 async def _refresh_events_catalog() -> None:
     """Fetch the live events catalog and update in-memory dicts.
 
@@ -1215,8 +1218,14 @@ async def _refresh_events_catalog() -> None:
     ``canonical_labels`` and ``required_fields`` overwrite whatever is
     in the local dicts.  If the event is new (not in the local dicts),
     it gets added.  Tracks ``added`` vs ``updated`` counts for logging.
+
+    When Edgar is unreachable (HTTP error, network error, timeout), falls
+    back to the committed snapshot at ``app/data/events_catalog_snapshot.json``
+    if it exists.  If the snapshot is also missing, the hardcoded fallback
+    dicts remain unchanged (current behaviour).
     """
     global _catalog_last_refresh
+    catalog = None
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(_CATALOG_URL)
@@ -1224,7 +1233,28 @@ async def _refresh_events_catalog() -> None:
             catalog = resp.json()
     except Exception as exc:
         logger.warning("Failed to fetch events catalog from %s: %s", _CATALOG_URL, exc)
-        return
+        # Fall back to the committed snapshot
+        if _SNAPSHOT_PATH.exists():
+            try:
+                catalog = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                logger.info(
+                    "Loaded fallback snapshot from %s (%d events)",
+                    _SNAPSHOT_PATH,
+                    len(catalog.get("events", {})),
+                )
+            except Exception as snap_exc:
+                logger.warning(
+                    "Failed to load fallback snapshot from %s: %s",
+                    _SNAPSHOT_PATH,
+                    snap_exc,
+                )
+        else:
+            logger.warning(
+                "No fallback snapshot at %s — hardcoded fallbacks remain unchanged",
+                _SNAPSHOT_PATH,
+            )
+        if catalog is None:
+            return
 
     events = catalog.get("events", {})
     if not events:
