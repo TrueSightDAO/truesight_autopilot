@@ -1534,7 +1534,7 @@ def _normalize_via_catalog(
 
         # 5. Keep unmatched keys with a warning
         logger.warning(
-            "Non-canonical key '%s' passed through for %s", key, event_name
+            "Non-canonical key '%s' passed through for %s", key, event_name or "unknown"
         )
         normalized[key] = str(value)
 
