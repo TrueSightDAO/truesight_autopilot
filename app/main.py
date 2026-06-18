@@ -1656,9 +1656,11 @@ async def _run_tool(
             except Exception:
                 pass
 
-        # 3. APPROVAL GATE: check if the most recent user message explicitly approved this submission
-        approved = False
-        if history:
+        # 3. APPROVAL GATE: check if the most recent user message explicitly approved this submission.
+        # Disabled by default (REQUIRE_SUBMISSION_APPROVAL=false) — signed submissions execute
+        # directly; the gate only runs when explicitly re-enabled. See config.require_submission_approval.
+        approved = not settings.require_submission_approval
+        if not approved and history:
             for msg in reversed(history):
                 if msg.get("role") == "user":
                     content = str(msg.get("content", "")).lower()
