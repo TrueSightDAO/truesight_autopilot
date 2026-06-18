@@ -214,7 +214,9 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
         "event_name": event_name,
         "error": f"Event type '{event_name}' not found in documentation.",
         "available_events": available,
-        "note": f"Check {CATALOG_URL} for the full DAO events catalog."
+        "note": f"Check {CATALOG_URL} for the full DAO events catalog.",
+        "intent_guidance": _INTENT_GUIDANCE,
+        "important_fields": _IMPORTANT_FIELDS,
     }
 
 
