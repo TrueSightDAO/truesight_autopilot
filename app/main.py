@@ -1619,7 +1619,27 @@ async def _run_tool(
                 }
             )
 
+        # SALES EVENT guard: Item must be a QR code ID, not a description
+        _sales_item = (attributes.get("Item") or "").strip()
+        if event_name.upper() == "SALES EVENT" and _sales_item:
+            import re as _re
+            if not _re.match(r"^\d{4}[A-Z]+_\d{8}_\d+$", _sales_item.split(",")[0].strip()):
+                return json.dumps(
+                    {
+                        "status": "invalid",
+                        "message": (
+                            f"SALES EVENT `Item` must be a QR code ID (e.g. `2024OSCAR_20260330_1`), "
+                            f"not a description like `{_sales_item}`. "
+                            "Read SOPHIA_BATCH_SALES_PLAN.md §0 — ONE SALES EVENT PER QR CODE. "
+                            "Never aggregate. Never use product names as Item."
+                        ),
+                    }
+                )
+
         qr = attributes.get("QR Code", "")
+        # For SALES EVENT, also check the Item field for QR duplicate guard
+        if not qr and event_name.upper() == "SALES EVENT":
+            qr = _sales_item
         recipient = attributes.get("Recipient Name", "")
 
         # 1. Check session history for prior submission
