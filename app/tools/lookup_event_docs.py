@@ -108,7 +108,8 @@ _IMPORTANT_FIELDS: dict[str, list[str]] = {
 # Minimal fallback for when Edgar is unreachable
 _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
     "SALES EVENT": {
-        "description": "Use when a bag is sold to an end customer (retail sale). QR status updated to SOLD.",
+        "description": "Use when a bag is sold to an end customer (retail sale). QR status updated to SOLD. "
+                       "BATCH RULE: ONE submission per QR code — never aggregate. Read SOPHIA_BATCH_SALES_PLAN.md §0.",
         "required_fields": ["Item", "Sales price", "Sold by"],
         "dapp_page": "report_sales.html",
     },
@@ -160,8 +161,17 @@ def _find_event(catalog: dict, event_name: str) -> dict[str, Any] | None:
     return None
 
 
+_SALES_EVENT_BATCH_SOP = (
+    "SOPHIA_BATCH_SALES_PLAN.md §0: ONE SALES EVENT PER QR CODE. "
+    "Never aggregate multiple QR codes into one submission. "
+    "Item = QR code ID (e.g. 2024OSCAR_20260330_1), not a product description. "
+    "Sales price = per-unit, never the batch total. "
+    "Sold by = named seller, never the governor/signer."
+)
+
+
 def _build_result(event_name: str, entry: dict) -> dict[str, Any]:
-    return {
+    result = {
         "event_name": event_name,
         "category": entry.get("category", "Other"),
         "canonical_labels": entry.get("canonical_labels", []),
@@ -172,6 +182,9 @@ def _build_result(event_name: str, entry: dict) -> dict[str, Any]:
         "important_fields": _IMPORTANT_FIELDS.get(event_name, []),
         "intent_guidance": _INTENT_GUIDANCE,
     }
+    if event_name.upper() == "SALES EVENT":
+        result["batch_sales_sop"] = _SALES_EVENT_BATCH_SOP
+    return result
 
 
 def lookup_event_docs(event_name: str) -> dict[str, Any]:
@@ -206,7 +219,7 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
     for key, doc in _FALLBACK_DOCS.items():
         if upper == key or upper in key:
             logger.info("lookup_event_docs: found %s in fallback docs", event_name)
-            return {
+            result = {
                 "event_name": key,
                 "category": "Other",
                 "canonical_labels": [],
@@ -217,6 +230,9 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
                 "important_fields": _IMPORTANT_FIELDS.get(key, []),
                 "intent_guidance": _INTENT_GUIDANCE,
             }
+            if key == "SALES EVENT":
+                result["batch_sales_sop"] = _SALES_EVENT_BATCH_SOP
+            return result
 
     # Completely unknown
     available = list((catalog.get("events") or {}).keys()) or list(_FALLBACK_DOCS.keys())
