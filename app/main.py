@@ -2463,27 +2463,41 @@ def _extract_plan_file(history: list[dict]) -> str | None:
 def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict | None:
     """Auto-advance signal for the turn just completed (or None).
 
-    Returns None when auto-advance is off, this is not a handoff thread, or the
-    plan can't be read. Fails CLOSED — any error yields None (no auto-advance);
-    the pure decision logic lives in app/auto_advance.next_action."""
+    Returns None when auto-advance is off. Fails CLOSED — any error yields None
+    (no auto-advance); the pure decision logic lives in app/auto_advance.next_action.
+
+    Two modes:
+    1. **Handoff threads** (plan file found via SOPHIA_HANDOFFS.md): uses the full
+       plan-based gate logic from next_action().
+    2. **Normal threads** (no plan file): if the turn opened a PR via open_fix_pr,
+       emits an auto signal with next_unit="the next PR" — this makes auto-advance
+       work on ALL threads where Sophia opens a PR, not just handoff threads."""
     if not settings.auto_advance:
         return None
     try:
         plan_file = _extract_plan_file(history)
-        if not plan_file:
-            return None
-        plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
-        plan_text = plan_path.read_text(encoding="utf-8")
         opened_pr = any(
             (t or {}).get("name") == "open_fix_pr" for t in (tool_trace or [])
         )
-        dec = next_action(plan_text, opened_pr)
-        return {
-            "decision": dec.decision,
-            "gate_reason": dec.gate_reason,
-            "next_unit": dec.next_unit,
-            "plan": plan_file,
-        }
+        if plan_file:
+            plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
+            plan_text = plan_path.read_text(encoding="utf-8")
+            dec = next_action(plan_text, opened_pr)
+            return {
+                "decision": dec.decision,
+                "gate_reason": dec.gate_reason,
+                "next_unit": dec.next_unit,
+                "plan": plan_file,
+            }
+        # Fallback for normal threads: if a PR was opened, auto-advance to the next PR.
+        if opened_pr:
+            return {
+                "decision": "auto",
+                "gate_reason": None,
+                "next_unit": "the next PR",
+                "plan": None,
+            }
+        return None
     except Exception:  # noqa: BLE001 — advance is best-effort; never break the turn
         logger.debug("auto-advance signal computation failed", exc_info=True)
         return None
