@@ -2479,6 +2479,10 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
         opened_pr = any(
             (t or {}).get("name") == "open_fix_pr" for t in (tool_trace or [])
         )
+        logger.info(
+            "auto-advance: plan_file=%s opened_pr=%s tool_trace_len=%d",
+            plan_file, opened_pr, len(tool_trace or []),
+        )
         if plan_file:
             plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
             plan_text = plan_path.read_text(encoding="utf-8")
