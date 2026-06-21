@@ -1039,12 +1039,19 @@ def _run_turn_with_auto_advance(
                 f"(auto-advance {auto_count}/{settings.auto_advance_max_turns}).",
                 thread_id,
             )
-            current_msg = (
-                f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
-                f"RESUME HERE marker in {advance.get('plan', 'the plan')} points at. "
-                f"Do exactly that one PR (open the PR, report the contribution, tick "
-                f"the resume tracker), then stop. Honor any gate marker."
-            )
+            plan_ref = advance.get('plan') or 'the plan'
+            if advance.get('plan'):
+                current_msg = (
+                    f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
+                    f"RESUME HERE marker in {plan_ref} points at. "
+                    f"Do exactly that one PR (open the PR, report the contribution, tick "
+                    f"the resume tracker), then stop. Honor any gate marker."
+                )
+            else:
+                current_msg = (
+                    f"[AUTO-ADVANCE] Execute only the next unit ({nxt}). "
+                    f"Open the next fix PR, report the contribution, then stop."
+                )
             continue
         if decision == "gate":
             reason = advance.get("gate_reason") or "(no reason given)"
