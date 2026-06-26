@@ -229,6 +229,12 @@ def main():
     parser.add_argument(
         "--grok-description", default="", help="Grok vision description (for images)"
     )
+    parser.add_argument(
+        "--chat-id", default="", help="Telegram chat ID (optional)"
+    )
+    parser.add_argument(
+        "--thread-id", default="", help="Telegram thread/topic ID (optional)"
+    )
 
     args = parser.parse_args()
     result = append_to_transcript(
