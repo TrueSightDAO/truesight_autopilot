@@ -1764,7 +1764,7 @@ async def _run_tool(
         _sales_item = (attributes.get("Item") or "").strip()
         if event_name.upper() == "SALES EVENT" and _sales_item:
             import re as _re
-            if not _re.match(r"^\d{4}[A-Z]+_\d{8}_\d+$", _sales_item.split(",")[0].strip()):
+            if not _re.match(r"^\d{4}[A-Z]+(?:_[A-Z]+)*_\d{8}_\d+$", _sales_item.split(",")[0].strip()):
                 return json.dumps(
                     {
                         "status": "invalid",
