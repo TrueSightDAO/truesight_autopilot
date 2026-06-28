@@ -107,7 +107,10 @@ def test_signal_none_when_not_handoff(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "auto_advance", True)
     _write_plan(tmp_path)
     monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
-    assert m._compute_advance_signal([{"role": "user", "content": "hi"}], OPENED_PR_TRACE) is None
+    # Non-handoff message + NO PR opened → nothing to advance. (Since #268 a non-handoff
+    # message that DID open a PR auto-advances via the "normal threads" fallback, so the
+    # no-PR trace is what exercises the None path here.)
+    assert m._compute_advance_signal([{"role": "user", "content": "hi"}], []) is None
 
 
 def test_signal_none_when_plan_file_missing(monkeypatch, tmp_path):
