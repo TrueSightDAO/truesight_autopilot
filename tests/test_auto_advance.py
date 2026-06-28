@@ -121,6 +121,17 @@ def test_decision_for_unit_auto():
     assert d.decision == "auto" and d.next_unit.startswith("PR2")
 
 
+def test_decision_for_unit_handles_bold_markdown_unit():
+    # Bold/`code` in the unit cell must still match (was silently fail-closing).
+    plan = (
+        "> **RESUME HERE:** PR1 — parser\n\n"
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| **PR1 — `create_proposal.py`** | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "PR1")
+    assert d.decision == "auto"
+
+
 def test_decision_for_unit_gate():
     d = decision_for_unit(PLAN, "PR3")
     assert d.decision == "gate" and "deploy" in d.gate_reason

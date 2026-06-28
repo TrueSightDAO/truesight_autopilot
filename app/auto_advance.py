@@ -80,7 +80,12 @@ class AdvanceDecision:
 
 
 def _normalize(s: str) -> str:
-    return (s or "").strip().strip("`").strip()
+    """Trim whitespace + surrounding markdown emphasis/code marks (``*``, `` ` ``).
+
+    So a bold tracker cell like ``**PR1 — parser**`` or a pointer like
+    ``**RESUME HERE**`` reduces to its plain text. Markdown bold/italic in unit
+    labels was silently breaking unit-key matching (→ fail-closed gate)."""
+    return (s or "").strip().strip("*`").strip("*` ")
 
 
 def _split_row(line: str) -> list[str]:
