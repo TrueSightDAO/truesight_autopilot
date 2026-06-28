@@ -31,6 +31,7 @@ import httpx
 from .auth import create_jwt, verify_jwt, verify_payload
 from .auto_advance import next_action
 from .config import settings
+from .turn_convergence import convergence_message, should_converge
 from .context import get_context_file, refresh_context_repos, refresh_system_prompt
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
@@ -2574,8 +2575,14 @@ async def _run_tool_round_loop(
     when this turn is processing a queued (interjected-after-done) message.
     """
     MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "30"))
+    # Soft backstop: at this fraction of the hard cap, inject a one-time
+    # convergence directive so the turn lands a clean, resumable answer instead
+    # of grinding into MAX_TOOL_ROUNDS (force-completion → DSML leak → empty
+    # banner). See app/turn_convergence.py + ROUND_CAP_RESILIENCE_PLAN.md.
+    SOFT_FRACTION = float(os.getenv("CHAT_TOOL_ROUNDS_SOFT_FRACTION", "0.75"))
     assistant_text = ""
     round_num = 0
+    converge_nudged = False
     state["cancelled"] = False
     state["wanted_more_rounds"] = False
     state.setdefault("tool_trace", [])  # [{name, result}] for the per-turn report
@@ -2804,6 +2811,39 @@ async def _run_tool_round_loop(
             # Sanitise after each tool round — catches corruption from
             # concurrent session saves during the round
             _sanitise_tool_messages(history)
+
+            # Graceful convergence backstop — wind the turn down BEFORE it
+            # crashes into MAX_TOOL_ROUNDS (force-completion → DSML leak → the
+            # empty-response banner) or rolls a completed PR into the next
+            # unit's discovery. Inject a one-time directive so the model lands a
+            # clean, resumable answer inside the budget. Once per turn.
+            if not converge_nudged:
+                converge_reason = should_converge(
+                    round_num,
+                    MAX_TOOL_ROUNDS,
+                    state["tool_trace"],
+                    soft_fraction=SOFT_FRACTION,
+                )
+                if converge_reason:
+                    converge_nudged = True
+                    state["converge_reason"] = converge_reason
+                    history.append(
+                        convergence_message(
+                            converge_reason, round_num, MAX_TOOL_ROUNDS
+                        )
+                    )
+                    logger.info(
+                        "[%d] %sConvergence nudge (%s) at round %d/%d",
+                        req_id,
+                        log_prefix,
+                        converge_reason,
+                        round_num,
+                        MAX_TOOL_ROUNDS,
+                    )
+                    yield _sse_event(
+                        "converging",
+                        _emit({"reason": converge_reason, "round": round_num}),
+                    )
         else:
             assistant_text = client.extract_text(completion)
             break  # no more tool calls — exit loop
