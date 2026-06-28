@@ -17,9 +17,17 @@ The brain reads the plan's ``RESUME HERE`` pointer (which the executing turn
 advances as each unit lands) to find *the next unit to run*, then reads that
 unit's marker.
 
-**Safety default:** anything unparseable (no tracker, no ``Advance`` column, no
-``RESUME HERE`` pointer, unit not found, malformed marker) resolves to ``gate``
-("stop and ask") — never ``auto``. Auto-advance must fail closed.
+**Default = auto (revised 2026-06-23, see OPERATING_INSTRUCTIONS §5c).** A unit with
+no / blank / unknown ``Advance`` marker, or a plan with no ``Advance`` column at all,
+**auto-advances**. Sophia STOPS only when:
+
+- the next unit is **irreversible / outward-facing** — an always-stop category gated by
+  RULE not annotation (deploy / promote / merge-to-main / TDG-or-money issuance / UAT);
+- its marker is an explicit ``gate: <reason>``;
+- the turn opened **no PR** (non-convergence — handled in :func:`next_action`); or
+- she **cannot locate** the next unit (no ``RESUME HERE`` pointer, or the unit is not
+  found in a present tracker). Ambiguity about *where she is* still fails closed;
+  ambiguity about *whether a plain unit may run* now resolves to ``auto``.
 """
 
 from __future__ import annotations
@@ -30,6 +38,23 @@ from dataclasses import dataclass
 # Words in a RESUME-HERE target that mean "the plan is finished".
 _DONE_RE = re.compile(r"\b(done|complete|completed|finished|all units|none left)\b", re.I)
 _RESUME_RE = re.compile(r"RESUME\s+HERE\s*[:=]?\s*(.*)", re.I)
+# Irreversible / outward-facing work that ALWAYS gates (by rule, even with no/`auto`
+# marker), matched against the next unit's text. A forgetful author cannot arm these
+# for unattended auto-run. Explicit `gate:` markers remain the primary mechanism.
+_ALWAYS_STOP_RE = re.compile(
+    r"(?i)("
+    r"\bdeploy|\bpromote\b|gh\s+repo\s+sync|clasp\s+(?:push|deploy)|"
+    r"merge\s+to\s+(?:main|master)|\bto\s+prod\b|\bproduction\b|"
+    r"issu\w*\s+tdg|tdg\s+issuance|mass[\s-]+approv\w*|\btreasury\b|\bpayout\b|"
+    r"capital\s+injection|move\s+money|\bUAT\b|human\s+acceptance"
+    r")"
+)
+
+
+def _always_stop_reason(text: str) -> str | None:
+    """Return the matched always-stop keyword in ``text``, else None."""
+    m = _ALWAYS_STOP_RE.search(text or "")
+    return m.group(1) if m else None
 # Separators between a unit's short label and its description ("PR1 — parser").
 _UNIT_SEPARATORS = ("—", "–", " - ")
 
@@ -128,19 +153,19 @@ def find_resume_here(plan_text: str) -> str | None:
 
 
 def classify_marker(marker: str) -> AdvanceDecision:
-    """Classify a single ``Advance`` cell value. Unknown -> gate (safe)."""
+    """Classify a single ``Advance`` cell value.
+
+    Only an explicit ``gate:`` forces a stop here; blank / ``auto`` / unknown all
+    resolve to ``auto`` (the default, revised 2026-06-23). Always-stop-by-rule is
+    applied separately in :func:`decision_for_unit` from the unit's text."""
     raw = _normalize(marker)
     low = raw.lower()
-    if low == "auto":
-        return AdvanceDecision(decision="auto")
     if low.startswith("gate"):
         reason = raw.split(":", 1)[1].strip() if ":" in raw else ""
         return AdvanceDecision(
             decision="gate", gate_reason=reason or "(no reason given)"
         )
-    return AdvanceDecision(
-        decision="gate", gate_reason=f"unrecognized Advance marker: {marker!r}"
-    )
+    return AdvanceDecision(decision="auto")
 
 
 def find_unit_row(rows: list[TrackerRow], target: str) -> int | None:
@@ -157,20 +182,44 @@ def find_unit_row(rows: list[TrackerRow], target: str) -> int | None:
 
 
 def decision_for_unit(plan_text: str, unit: str) -> AdvanceDecision:
-    """Decision for running ``unit`` (the next unit to do), from its marker."""
+    """Decision for running ``unit`` (the next unit to do).
+
+    Default is ``auto`` (revised 2026-06-23). Forces ``gate`` when: the unit's text
+    is an always-stop (irreversible/outward) category, its marker is an explicit
+    ``gate:``, or — when a tracker is present — the unit cannot be located in it
+    (ambiguity about *where she is* still fails closed). A plan with no tracker /
+    no ``Advance`` column defaults to ``auto`` for the located unit."""
     rows = parse_resume_tracker(plan_text)
-    if not rows:
+    if rows:
+        idx = find_unit_row(rows, unit)
+        if idx is None:
+            return AdvanceDecision(
+                decision="gate", gate_reason=f"unit {unit!r} not found in resume tracker"
+            )
+        next_unit = rows[idx].unit
+        marker_dec = classify_marker(rows[idx].advance)
+        unit_text = f"{rows[idx].unit} {rows[idx].advance}"
+    else:
+        # No tracker / no Advance column -> default auto, but still honor always-stop
+        # detected from the RESUME-HERE target text.
+        next_unit = unit
+        marker_dec = AdvanceDecision(decision="auto")
+        unit_text = unit
+
+    # An explicit gate marker wins.
+    if marker_dec.decision == "gate":
+        marker_dec.next_unit = next_unit
+        return marker_dec
+
+    # Always-stop by rule: irreversible / outward-facing units gate even without a marker.
+    reason = _always_stop_reason(unit_text) or _always_stop_reason(unit)
+    if reason:
         return AdvanceDecision(
-            decision="gate", gate_reason="no resume tracker / Advance column found"
+            decision="gate",
+            gate_reason=f"always-stop: irreversible/outward unit ({reason})",
+            next_unit=next_unit,
         )
-    idx = find_unit_row(rows, unit)
-    if idx is None:
-        return AdvanceDecision(
-            decision="gate", gate_reason=f"unit {unit!r} not found in resume tracker"
-        )
-    dec = classify_marker(rows[idx].advance)
-    dec.next_unit = rows[idx].unit
-    return dec
+    return AdvanceDecision(decision="auto", next_unit=next_unit)
 
 
 def next_action(plan_text: str, opened_pr: bool) -> AdvanceDecision:

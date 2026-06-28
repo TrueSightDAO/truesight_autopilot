@@ -1,6 +1,7 @@
 """Unit tests for app/auto_advance.py — the pure resume-tracker parser that
-drives Sophia's auto-advance loop. Safety-critical: anything ambiguous must
-resolve to ``gate`` (stop), never ``auto``."""
+drives Sophia's auto-advance loop. Default is ``auto`` (revised 2026-06-23);
+a ``gate`` is forced only by an always-stop category (irreversible/outward),
+an explicit ``gate:`` marker, or inability to LOCATE the next unit."""
 
 from __future__ import annotations
 
@@ -87,9 +88,10 @@ def test_classify_bare_gate():
     assert d.decision == "gate" and d.gate_reason
 
 
-def test_classify_unknown_is_gate():
-    d = classify_marker("maybe?")
-    assert d.decision == "gate" and "unrecognized" in d.gate_reason
+def test_classify_unknown_is_auto():
+    # Revised 2026-06-23: blank/unknown markers default to auto (only `gate:` stops here).
+    assert classify_marker("maybe?").decision == "auto"
+    assert classify_marker("").decision == "auto"
 
 
 # ── find_unit_row ───────────────────────────────────────────────────────────
@@ -129,8 +131,36 @@ def test_decision_for_unit_unknown_unit_is_gate():
     assert d.decision == "gate" and "not found" in d.gate_reason
 
 
-def test_decision_for_unit_no_tracker_is_gate():
-    d = decision_for_unit("no table at all", "PR1")
+def test_decision_for_unit_no_tracker_defaults_auto():
+    # Revised 2026-06-23: a plan with no tracker defaults to auto for the located unit
+    # (as long as the unit text isn't an always-stop category).
+    d = decision_for_unit("no table at all", "PR1 — add a parser")
+    assert d.decision == "auto"
+
+
+def test_decision_for_unit_no_tracker_always_stop_gates():
+    # ...unless the unit text is irreversible/outward — always-stop by rule, no marker needed.
+    d = decision_for_unit("no table at all", "PR5 — deploy to prod")
+    assert d.decision == "gate" and "always-stop" in d.gate_reason
+
+
+def test_decision_for_unit_always_stop_with_auto_marker_gates():
+    # A unit explicitly marked `auto` but whose text is an always-stop still gates.
+    plan = (
+        "> **RESUME HERE:** PR3 — promote to prod\n\n"
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| PR3 — promote to prod | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "PR3")
+    assert d.decision == "gate" and "always-stop" in d.gate_reason
+
+
+def test_decision_for_unit_tdg_issuance_gates():
+    plan = (
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| Phase 3 — issue TDG to contributors | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "Phase 3")
     assert d.decision == "gate"
 
 
