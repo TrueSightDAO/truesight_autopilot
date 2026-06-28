@@ -43,6 +43,9 @@ _INTENT_GUIDANCE: dict[str, str] = {
     "onboard partner": "PARTNER ADD EVENT",
     "check in with partner": "PARTNER CHECK-IN EVENT",
     "partner check-in": "PARTNER CHECK-IN EVENT",
+    "post-repackaging cleanup": "POST-REPACKAGING CLEANUP EVENT",
+    "cleanup after repackaging": "POST-REPACKAGING CLEANUP EVENT",
+    "deplete inputs": "POST-REPACKAGING CLEANUP EVENT",
     "register qr code": "QR CODE REGISTRATION",
     "add contributor": "CONTRIBUTOR ADD EVENT",
     "onboard contributor": "CONTRIBUTOR ADD EVENT",
@@ -103,6 +106,10 @@ _IMPORTANT_FIELDS: dict[str, list[str]] = {
         "Paid To",
         "Paid By",
     ],
+    "POST-REPACKAGING CLEANUP EVENT": [
+        "Composition URL",
+        "Holder Name",
+    ],
 }
 
 # Minimal fallback for when Edgar is unreachable
@@ -122,6 +129,11 @@ _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
         "description": "Use to record a contributor's time, work, or value-add to the DAO. Earns TDG.",
         "required_fields": ["Type", "Amount"],
         "dapp_page": "report_contribution.html",
+    },
+    "POST-REPACKAGING CLEANUP EVENT": {
+        "description": "Use after a repackaging batch to deplete consumed inputs from offchain asset location, add output rows, and set Currencies metadata. CLI-only — no DApp equivalent.",
+        "required_fields": ["Composition URL", "Holder Name"],
+        "dapp_page": "post_repackaging_cleanup.html",
     },
 }
 
