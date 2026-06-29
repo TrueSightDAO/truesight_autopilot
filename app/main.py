@@ -2785,6 +2785,19 @@ async def _run_tool_round_loop(
                     state["assistant_text"] = assistant_text
                     _live_progress.pop(session_id, None)
                     return
+                except Exception as exc:
+                    logger.exception(
+                        "[%d] %sTool %s raised unhandled exception",
+                        req_id,
+                        log_prefix,
+                        func_name,
+                    )
+                    result_text = json.dumps(
+                        {
+                            "tool_error": f"{func_name} failed: {exc}",
+                            "status": "tool_execution_error",
+                        }
+                    )
                 yield _sse_event("tool", {"tool": func_name, "status": "done"})
                 # Update live progress: mark tool done
                 _live_progress[session_id]["current_tool"] = None
@@ -3862,6 +3875,14 @@ async def chat(request: Request):
                     role=role,
                 ):
                     yield event
+            except Exception as exc:
+                logger.exception(
+                    "SSE stream crashed for session %s", session_id[:16]
+                )
+                yield _sse_event(
+                    "error",
+                    f"internal error — the thread self-heals, please resend: {exc}",
+                )
             finally:
                 _active_streams.pop(session_id, None)
                 _unregister_chat_turn_track(session_id)
