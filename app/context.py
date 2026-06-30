@@ -79,6 +79,8 @@ CANONICAL_CONTEXT_FILES: list[str] = [
     "API_CREDENTIALS_DOCUMENTATION.md",
     "SETUP_REQUIREMENTS.md",
     "AUTOPILOT_CODE_MODIFICATIONS.md",
+    "SOPHIA_BATCH_SALES_PLAN.md",
+    "SOPHIA_EXPENSE_REPORTING_PLAN.md",
 ]
 
 _SYSTEM_PROMPT_HEADER = """You are the TrueSight DAO Autopilot — an autonomous SRE and developer assistant.
