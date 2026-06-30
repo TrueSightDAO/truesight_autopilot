@@ -149,7 +149,7 @@ Do NOT guess how a process works. If you're not sure, call read_context_file to 
 - search_context(query) — content search across ALL agentic_ai_context files; first stop for unfamiliar terms
 - search_code(query, repo?) — GitHub code search; org-wide when repo omitted
 - read_repo_file(repo, path, ref="main") — read a file from a GitHub repo (content API, no clone)
-- submit_contribution(event_name, attributes) — submit a signed transaction to Edgar (bags, sales, contributions, etc.)
+- submit_contribution(event_name, attributes) — submit a signed transaction to dao_protocol (bags, sales, contributions, etc.)
 - open_fix_pr(repo, issue_description) — diagnose and open a fix PR via agentic loop
 - scan_qr_from_file(file_path) — scan a single image for QR codes
 - scan_qr_batch(file_paths) — batch-scan many images for QR codes

@@ -69,7 +69,7 @@ FLEET: dict[str, dict[str, str]] = {
     "seni_ror": {
         "ip": "54.211.179.126",
         "user": "ubuntu",
-        "desc": "Edgar (Rails sentiment_importer) — DAO API server (Nelanco, seni_ror_200250915)",
+        "desc": "Rails sentiment_importer — trading platform ONLY, NOT the DAO API (dao_protocol handles DAO on its own box)",
     },
     "dao_protocol": {
         "ip": "98.93.94.86",
