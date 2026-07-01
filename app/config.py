@@ -94,6 +94,7 @@ class Settings(BaseSettings):
         ".github",
         "ecosystem_change_logs",
         "tribomirimbahia",
+        "lineage-engine",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
