@@ -2364,7 +2364,7 @@ async def _run_tool(
 # any of these ends with an explicit "what I did" report so that — especially when
 # several instructions are queued for one topic and run as back-to-back turns —
 # the governor sees exactly what each turn accomplished before the next begins.
-# See agentic_ai_context/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR3, invariant 7).
+# See agentic_ai_context/plans/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR3, invariant 7).
 _SIDE_EFFECT_TOOLS = {
     "open_fix_pr",
     "merge_pr",

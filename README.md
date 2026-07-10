@@ -381,7 +381,7 @@ The autopilot can now modify **any TrueSightDAO repo** through governor chat:
 | `sentiment_importer` | Edgar Rails API |
 | `truesight_autopilot` | Self-healing |
 
-Tools available in the agentic loop: `read_file`, `edit_file`, `create_file`, `delete_file`, `grep_code`, `py_compile`. Every change opens a **DRAFT PR** — never auto-merges. See `agentic_ai_context/AUTOPILOT_CODE_MODIFICATIONS.md` for full spec.
+Tools available in the agentic loop: `read_file`, `edit_file`, `create_file`, `delete_file`, `grep_code`, `py_compile`. Every change opens a **DRAFT PR** — never auto-merges. See `agentic_ai_context/autopilot/AUTOPILOT_CODE_MODIFICATIONS.md` for full spec.
 
 ## Related
 
@@ -389,5 +389,5 @@ Tools available in the agentic loop: `read_file`, `edit_file`, `create_file`, `d
 - [`TrueSightDAO/truesight_autopilot_transcript`](https://github.com/TrueSightDAO/truesight_autopilot_transcript) — Append-only audit trail (transcripts + token usage) produced by this service. See its [`AGENTS.md`](https://github.com/TrueSightDAO/truesight_autopilot_transcript/blob/main/AGENTS.md), [`SCHEMA.md`](https://github.com/TrueSightDAO/truesight_autopilot_transcript/blob/main/SCHEMA.md), and [`PROVIDERS.md`](https://github.com/TrueSightDAO/truesight_autopilot_transcript/blob/main/PROVIDERS.md).
 - `agentic_ai_context/API_CREDENTIALS_DOCUMENTATION.md` §10 — Credential audit and readiness
 - `agentic_ai_context/SETUP_REQUIREMENTS.md` — Autopilot prerequisites and blockers
-- `agentic_ai_context/AUTOPILOT_CODE_MODIFICATIONS.md` — Full agentic loop spec
+- `agentic_ai_context/autopilot/AUTOPILOT_CODE_MODIFICATIONS.md` — Full agentic loop spec
 - `market_research` — Primary repo the autopilot will monitor and fix

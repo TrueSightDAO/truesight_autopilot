@@ -1,6 +1,6 @@
 """Pure helpers for the Sophia auto-advance loop.
 
-See ``agentic_ai_context/SOPHIA_AUTO_ADVANCE_PLAN.md``. A roadmap's *resume
+See ``agentic_ai_context/plans/SOPHIA_AUTO_ADVANCE_PLAN.md``. A roadmap's *resume
 tracker* (a markdown table with an ``Advance`` column) tells Sophia whether,
 after finishing one unit (PR), she may immediately continue to the next unit or
 must STOP at a gate. These helpers are PURE (no I/O, no network) so they are

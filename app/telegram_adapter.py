@@ -60,7 +60,7 @@ _ATTACH_DIR = "/tmp/tg_attachments"  # adapter + autopilot share the EC2 box / u
 # serializes dispatch within a topic (one executor per thread, queued in arrival
 # order) while DIFFERENT topics stay parallel. Attachment prep (download + OCR /
 # extraction) runs BEFORE the lock, so it still parallelizes — only the turn is
-# serialized. See agentic_ai_context/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR2).
+# serialized. See agentic_ai_context/plans/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR2).
 _thread_dispatch_locks: dict[str, threading.Lock] = {}
 _thread_dispatch_guard = threading.Lock()
 
@@ -190,7 +190,7 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
     """Resolve the active handoff plan file for a Telegram topic via the registry.
 
     Each forum topic that is a handoff has a row in
-    agentic_ai_context/SOPHIA_HANDOFFS.md mapping thread_id -> plan file. A bare
+    agentic_ai_context/sophia/SOPHIA_HANDOFFS.md mapping thread_id -> plan file. A bare
     governor message like "go for it" carries no context on its own, so we look
     up the current thread_id here and let the brain load the plan. Fail-safe:
     any error returns None and the message is dispatched unchanged.
@@ -287,7 +287,7 @@ def _handoff_prefix(thread_id: int | None, text: str = "") -> str:
         f"[Handoff context — this Telegram topic (thread {thread_id}) may be an "
         f'execution handoff. If the governor gives a go-signal ("go for it", "go", '
         f'"proceed") or references a plan/mission, find this thread in '
-        f"agentic_ai_context/HANDOFF_MANIFEST.md + SOPHIA_HANDOFFS.md via "
+        f"agentic_ai_context/handoffs/HANDOFF_MANIFEST.md + SOPHIA_HANDOFFS.md via "
         f"read_context_file, open the referenced `*_PLAN.md`, and resume from its "
         f"RESUME HERE. Do NOT reply that you lack context without checking the "
         f"registry first.]\n\n"

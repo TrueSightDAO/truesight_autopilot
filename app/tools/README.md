@@ -181,7 +181,7 @@ assertion in `tests/test_roles_tool_gating.py` so it stays gated.
 ## Reference
 
 - `app/tool_registry.py` — the manifest layer.
-- `agentic_ai_context/AUTOPILOT_CAPABILITY_MANIFEST_PLAN.md` — design context.
+- `agentic_ai_context/plans/AUTOPILOT_CAPABILITY_MANIFEST_PLAN.md` — design context.
 - Examples worth reading before authoring your first tool:
   - Simple wrapper: `app/tools/web_search.py`
   - Multi-op module: `app/tools/gmail_tools.py`
