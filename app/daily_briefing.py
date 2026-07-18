@@ -36,8 +36,16 @@ _DEDUP_DIR = Path(settings.session_log_dir) / "daily_briefing_dedup"
 
 # GitHub paths for live agenda sources
 _AGENTIC_CONTEXT_REPO = "agentic_ai_context"
-_HANDOFFS_PATH = "SOPHIA_HANDOFFS.md"
+_HANDOFFS_PATH = "handoffs/HANDOFF_MANIFEST.md"
 _FOLLOWUPS_PATH = "OPEN_FOLLOWUPS.md"
+
+# Statuses meaning "nothing left to execute" — excluded so the briefing only
+# surfaces handoffs that still need attention. Mirrors the terminal-status
+# exclusion in app/telegram_adapter.py's _parse_handoff_plan (same registry,
+# same reasoning) instead of the old exact-match against "active"/"go-ready",
+# which no real Status value has ever equalled (found 2026-07-18; see
+# agentic_ai_context/plans/HANDOFF_REGISTRY_CONSOLIDATION_PLAN.md).
+_TERMINAL_STATUS_MARKERS = ("completed", "superseded", "demo · live", "demo·live", "stale")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -102,7 +110,15 @@ def _mark_dedup(
 
 
 def _fetch_handoffs() -> str:
-    """Fetch SOPHIA_HANDOFFS.md and extract active/GO-ready rows."""
+    """Fetch HANDOFF_MANIFEST.md and extract still-open (non-terminal) rows.
+
+    Header-driven parse (not hardcoded column positions) so a future column
+    reorder in the Manifest doesn't silently break this again — the previous
+    version hardcoded `cols[6]` for Status, which was actually off by one
+    against its own documented schema, on top of requiring an exact-match
+    "active"/"go-ready" Status value that no real row has ever had, on top of
+    reading the wrong repo path. All three independently made this dead code.
+    """
     try:
         gh = GitHubClient()
         result = gh.read_file(_AGENTIC_CONTEXT_REPO, _HANDOFFS_PATH)
@@ -110,30 +126,33 @@ def _fetch_handoffs() -> str:
             return "(handoffs unavailable)"
         content = result["content"]
 
-        # Extract registry table rows with status "active" or "GO-ready"
-        lines = content.split("\n")
+        header: list[str] | None = None
         in_table = False
         active_handoffs: list[str] = []
-        for line in lines:
-            if line.startswith("| Date |"):
-                in_table = True
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                if in_table:
+                    break  # left the registry table — stop (don't pick up a later table)
                 continue
-            if in_table and line.startswith("|---"):
+            cols = [c.strip() for c in stripped.strip("|").split("|")]
+            if header is None:
+                if cols and cols[0] == "Plan file":
+                    header = cols
+                    in_table = True
                 continue
-            if in_table and line.startswith("|"):
-                # Parse: | date | handoff | plan file | topic | thread_id | session_id | status |
-                cols = [c.strip() for c in line.split("|")]
-                if len(cols) >= 7:
-                    status = cols[6].lower()
-                    if status in ("active", "go-ready"):
-                        handoff_name = cols[2]
-                        plan_file = cols[3]
-                        topic_link = cols[4]
-                        active_handoffs.append(
-                            f"  • {handoff_name} — {plan_file} ({topic_link})"
-                        )
-            elif in_table and not line.startswith("|"):
-                in_table = False
+            if all(not c or c.startswith("---") for c in cols):
+                continue  # the '---|---' separator row
+            if len(cols) != len(header):
+                continue
+            row = dict(zip(header, cols))
+            status = row.get("Status", "").lower()
+            if any(marker in status for marker in _TERMINAL_STATUS_MARKERS):
+                continue
+            title = row.get("Handoff title", "(untitled)")
+            plan_file = row.get("Plan file", "")
+            topic = row.get("Telegram topic", "")
+            active_handoffs.append(f"  • {title} — {plan_file} ({topic})")
 
         if active_handoffs:
             return "\n".join(active_handoffs)
