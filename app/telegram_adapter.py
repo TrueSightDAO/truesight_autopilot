@@ -183,16 +183,28 @@ def build_session_id(chat_id: int, thread_id: int | None) -> str:
 
 
 _HANDOFF_PLAN_RE = re.compile(r"`([^`]+\.md)`")
-_HANDOFF_REGISTRY_RAW = "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/SOPHIA_HANDOFFS.md"
+_HANDOFF_REGISTRY_RAW = "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/handoffs/HANDOFF_MANIFEST.md"
+
+# Statuses meaning "nothing left to execute here" — rows with one of these
+# should NOT be auto-injected as the active plan for a thread. Everything else
+# (in progress, blocked, draft, parked GO-ready, deployed, ...) is treated as
+# still-active. NOTE: this used to require the literal substring "active" in
+# some cell, which never matched any Status value the registry has ever
+# actually used — silently making this resolver dead code since #128 (found
+# 2026-07-18 while investigating a thread that got a generic reply instead of
+# its plan context; see agentic_ai_context/plans/HANDOFF_REGISTRY_CONSOLIDATION_PLAN.md).
+_TERMINAL_STATUS_MARKERS = ("completed", "superseded", "demo · live", "demo·live", "stale")
 
 
 def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
     """Resolve the active handoff plan file for a Telegram topic via the registry.
 
     Each forum topic that is a handoff has a row in
-    agentic_ai_context/sophia/SOPHIA_HANDOFFS.md mapping thread_id -> plan file. A bare
-    governor message like "go for it" carries no context on its own, so we look
-    up the current thread_id here and let the brain load the plan. Fail-safe:
+    agentic_ai_context/handoffs/HANDOFF_MANIFEST.md mapping thread_id -> plan file
+    (single source of truth since the 2026-07-18 registry consolidation — it used
+    to be sophia/SOPHIA_HANDOFFS.md, which also 404'd at this repo-root path). A
+    bare governor message like "go for it" carries no context on its own, so we
+    look up the current thread_id here and let the brain load the plan. Fail-safe:
     any error returns None and the message is dispatched unchanged.
 
     Reads the local synced clone first (fast), then falls back to GitHub `main`
@@ -204,7 +216,12 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
         return None
     # 1) local synced clone — fast, no network
     try:
-        reg = settings.context_repos_dir / "agentic_ai_context" / "SOPHIA_HANDOFFS.md"
+        reg = (
+            settings.context_repos_dir
+            / "agentic_ai_context"
+            / "handoffs"
+            / "HANDOFF_MANIFEST.md"
+        )
         plan = _parse_handoff_plan(reg.read_text(encoding="utf-8"), thread_id)
         if plan:
             return plan
@@ -222,8 +239,9 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
 
 def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
     """Pure parse: find the active handoff plan file for thread_id in the
-    SOPHIA_HANDOFFS.md registry table. Matches the bare thread_id column or the
-    session_id cell (tg:<chat>:<id>); requires the row's status to be active."""
+    HANDOFF_MANIFEST.md registry table. Matches the bare thread_id column or the
+    session_id-style cell (tg:<chat>:<id>); excludes rows whose Status marks the
+    handoff as finished (see _TERMINAL_STATUS_MARKERS)."""
     for line in registry_text.splitlines():
         if not line.lstrip().startswith("|"):
             continue
@@ -234,7 +252,9 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
         )
         if not matched:
             continue
-        if not any("active" in c.lower() for c in cells):
+        if any(
+            marker in c.lower() for c in cells for marker in _TERMINAL_STATUS_MARKERS
+        ):
             continue
         m = _HANDOFF_PLAN_RE.search(line)
         if m:
@@ -269,7 +289,7 @@ def _handoff_prefix(thread_id: int | None, text: str = "") -> str:
     plan = _handoff_plan_for_thread(thread_id)
     if plan:
         return (
-            f"[Handoff context — auto-injected from SOPHIA_HANDOFFS.md: this Telegram "
+            f"[Handoff context — auto-injected from HANDOFF_MANIFEST.md: this Telegram "
             f"topic (thread {thread_id}) is the active handoff for `{plan}`. Before "
             f'responding, read it with read_context_file("{plan}") and resume from its '
             f'RESUME HERE marker. Treat a short go-signal in this topic ("go for it", '
@@ -287,7 +307,7 @@ def _handoff_prefix(thread_id: int | None, text: str = "") -> str:
         f"[Handoff context — this Telegram topic (thread {thread_id}) may be an "
         f'execution handoff. If the governor gives a go-signal ("go for it", "go", '
         f'"proceed") or references a plan/mission, find this thread in '
-        f"agentic_ai_context/handoffs/HANDOFF_MANIFEST.md + SOPHIA_HANDOFFS.md via "
+        f"agentic_ai_context/handoffs/HANDOFF_MANIFEST.md via "
         f"read_context_file, open the referenced `*_PLAN.md`, and resume from its "
         f"RESUME HERE. Do NOT reply that you lack context without checking the "
         f"registry first.]\n\n"
