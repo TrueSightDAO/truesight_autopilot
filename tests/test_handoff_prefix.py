@@ -10,7 +10,7 @@ superseded / demo · live) rather than the old "active"/"done" convention the
 resolver used to require — that mismatch made the resolver dead code for every
 real handoff (see HANDOFF_REGISTRY_CONSOLIDATION_PLAN.md)."""
 
-from app.telegram_adapter import _parse_handoff_plan
+from app.telegram_adapter import _parse_handoff_plan, _parse_handoff_plan_and_flags
 
 REGISTRY = """\
 | Plan file | Handoff title | Handoff date | Status | Telegram topic | message_thread_id | Resume tracker state | Last manifest update |
@@ -20,6 +20,15 @@ REGISTRY = """\
 | `BLOCKED_PLAN.md` | Something waiting on a secret | 2026-06-08 | blocked | [topic](x) | 1800 | RESUME HERE = PR1 | 2026-06-08 |
 | `OLD_PLAN.md` | Old done thing | 2026-06-07 | completed | [topic](x) | 1400 | done | 2026-06-07 |
 | `SUPERSEDED_PLAN.md` | Overtaken by another fix | 2026-06-06 | superseded — already implemented | [topic](x) | 1300 | n/a | 2026-06-06 |
+"""
+
+# Mirrors the real HANDOFF_MANIFEST.md schema (2026-07-21) with the Auto-start
+# column present.
+REGISTRY_WITH_AUTO_START = """\
+| Plan file | Handoff title | Handoff date | Status | Telegram topic | message_thread_id | Auto-start | Resume tracker state | Last manifest update |
+|-----------|---------------|--------------|--------|-----------------|--------------------|---|----------------------|----------------------|
+| `AUTO_PLAN.md` | Auto-start plan | 2026-07-21 | parked GO-ready | [topic](x) | 2001 | yes | RESUME HERE = PR1 | 2026-07-21 |
+| `MANUAL_PLAN.md` | Normal plan | 2026-07-21 | parked GO-ready | [topic](x) | 2002 | no | RESUME HERE = PR1 | 2026-07-21 |
 """
 
 
@@ -51,3 +60,35 @@ def test_matches_via_thread_id_suffix_cell():
     # it still resolves as long as no terminal-status marker is present.
     reg = "| `P.md` | y | d | in progress | t | `tg:-100:5555` | r | u |"
     assert _parse_handoff_plan(reg, 5555) == "P.md"
+
+
+# ── Auto-start flag (2026-07-21) ────────────────────────────────────────────
+
+
+def test_auto_start_yes_resolves_true():
+    result = _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 2001)
+    assert result == ("AUTO_PLAN.md", True)
+
+
+def test_auto_start_no_resolves_false():
+    result = _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 2002)
+    assert result == ("MANUAL_PLAN.md", False)
+
+
+def test_auto_start_missing_column_defaults_false():
+    # REGISTRY has no Auto-start column at all — must not crash, must not
+    # treat that as auto_start=True.
+    result = _parse_handoff_plan_and_flags(REGISTRY, 1722)
+    assert result == ("MORNING_ORACLE_STANDUP_PLAN.md", False)
+
+
+def test_auto_start_no_header_row_defaults_false():
+    # The bare single-line fixture (no header at all) must still resolve the
+    # plan filename, with auto_start defaulting to False rather than crashing.
+    reg = "| `P.md` | y | d | in progress | t | `tg:-100:5555` | r | u |"
+    result = _parse_handoff_plan_and_flags(reg, 5555)
+    assert result == ("P.md", False)
+
+
+def test_auto_start_unknown_thread_is_none():
+    assert _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 9999) is None

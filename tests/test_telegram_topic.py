@@ -28,7 +28,10 @@ def test_parse_handoff_plan_unknown_thread_is_none():
 def test_handoff_prefix_generic_fallback_when_no_plan(monkeypatch):
     # Registry lookup misses: the generic hint now fires ONLY on a go-signal /
     # plan reference (2026-06-12) — a normal chat message gets no handoff noise.
-    monkeypatch.setattr(ta, "_handoff_plan_for_thread", lambda tid: None)
+    # Patches _handoff_plan_and_auto_start_for_thread — the function _handoff_prefix
+    # actually calls since the 2026-07-21 Auto-start refactor (_handoff_plan_for_thread
+    # is now just a thin wrapper over it, no longer called directly here).
+    monkeypatch.setattr(ta, "_handoff_plan_and_auto_start_for_thread", lambda tid: None)
     go = ta._handoff_prefix(777, "go for it")
     assert go and "HANDOFF_MANIFEST.md" in go and "lack context" in go
     assert ta._handoff_prefix(777, "just chatting") == ""  # normal chat → no prefix
@@ -37,6 +40,25 @@ def test_handoff_prefix_generic_fallback_when_no_plan(monkeypatch):
 def test_handoff_prefix_empty_outside_topic():
     assert ta._handoff_prefix(None) == ""
     assert ta._handoff_prefix(0) == ""
+
+
+def test_handoff_prefix_auto_start_true_skips_go_signal_framing(monkeypatch):
+    monkeypatch.setattr(
+        ta, "_handoff_plan_and_auto_start_for_thread", lambda tid: ("AUTO.md", True)
+    )
+    prefix = ta._handoff_prefix(555, "anything")
+    assert "PRE-AUTHORIZED" in prefix
+    assert "do NOT wait for a governor go-signal" in prefix
+    assert "always-stop gate" in prefix  # still calls out §5c gates apply
+
+
+def test_handoff_prefix_auto_start_false_keeps_go_signal_framing(monkeypatch):
+    monkeypatch.setattr(
+        ta, "_handoff_plan_and_auto_start_for_thread", lambda tid: ("MANUAL.md", False)
+    )
+    prefix = ta._handoff_prefix(556, "anything")
+    assert "PRE-AUTHORIZED" not in prefix
+    assert 'the governor\'s full authorization' in prefix
 
 
 # --- post_to_telegram_topic (post into an EXISTING thread) ---

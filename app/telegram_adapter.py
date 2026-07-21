@@ -196,8 +196,11 @@ _HANDOFF_REGISTRY_RAW = "https://raw.githubusercontent.com/TrueSightDAO/agentic_
 _TERMINAL_STATUS_MARKERS = ("completed", "superseded", "demo · live", "demo·live", "stale")
 
 
-def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
-    """Resolve the active handoff plan file for a Telegram topic via the registry.
+def _handoff_plan_and_auto_start_for_thread(
+    thread_id: int | None,
+) -> tuple[str, bool] | None:
+    """Resolve the active handoff plan file + Auto-start flag for a Telegram
+    topic via the registry.
 
     Each forum topic that is a handoff has a row in
     agentic_ai_context/handoffs/HANDOFF_MANIFEST.md mapping thread_id -> plan file
@@ -211,6 +214,14 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
     on a miss — a handoff registered since the last ~5-min context sync exists on
     GitHub before it reaches the clone, and that freshness window is exactly when
     a governor types "go for it" (caused the 2026-06-09 "no context" miss).
+
+    The Auto-start flag (2026-07-21) lets a plan skip the "wait for go for it"
+    step — see agentic_ai_context sophia/SOPHIA_HANDOFFS.md § "Auto-start". This
+    only covers REJOINING an already-registered Auto-start thread (e.g. after a
+    redeploy, or a follow-up message); the very first trigger of a brand-new
+    handoff runs in the ping_sophia session before the thread/registry row exist,
+    so it relies on the plan file's own marker + the trigger-message instructions
+    instead — that part is a protocol/prompt convention, not code.
     """
     if not thread_id:
         return None
@@ -222,19 +233,26 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
             / "handoffs"
             / "HANDOFF_MANIFEST.md"
         )
-        plan = _parse_handoff_plan(reg.read_text(encoding="utf-8"), thread_id)
-        if plan:
-            return plan
+        result = _parse_handoff_plan_and_flags(reg.read_text(encoding="utf-8"), thread_id)
+        if result:
+            return result
     except Exception:  # noqa: BLE001 — context enrichment must never break dispatch
         pass
     # 2) GitHub main fallback — covers a just-registered handoff not yet synced
     try:
         resp = httpx.get(_HANDOFF_REGISTRY_RAW, timeout=8.0)
         if resp.status_code == 200:
-            return _parse_handoff_plan(resp.text, thread_id)
+            return _parse_handoff_plan_and_flags(resp.text, thread_id)
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
+    """Thin wrapper over _handoff_plan_and_auto_start_for_thread for callers
+    that only need the plan filename (unchanged signature/behavior)."""
+    result = _handoff_plan_and_auto_start_for_thread(thread_id)
+    return result[0] if result else None
 
 
 def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
@@ -262,6 +280,53 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
     return None
 
 
+def _find_column_index(registry_text: str, column_name: str) -> int | None:
+    """Best-effort: the FIRST '|'-prefixed line in the text is treated as a
+    header candidate. Returns the index of column_name in it, or None when
+    there's no such column (or no header-shaped first row) — e.g. an older
+    registry schema, or a bare test fixture with no header row at all."""
+    for line in registry_text.splitlines():
+        if line.lstrip().startswith("|"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            return cells.index(column_name) if column_name in cells else None
+    return None
+
+
+def _parse_handoff_plan_and_flags(
+    registry_text: str, thread_id: int
+) -> tuple[str, bool] | None:
+    """Like _parse_handoff_plan, but also reports the `Auto-start` flag (2026-07-21)
+    from the matched row, when the registry has that column. Deliberately does NOT
+    touch _parse_handoff_plan's own scanning loop — this is an independent,
+    additive lookup so existing callers/tests keep their exact current behavior.
+    Registries without an `Auto-start` column (older schema, ad-hoc test fixtures)
+    degrade to auto_start=False rather than breaking."""
+    plan = _parse_handoff_plan(registry_text, thread_id)
+    if not plan:
+        return None
+    auto_start = False
+    idx = _find_column_index(registry_text, "Auto-start")
+    if idx is not None:
+        for line in registry_text.splitlines():
+            if not line.lstrip().startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            matched = any(
+                c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}")
+                for c in cells
+            )
+            if not matched:
+                continue
+            if any(
+                marker in c.lower() for c in cells for marker in _TERMINAL_STATUS_MARKERS
+            ):
+                continue
+            if idx < len(cells):
+                auto_start = cells[idx].strip().lower() == "yes"
+            break
+    return plan, auto_start
+
+
 _GO_SIGNAL_RE = re.compile(
     r"(\bgo for it\b|\bgo ahead\b|\bproceed\b|\bship it\b|\bexecute\b|\bresume\b|"
     r"\bcontinue\b|\bpick (it|this) up\b|\bkick (it )?off\b|\blet'?s go\b|"
@@ -283,11 +348,26 @@ def _looks_like_go_signal(text: str | None) -> bool:
 def _handoff_prefix(thread_id: int | None, text: str = "") -> str:
     """Context block to prepend so a bare go-signal in a handoff topic resolves.
     Registered handoffs always get their plan context; an *unregistered* thread only
-    gets the generic fallback when the message looks like a go-signal/plan reference."""
+    gets the generic fallback when the message looks like a go-signal/plan reference.
+    A plan marked Auto-start: yes (2026-07-21) skips the go-signal framing entirely —
+    Sophia is told she's pre-authorized to execute immediately."""
     if not thread_id:
         return ""
-    plan = _handoff_plan_for_thread(thread_id)
-    if plan:
+    result = _handoff_plan_and_auto_start_for_thread(thread_id)
+    if result:
+        plan, auto_start = result
+        if auto_start:
+            return (
+                f"[Handoff context — auto-injected from HANDOFF_MANIFEST.md: this "
+                f"Telegram topic (thread {thread_id}) is the active handoff for "
+                f"`{plan}`, marked **Auto-start: yes**. Before responding, read it "
+                f'with read_context_file("{plan}"). You are PRE-AUTHORIZED to execute '
+                f"from its RESUME HERE marker immediately — do NOT wait for a governor "
+                f"go-signal before starting. Post a short kickoff into this topic, then "
+                f"begin executing, reporting progress here as you go. This does NOT "
+                f"relax any §5c always-stop gate or a `gate:` marker on a later unit — "
+                f"still stop and wait at those.]\n\n"
+            )
         return (
             f"[Handoff context — auto-injected from HANDOFF_MANIFEST.md: this Telegram "
             f"topic (thread {thread_id}) is the active handoff for `{plan}`. Before "
