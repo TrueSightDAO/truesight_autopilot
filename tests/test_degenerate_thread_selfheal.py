@@ -88,8 +88,11 @@ def test_go_signal_detection():
 
 def test_unregistered_thread_no_prefix_on_normal_chat(monkeypatch):
     ta = _adapter()
+    # Patches _handoff_plan_and_auto_start_for_thread — the function
+    # _handoff_prefix actually calls since the 2026-07-21 Auto-start refactor
+    # (_handoff_plan_for_thread is now just a thin wrapper over it).
     monkeypatch.setattr(
-        ta, "_handoff_plan_for_thread", lambda tid: None
+        ta, "_handoff_plan_and_auto_start_for_thread", lambda tid: None
     )  # unregistered
     # normal chat → no handoff noise
     assert ta._handoff_prefix(780, "just dumping some thoughts here") == ""
@@ -99,6 +102,8 @@ def test_unregistered_thread_no_prefix_on_normal_chat(monkeypatch):
 
 def test_registered_thread_always_gets_plan(monkeypatch):
     ta = _adapter()
-    monkeypatch.setattr(ta, "_handoff_plan_for_thread", lambda tid: "SOME_PLAN.md")
+    monkeypatch.setattr(
+        ta, "_handoff_plan_and_auto_start_for_thread", lambda tid: ("SOME_PLAN.md", False)
+    )
     pfx = ta._handoff_prefix(2744, "anything at all, even normal chat")
     assert "SOME_PLAN.md" in pfx  # registered handoff unaffected
