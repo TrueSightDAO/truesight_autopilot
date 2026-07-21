@@ -214,7 +214,7 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
 "
 
 echo "=== Installing tesseract-ocr (attachment processing) ==="
-ssh -i "$EC2_KEY" "$EC2_HOST" "DEBIAN_FRONTEND=noninteractive apt-get install -y tesseract-ocr"
+ssh -i "$EC2_KEY" "$EC2_HOST" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tesseract-ocr"
 
 echo "=== Installing deps on EC2 ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
