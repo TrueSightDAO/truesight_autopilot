@@ -318,9 +318,13 @@ def classify_action(tool_name: str) -> ActionClass:
         "gas_deploy_project",
         "sync_beta_to_prod",
         "generate_pdf",
+        "push_to_personal_repo",
     }
 
-    # Secret/credential tools
+    # Secret/credential tools — anything whose chat-facing return value could contain a raw
+    # secret. NOTE: push_to_personal_repo consumes a vault credential server-side but never
+    # returns it, so it's WRITE (governor-gated), not SECRET (unconditionally denied below) —
+    # don't move it here.
     secret_tools = {
         # Phase 3 will add vault access tools here
     }
