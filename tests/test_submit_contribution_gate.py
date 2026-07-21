@@ -17,6 +17,7 @@ These tests assert:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
 from types import SimpleNamespace
@@ -99,3 +100,83 @@ def test_gate_on_returns_pending_with_summary_bound(monkeypatch):
     _wire(monkeypatch, gate=True)
     result = _run(CONTRIB_ARGS)
     assert "pending_approval" in result.lower(), result
+
+
+# ── G4b lookup-before-submit injection (2026-07-20 regression) ─────────────
+#
+# `lookup_event_docs` was referenced at the inline-injection call site
+# (main.py, added 2026-06-18 alongside this same G4b feature) but never
+# imported into app/main.py — a plain `NameError` on every submit that didn't
+# already call the lookup_event_docs tool earlier in the SAME turn's history.
+# The single existing test above uses `history=[]`, and `if history:` on an
+# empty list is falsy, so it never reached the buggy line and never caught
+# this. Any real conversation has non-empty history, so this fired on
+# essentially every submit_contribution call that skipped the lookup step —
+# found while auditing consumers of the DAO-registry docs during the
+# HANDOFF_MANIFEST.md consolidation (unrelated repo, same session).
+
+NON_EMPTY_HISTORY_NO_PRIOR_LOOKUP = [
+    {"role": "user", "content": "please log my time for today"},
+]
+
+HISTORY_WITH_MATCHING_PRIOR_LOOKUP = [
+    {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "function": {
+                    "name": "lookup_event_docs",
+                    "arguments": json.dumps({"event_name": "CONTRIBUTION EVENT"}),
+                }
+            }
+        ],
+    },
+]
+
+
+def _run_with_history(args, history):
+    return asyncio.run(
+        m._run_tool(
+            "submit_contribution",
+            dict(args),
+            history=history,
+            session_id="tg:1:2",
+            governor_name="Gary Teh",
+        )
+    )
+
+
+def test_lookup_before_submit_injects_without_crash(monkeypatch):
+    """Non-empty history, no prior lookup_event_docs call for this event ->
+    must inject the fallback catalog context and still reach the execute
+    path, NOT raise NameError / return a tool_execution_error."""
+    _wire(monkeypatch, gate=False)
+    monkeypatch.setattr(
+        m,
+        "lookup_event_docs",
+        lambda event_name: {
+            "canonical_labels": ["Type", "Amount", "Description"],
+            "required_fields": ["Type", "Amount"],
+            "description": "stub",
+        },
+    )
+    result = _run_with_history(CONTRIB_ARGS, NON_EMPTY_HISTORY_NO_PRIOR_LOOKUP)
+    low = result.lower()
+    assert "tool_execution_error" not in low, result
+    assert "lookup_event_docs" not in low, result  # no NameError leaking through
+    assert "submitted successfully" in low, result
+
+
+def test_lookup_before_submit_skips_injection_when_already_looked_up(monkeypatch):
+    """A prior matching lookup_event_docs tool_call in history -> the inline
+    fallback must NOT be invoked (guards the _found_lookup short-circuit)."""
+    _wire(monkeypatch, gate=False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        m,
+        "lookup_event_docs",
+        lambda event_name: calls.append(event_name) or {},
+    )
+    result = _run_with_history(CONTRIB_ARGS, HISTORY_WITH_MATCHING_PRIOR_LOOKUP)
+    assert calls == [], "lookup_event_docs should not be called again"
+    assert "submitted successfully" in result.lower(), result

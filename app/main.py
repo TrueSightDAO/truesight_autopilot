@@ -65,6 +65,7 @@ from .tools.dao_identity import register_identity
 from .tools.fs_tools import list_directory, read_local_file
 from .tools.github_tools import read_repo_file
 from .tools.inventory_lookup import list_matching_qr_codes
+from .tools.lookup_event_docs import lookup_event_docs
 from .tools.qr_scanner import (
     lookup_qr_batch,
     lookup_qr_code,
