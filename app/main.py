@@ -3752,120 +3752,128 @@ async def chat(request: Request):
             raise HTTPException(status_code=400, detail="message is required.")
 
     session_id = _session_key(public_key, request)
-    history = _load_or_create_session(session_id)
-    role = find_role_in_history(history)
-
-    # Role detection for new topics
-    if role is None:
-        if len(history) == 0:
-            # Brand new topic — if AUTOPILOT_DEFAULT_ROLE is configured,
-            # silently boot into that role instead of prompting the operator.
-            # Default ("general") is set in roles.get_default_role so the
-            # out-of-box behavior is no prompt + all tools available.
-            default = get_default_role()
-            if default is not None:
-                set_role_in_history(history, default)
-                _log_session(session_id, history)
-                # Fall through to the normal chat path — the user's actual
-                # message gets processed under the default role.
-                role = default
-            else:
-                # No default configured → preserve the original prompt behavior.
-                history = build_role_menu()
-                _log_session(session_id, history)
-                return StreamingResponse(
-                    _sse_single_response(ROLE_SELECTION_MESSAGE),
-                    media_type="text/event-stream",
-                )
-
-    # Check for pending role (user is in "keep or reset?" flow)
-    if role is None:
-        pending = find_pending_role(history)
-        if pending:
-            clean = user_message.strip().lower()
-            if clean in ("reset", "r", "yes", "y"):
-                history = archive_old_history(history, pending)
-                set_role_in_history(history, pending)
-                _log_session(session_id, history)
-                return StreamingResponse(
-                    _sse_single_response(
-                        f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
-                    ),
-                    media_type="text/event-stream",
-                )
-            # "keep" or anything else — keep history, set role
-            # Remove pending tag, set real role
-            history = [
-                m
-                for m in history
-                if not (
-                    isinstance(m.get("content", ""), str)
-                    and str(m["content"]).startswith("[PENDING_ROLE:")
-                )
-            ]
-            set_role_in_history(history, pending)
-            _log_session(session_id, history)
-            return StreamingResponse(
-                _sse_single_response(
-                    f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
-                ),
-                media_type="text/event-stream",
-            )
-
-        # Session exists but no role set — try to parse user message as role choice
-        role = resolve_role(user_message)
-        if role:
-            msg_count = sum(
-                1 for m in history if m.get("role") in ("user", "assistant")
-            )
-            if msg_count >= RESET_CONTEXT_THRESHOLD:
-                # Large existing session — ask about reset before committing
-                history.insert(0, {"role": "system", "content": pending_role_tag(role)})
-                _log_session(session_id, history)
-                return StreamingResponse(
-                    _sse_single_response(reset_context_prompt(role, msg_count)),
-                    media_type="text/event-stream",
-                )
-            set_role_in_history(history, role)
-            _log_session(session_id, history)
-            return StreamingResponse(
-                _sse_single_response(
-                    f"✅ Role set: **{role.name}**.\n\nWhat would you like me to work on?"
-                ),
-                media_type="text/event-stream",
-            )
-        # Still no role match — show menu again
-        return StreamingResponse(
-            _sse_single_response(
-                f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
-            ),
-            media_type="text/event-stream",
-        )
-
-    # Inject governor identity so the LLM knows who "I" / "me" refers to
-    gov_name = _gov_name_for_key(public_key)
-    if gov_name and not any(
-        "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
-    ):
-        user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
-
-    history.append({"role": "user", "content": user_message})
-    _auto_name_session(public_key, request, history, user_message)
-    _log_session(session_id, history)
-
-    # Track session as active — survives client disconnect
-    _active_streams[session_id] = time.time()
-    # Also register in the file-based deploy_watcher registry so the vault panel
-    # (separate process) and the deploy gate can see this live turn.
-    _register_chat_turn_track(session_id, gov_name)
-    # Clear any stale cancel flag from a prior turn so this fresh request runs
-    _cancel_flags.pop(session_id, None)
 
     async def _stream_with_cleanup():
-        # Hold the per-session lock for the whole streamed turn so a second
-        # same-thread request can't run its turn concurrently (one writer / one
-        # executor per thread). Different sessions have different locks → parallel.
+        nonlocal user_message  # reassigned below (governor-identity injection);
+        # without this, that assignment makes Python treat it as local to this
+        # nested function and reading it beforehand raises UnboundLocalError.
+        # Hold the per-session lock for the ENTIRE handler body — not just the
+        # final turn execution (2026-07-21). Previously history was loaded,
+        # role-detection branches could read/write it, and the incoming user
+        # message was appended + persisted BEFORE this lock was acquired, so a
+        # second same-thread request arriving in that window could interleave
+        # its own read/append/write with an in-flight turn's. /chat-blocking
+        # already got this right (lock acquired before touching history at
+        # all); this brings /chat in line with it. Different sessions have
+        # different locks → still fully parallel across threads.
         async with _session_lock(session_id):
+            history = _load_or_create_session(session_id)
+            role = find_role_in_history(history)
+
+            # Role detection for new topics
+            if role is None:
+                if len(history) == 0:
+                    # Brand new topic — if AUTOPILOT_DEFAULT_ROLE is configured,
+                    # silently boot into that role instead of prompting the operator.
+                    # Default ("general") is set in roles.get_default_role so the
+                    # out-of-box behavior is no prompt + all tools available.
+                    default = get_default_role()
+                    if default is not None:
+                        set_role_in_history(history, default)
+                        _log_session(session_id, history)
+                        # Fall through to the normal chat path — the user's actual
+                        # message gets processed under the default role.
+                        role = default
+                    else:
+                        # No default configured → preserve the original prompt behavior.
+                        history = build_role_menu()
+                        _log_session(session_id, history)
+                        async for event in _sse_single_response(ROLE_SELECTION_MESSAGE):
+                            yield event
+                        return
+
+            # Check for pending role (user is in "keep or reset?" flow)
+            if role is None:
+                pending = find_pending_role(history)
+                if pending:
+                    clean = user_message.strip().lower()
+                    if clean in ("reset", "r", "yes", "y"):
+                        history = archive_old_history(history, pending)
+                        set_role_in_history(history, pending)
+                        _log_session(session_id, history)
+                        async for event in _sse_single_response(
+                            f"✅ Context reset. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
+                        ):
+                            yield event
+                        return
+                    # "keep" or anything else — keep history, set role
+                    # Remove pending tag, set real role
+                    history = [
+                        m
+                        for m in history
+                        if not (
+                            isinstance(m.get("content", ""), str)
+                            and str(m["content"]).startswith("[PENDING_ROLE:")
+                        )
+                    ]
+                    set_role_in_history(history, pending)
+                    _log_session(session_id, history)
+                    async for event in _sse_single_response(
+                        f"✅ Keeping existing context. Role: **{pending.name}**.\n\nWhat would you like me to work on?"
+                    ):
+                        yield event
+                    return
+
+                # Session exists but no role set — try to parse user message as role choice
+                role = resolve_role(user_message)
+                if role:
+                    msg_count = sum(
+                        1 for m in history if m.get("role") in ("user", "assistant")
+                    )
+                    if msg_count >= RESET_CONTEXT_THRESHOLD:
+                        # Large existing session — ask about reset before committing
+                        history.insert(
+                            0, {"role": "system", "content": pending_role_tag(role)}
+                        )
+                        _log_session(session_id, history)
+                        async for event in _sse_single_response(
+                            reset_context_prompt(role, msg_count)
+                        ):
+                            yield event
+                        return
+                    set_role_in_history(history, role)
+                    _log_session(session_id, history)
+                    async for event in _sse_single_response(
+                        f"✅ Role set: **{role.name}**.\n\nWhat would you like me to work on?"
+                    ):
+                        yield event
+                    return
+                # Still no role match — show menu again
+                async for event in _sse_single_response(
+                    f"🤔 I couldn't parse a role from that. Please pick a number (1–7) or role name:\n\n{ROLE_SELECTION_MESSAGE}"
+                ):
+                    yield event
+                return
+
+            # Inject governor identity so the LLM knows who "I" / "me" refers to
+            gov_name = _gov_name_for_key(public_key)
+            if gov_name and not any(
+                "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+            ):
+                user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+
+            history.append({"role": "user", "content": user_message})
+            _auto_name_session(public_key, request, history, user_message)
+            _log_session(session_id, history)
+
+            # Track session as active — survives client disconnect
+            _active_streams[session_id] = time.time()
+            # Also register in the file-based deploy_watcher registry so the vault
+            # panel (separate process) and the deploy gate can see this live turn.
+            _register_chat_turn_track(session_id, gov_name)
+            # Clear any stale cancel flag from a prior turn so this fresh request runs
+            _cancel_flags.pop(session_id, None)
+
             try:
                 async for event in _stream_chat(
                     user_message,
