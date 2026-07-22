@@ -158,3 +158,26 @@ def test_tool_spec_registered():
     spec = get_registry().get("git_push_changes")
     assert spec is not None
     assert spec.default_roles == frozenset({"infrastructure"})
+
+
+def test_repo_org_defaults_to_truesightdao():
+    assert git_tools._repo_org("some_dao_repo") == "TrueSightDAO"
+
+
+def test_repo_org_honours_override(monkeypatch):
+    monkeypatch.setitem(git_tools.settings.repo_org_overrides, "getdata-mcp-bridge", "KrakeIO")
+    assert git_tools._repo_org("getdata-mcp-bridge") == "KrakeIO"
+
+
+def test_repo_pat_picks_matching_org(monkeypatch):
+    monkeypatch.setitem(git_tools.settings.repo_org_overrides, "getdata-mcp-bridge", "KrakeIO")
+    monkeypatch.setattr(git_tools.settings, "krake_io_pat", "krake-test-pat")
+    monkeypatch.setattr(git_tools.settings, "github_pat", "dao-test-pat")
+    assert git_tools._repo_pat("getdata-mcp-bridge") == "krake-test-pat"
+    assert git_tools._repo_pat("some_dao_repo") == "dao-test-pat"
+
+
+def test_remote_url_uses_resolved_org(monkeypatch):
+    monkeypatch.setitem(git_tools.settings.repo_org_overrides, "getdata-mcp-bridge", "KrakeIO")
+    assert git_tools._remote_url("getdata-mcp-bridge") == "git@github.com:KrakeIO/getdata-mcp-bridge.git"
+    assert git_tools._remote_url("some_dao_repo") == "git@github.com:TrueSightDAO/some_dao_repo.git"

@@ -66,9 +66,19 @@ class Settings(BaseSettings):
 
     # GitHub
     github_pat: str = Field(default="", validation_alias="TRUESIGHT_DAO_AUTOPILOT")
+    krake_io_pat: str = Field(default="", validation_alias="KRAKE_IO_PAT")
+
+    # Repos in allowed_repos default to the TrueSightDAO org (git_tools.py's
+    # historical assumption). Entries here override that for repos that live
+    # under a different org — e.g. KrakeIO — so git_tools.py can resolve the
+    # right git remote and the right GitHub PAT (github_pat vs krake_io_pat).
+    repo_org_overrides: dict[str, str] = {
+        "getdata-mcp-bridge": "KrakeIO",
+    }
 
     # Allowed repos for code modifications
     allowed_repos: list[str] = [
+        "getdata-mcp-bridge",
         "dapp_beta",
         "dapp_prod",
         "tokenomics",

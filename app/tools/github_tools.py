@@ -129,6 +129,88 @@ _ALLOWED_CHAT_REPOS = ", ".join(
 )
 
 
+def _repo_org(repo: str) -> str:
+    """GitHub org that owns ``repo``. Defaults to TrueSightDAO; see
+    ``settings.repo_org_overrides`` for repos under a different org (e.g.
+    KrakeIO). Mirrors ``git_tools._repo_org`` — duplicated rather than
+    imported to avoid coupling this read/create-oriented module to
+    git_tools's clone/push internals."""
+    return settings.repo_org_overrides.get(repo, "TrueSightDAO")
+
+
+def _repo_pat(repo: str) -> str:
+    if _repo_org(repo) == "KrakeIO":
+        return settings.krake_io_pat
+    return settings.github_pat
+
+
+def create_repo(repo: str, private: bool = True, description: str = "") -> dict[str, Any]:
+    """Create a brand-new (empty) GitHub repo under the org resolved for
+    ``repo`` via settings.repo_org_overrides (default TrueSightDAO).
+
+    Guardrail: ``repo`` must already be listed in settings.allowed_repos —
+    the same governor-curated allowlist that gates git_push_changes/
+    open_fix_pr. This means a human has to pre-approve the repo name (by
+    adding it to config.py) before this tool can create it; it does not
+    open up creating arbitrary new repos on request.
+    """
+    if repo not in settings.allowed_repos:
+        return {
+            "status": "error",
+            "reason": (
+                f"'{repo}' is not in settings.allowed_repos. A governor must add it there "
+                "first (and to repo_org_overrides if it's not a TrueSightDAO repo) before "
+                "this tool can create it — same gate as git_push_changes."
+            ),
+        }
+
+    org = _repo_org(repo)
+    pat = _repo_pat(repo)
+    if not pat:
+        return {
+            "status": "error",
+            "reason": f"No PAT configured for org '{org}' (checked settings for the matching *_pat field).",
+        }
+
+    try:
+        resp = httpx.post(
+            f"https://api.github.com/orgs/{org}/repos",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Authorization": f"Bearer {pat}",
+            },
+            json={
+                "name": repo,
+                "description": description,
+                "private": private,
+                "auto_init": True,
+            },
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {"status": "success", "repo": repo, "org": org, "url": data.get("html_url", "")}
+    except httpx.HTTPStatusError as exc:
+        return {
+            "status": "error",
+            "reason": f"GitHub API error ({exc.response.status_code}): {exc.response.text[:300]}",
+        }
+    except httpx.RequestError as exc:
+        return {"status": "error", "reason": f"Request failed: {exc}"}
+
+
+def _create_repo_handler(args: dict, ctx: dict) -> str:
+    import json as _json
+
+    result = create_repo(
+        repo=args.get("repo", ""),
+        private=args.get("private", True),
+        description=args.get("description", ""),
+    )
+    return _json.dumps(result)
+
+
 def _list_org_repos_handler(args: dict, ctx: dict) -> str:
     from ..github_client import GitHubClient
 
@@ -269,6 +351,37 @@ TOOL_SPECS = [
         description="List all repositories in the TrueSightDAO GitHub organization. Use this to discover what repos exist.",
         parameters={"type": "object", "properties": {}},
         handler=_list_org_repos_handler,
+    ),
+    ToolSpec(
+        name="create_repo",
+        description=(
+            "Create a brand-new, empty GitHub repo. Guardrail: the repo name must already be "
+            "listed in settings.allowed_repos (same gate as git_push_changes/open_fix_pr) — "
+            "if it's not, a governor needs to add it there first. Org defaults to TrueSightDAO; "
+            "for a different org (e.g. KrakeIO), the governor must also add an entry to "
+            "settings.repo_org_overrides. Use this before git_push_changes when the target "
+            "repo doesn't exist yet."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name to create (must already be in settings.allowed_repos).",
+                },
+                "private": {
+                    "type": "boolean",
+                    "description": "Create as private. Default true — pass false explicitly for a public repo.",
+                    "default": True,
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Repo description shown on GitHub.",
+                },
+            },
+            "required": ["repo"],
+        },
+        handler=_create_repo_handler,
     ),
     ToolSpec(
         name="read_context_file",

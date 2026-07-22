@@ -55,9 +55,27 @@ def _err(reason: str, **extra: Any) -> dict[str, Any]:
     return {"status": "error", "reason": reason, **extra}
 
 
+def _repo_org(repo: str) -> str:
+    """GitHub org that owns ``repo``. Defaults to TrueSightDAO; see
+    ``settings.repo_org_overrides`` for repos living under a different org
+    (e.g. KrakeIO) that Sophia has been explicitly granted access to."""
+    return settings.repo_org_overrides.get(repo, "TrueSightDAO")
+
+
+def _repo_pat(repo: str) -> str:
+    """GitHub PAT to use for the GitHub API (PR creation) for ``repo``."""
+    if _repo_org(repo) == "KrakeIO":
+        return settings.krake_io_pat
+    return settings.github_pat
+
+
 def _remote_url(repo: str) -> str:
-    """SSH remote for a TrueSightDAO repo. Patchable in tests (file:// URLs)."""
-    return f"git@github.com:TrueSightDAO/{repo}.git"
+    """SSH remote for ``repo`` (patchable in tests via file:// URLs). The SSH
+    key (id_ed25519_truesight_autopilot) is authorised on GitHub as garyjob,
+    who has push access across all orgs this box operates in, not just
+    TrueSightDAO -- so no per-org key swap is needed here, only the org in
+    the URL itself."""
+    return f"git@github.com:{_repo_org(repo)}/{repo}.git"
 
 
 def _git(
@@ -268,11 +286,11 @@ def git_push_changes(
         if open_pr:
             try:
                 resp = httpx.post(
-                    f"https://api.github.com/repos/TrueSightDAO/{repo}/pulls",
+                    f"https://api.github.com/repos/{_repo_org(repo)}/{repo}/pulls",
                     headers={
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28",
-                        "Authorization": f"Bearer {settings.github_pat}",
+                        "Authorization": f"Bearer {_repo_pat(repo)}",
                     },
                     json={
                         "title": pr_title or commit_message,
