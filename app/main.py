@@ -4268,11 +4268,24 @@ async def _chat_blocking_turn(
     # single round, which truncated multi-step answers and could leak an
     # unexecuted tool call as text). Keep running tool rounds until the model
     # returns a final text answer or we hit the round budget.
+    #
+    # Convergence + leak-sanitization parity with the streaming path
+    # (_run_tool_round_loop): this endpoint had its own copy of the "force a
+    # clean completion" idea but never got the follow-up turn_convergence.py
+    # soft-budget nudge, and its leak check only matched the literal
+    # "<tool_call>" substring rather than DeepSeek's raw DSML token leak
+    # format — so a turn that ran long here would grind to the hard cap with
+    # no early wind-down, and a DSML-leaked answer would pass straight
+    # through instead of being stripped/retried. Root-caused 2026-07-21 via
+    # a real governor-signed ping_sophia call that came back garbled.
     max_rounds = int(os.getenv("CHAT_BLOCKING_MAX_ROUNDS", "15"))
+    soft_fraction = float(os.getenv("CHAT_TOOL_ROUNDS_SOFT_FRACTION", "0.75"))
     assistant_text = ""
     tool_trace: list[dict] = []
+    converge_nudged = False
     try:
         for _round in range(max_rounds):
+            round_num = _round + 1
             completion = client.chat(system_prompt, history, tools=tools)
             message = completion["choices"][0].get("message", {})
             tool_calls = message.get("tool_calls") or []
@@ -4325,19 +4338,41 @@ async def _chat_blocking_turn(
             # concurrent session saves during the round
             _sanitise_tool_messages(history)
 
-        # Force a clean text-only answer if we exhausted the budget, came back
-        # blank, or the model leaked a text-format tool call instead of executing it.
-        if (
-            not assistant_text
-            or not assistant_text.strip()
-            or "<tool_call>" in assistant_text
-            or assistant_text in ("(empty response)", "(no response)")
-        ):
+            # Graceful convergence backstop — same decision helpers the
+            # streaming path uses, once per turn. Winds the turn down BEFORE
+            # it crashes into max_rounds instead of only reacting afterward.
+            if not converge_nudged:
+                converge_reason = should_converge(
+                    round_num, max_rounds, tool_trace, soft_fraction=soft_fraction
+                )
+                if converge_reason:
+                    converge_nudged = True
+                    history.append(
+                        convergence_message(converge_reason, round_num, max_rounds)
+                    )
+                    logger.info(
+                        "Convergence nudge (%s) at round %d/%d",
+                        converge_reason,
+                        round_num,
+                        max_rounds,
+                    )
+
+        # Guarantee a non-empty, non-leaked final answer — same guard as the
+        # streaming path (_strip_dsml + _ensure_nonempty_final), so a
+        # DSML-leaked or blank completion gets one clean retry here instead
+        # of reaching the caller as garbled text.
+        assistant_text, _dsml_leaked = _strip_dsml(assistant_text)
+
+        def _force_clean_blocking() -> str:
             logger.info(
-                "Forcing text-only completion (rounds exhausted / blank / leaked tool-call)"
+                "Forcing text-only completion (rounds exhausted / blank / leaked)"
             )
             completion = client.chat(system_prompt, history, tools=None)
-            assistant_text = client.extract_text(completion)
+            return client.extract_text(completion)
+
+        assistant_text, _forced_again = _ensure_nonempty_final(
+            assistant_text, _force_clean_blocking
+        )
 
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
