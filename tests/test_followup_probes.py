@@ -49,6 +49,53 @@ def gmail_followup() -> dict:
     }
 
 
+# ── get_escalate_after_days tests ───────────────────────────────────────
+
+
+class TestGetEscalateAfterDays:
+    def test_reads_from_schedule_canonical_location(self):
+        """schedule.escalate_after_days is the schema's documented location
+        (see followups.py module docstring) and takes priority."""
+        from app.followup_probes import get_escalate_after_days
+
+        followup = {"schedule": {"escalate_after_days": 30}, "condition": {}}
+        assert get_escalate_after_days(followup) == 30
+
+    def test_falls_back_to_condition(self):
+        """Root cause of the 2026-07-24 immediate-strike bug: both real
+        OPEN_FOLLOWUPS.md entries at the time (chocolate-subscription-phase2,
+        warmup-conversion-30day-readout) had escalate_after_days nested under
+        `condition`, not `schedule` -- the schema's canonical location. Every
+        reader silently fell back to the hardcoded default of 1 day instead,
+        so both follow-ups struck almost immediately rather than after their
+        intended 60/30-day window. Must be read correctly from either spot."""
+        from app.followup_probes import get_escalate_after_days
+
+        followup = {"schedule": {"check": "weekly"}, "condition": {"escalate_after_days": 60}}
+        assert get_escalate_after_days(followup) == 60
+
+    def test_schedule_takes_priority_over_condition(self):
+        """If (mistakenly) present in both, schedule wins -- it's canonical."""
+        from app.followup_probes import get_escalate_after_days
+
+        followup = {
+            "schedule": {"escalate_after_days": 30},
+            "condition": {"escalate_after_days": 999},
+        }
+        assert get_escalate_after_days(followup) == 30
+
+    def test_defaults_to_one_when_absent_from_both(self):
+        from app.followup_probes import get_escalate_after_days
+
+        followup = {"schedule": {}, "condition": {}}
+        assert get_escalate_after_days(followup) == 1
+
+    def test_missing_schedule_and_condition_keys_entirely(self):
+        from app.followup_probes import get_escalate_after_days
+
+        assert get_escalate_after_days({}) == 1
+
+
 # ── elapsed_days tests ───────────────────────────────────────────────────
 
 
@@ -60,6 +107,25 @@ class TestElapsedDays:
         now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
         result = elapsed_days(elapsed_followup, now)
         assert result["struck"] is False
+
+    def test_escalate_after_days_nested_under_condition_still_respected(self):
+        """Integration guard for the exact real-world shape that misfired
+        2026-07-24: escalate_after_days nested under `condition` (not
+        `schedule`) must still gate the threshold correctly, not silently
+        fall back to 1 day and strike immediately."""
+        from app.followup_probes import elapsed_days
+
+        followup = {
+            "id": "test-condition-nested",
+            "created_at": "2026-06-11",
+            "condition": {"kind": "elapsed_days", "escalate_after_days": 60},
+            "schedule": {"check": "weekly", "on_escalate": "ping_thread"},
+        }
+        # 43 days elapsed — past the old buggy default (1) but well short of
+        # the actually-configured 60-day threshold.
+        now = datetime(2026, 7, 24, 0, 0, 0, tzinfo=timezone.utc)
+        result = elapsed_days(followup, now)
+        assert result["struck"] is False, result
 
     def test_exactly_at_threshold(self, elapsed_followup: dict):
         """Returns struck=True when exactly at the threshold."""
