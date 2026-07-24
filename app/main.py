@@ -4667,12 +4667,16 @@ def _compact_old_tool_chains(history: list[dict]) -> None:
         )
 
 
-# DeepSeek deepseek-chat has a 131,072-token input window. The old trim used a
-# 400K-CHAR threshold assuming ~4 chars/token — but tool-result / RSA-key /
-# signature-dense content runs ~2 chars/token, so 400K chars was ~200K tokens,
-# OVER the window. The history overflowed and the LLM returned empty BEFORE the
-# trim ever fired — the recurring 780/2622 brick (root-caused 2026-06-12). Trim to
-# a TOKEN budget (density-proof) that leaves headroom for the system prompt, tool
+# The old deepseek-chat had a 131,072-token input window (deepseek-chat was
+# deprecated 2026-07-24 in favor of deepseek-v4-flash/-pro, which both have a
+# 1M-token window — this budget stays conservative for now rather than
+# assuming the bigger window is safe to fully use; see CHAT_HISTORY_TOKEN_BUDGET
+# to raise it deliberately). The old trim used a 400K-CHAR threshold assuming
+# ~4 chars/token — but tool-result / RSA-key / signature-dense content runs
+# ~2 chars/token, so 400K chars was ~200K tokens, OVER the old window. The
+# history overflowed and the LLM returned empty BEFORE the trim ever fired —
+# the recurring 780/2622 brick (root-caused 2026-06-12). Trim to a TOKEN
+# budget (density-proof) that leaves headroom for the system prompt, tool
 # schemas, and the 8K response.
 _HISTORY_TOKEN_BUDGET = int(os.getenv("CHAT_HISTORY_TOKEN_BUDGET", "90000"))
 # Below this many chars even dense (2 chars/token) content is safely under budget,
@@ -4685,7 +4689,7 @@ def _history_token_count(messages: list[dict]) -> int:
         import litellm
 
         return litellm.token_counter(
-            model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat"),
+            model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-v4-flash"),
             messages=messages,
         )
     except Exception:

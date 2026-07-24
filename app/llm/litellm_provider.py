@@ -5,8 +5,10 @@ with litellm's battle-tested provider abstraction.  Tool calls come back as
 standard OpenAI tool_calls arrays; no XML leak, no DSML shenanigans.
 
 Model naming follows litellm's convention:
-    deepseek/deepseek-chat   →  DeepSeek V3
-    deepseek/deepseek-reasoner  →  DeepSeek R1
+    deepseek/deepseek-v4-flash  →  DeepSeek V4 Flash (fast/economical; replaces
+                                    the deprecated deepseek-chat, 2026-07-24)
+    deepseek/deepseek-v4-pro    →  DeepSeek V4 Pro (flagship; replaces the
+                                    deprecated deepseek-reasoner)
     anthropic/claude-sonnet-4-20250514  →  Claude
     openai/gpt-4o            →  OpenAI
 """
@@ -25,11 +27,15 @@ from .base import LLMError, LLMProvider, LLMResponse, LLMUsage
 
 logger = logging.getLogger("autopilot.llm.litellm")
 
-LITELLM_MODEL = os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat")
+LITELLM_MODEL = os.getenv("LITELLM_MODEL", "deepseek/deepseek-v4-flash")
 
 PRICING: dict[str, tuple[float, float]] = {
-    "deepseek/deepseek-chat": (0.27, 1.10),
-    "deepseek/deepseek-reasoner": (0.55, 2.19),
+    # deepseek-chat/deepseek-reasoner deprecated 2026-07-24; deepseek-chat was
+    # an alias for deepseek-v4-flash (non-thinking mode), so v4-flash is the
+    # like-for-like successor, not v4-pro. Prices are (input, output) per 1M
+    # tokens at the standard (cache-miss) rate, per api-docs.deepseek.com/quick_start/pricing.
+    "deepseek/deepseek-v4-flash": (0.14, 0.28),
+    "deepseek/deepseek-v4-pro": (0.435, 0.87),
     "openai/gpt-4o": (2.50, 10.00),
     "openai/gpt-4o-mini": (0.15, 0.60),
     "anthropic/claude-sonnet-4-20250514": (3.00, 15.00),

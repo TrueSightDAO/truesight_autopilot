@@ -50,7 +50,7 @@ def test_normal_completion_with_tool_calls():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     p._http = _make_client(body)
 
@@ -93,7 +93,7 @@ def test_xml_tool_calls_in_content():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     p._http = _make_client(body)
 
@@ -140,7 +140,7 @@ def test_dsml_tool_calls():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     p._http = _make_client(body)
 
@@ -177,7 +177,7 @@ def test_usage_populated():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     p._http = _make_client(body)
 
@@ -196,14 +196,14 @@ def test_estimate_cost():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     usage = LLMUsage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
     cost = p.estimate_cost(usage)
     assert cost is not None
     assert cost > 0
-    # 1000 * 0.27 / 1M + 500 * 1.10 / 1M = 0.00027 + 0.00055 = 0.00082
-    assert abs(cost - 0.00082) < 0.00001
+    # deepseek-v4-flash: 1000 * 0.14 / 1M + 500 * 0.28 / 1M = 0.00014 + 0.00014 = 0.00028
+    assert abs(cost - 0.00028) < 0.00001
 
 
 # ── Test 6: HTTPStatusError surfaces as LLMError ──
@@ -217,7 +217,7 @@ def test_http_error_surfaces_as_llm_error():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     p._http = httpx.Client(transport=transport, base_url=p.base_url)
 
@@ -240,7 +240,7 @@ def test_empty_content():
     p = DeepSeekProvider(
         api_key="test",
         base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
     )
     p._http = _make_client(body)
 
