@@ -7,8 +7,34 @@ Reads config from settings (EC2_HOST, EC2_KEY_PATH, EC2_REMOTE_DIR)
 and runs the equivalent of scripts/deploy.sh steps:
   1. git pull latest code
   2. pip install -r requirements.txt
-  3. restart systemd service
-  4. nginx + certbot (sophia.truesight.me)
+  3. nginx + certbot (sophia.truesight.me) — best-effort, never blocks the restart
+  4. restart systemd service — last, since it can kill this very process tree
+
+## Why nginx/certbot runs BEFORE the restart, and is best-effort
+
+This function (on the local path) runs as a **child process of the
+truesight-autopilot service it's restarting** — `deploy_autopilot()` is
+called from inside the live systemd-managed uvicorn worker, and the
+phase-two subprocess it forks (see below) is a descendant of that same
+process tree. `systemctl restart truesight-autopilot` kills that whole
+tree, not just "the next worker" as an earlier version of this docstring
+assumed.
+
+Previously nginx/certbot ran AFTER firing the restart: once systemd's kill
+actually landed (a few seconds later, non-deterministically), it could hit
+mid-step, killing this subprocess with SIGTERM and making the WHOLE deploy
+report `status: error` — even though the part that actually matters (the
+restart, which loads the new code) had already fired successfully. Root-
+caused 2026-07-23 from a real deploy that reported "FAILED" while the
+process had, in fact, already restarted onto the new commit (verified via
+SSH: process start time was after the pulled file's mtime).
+
+Fix: nginx/certbot now runs BEFORE the restart (so it isn't in the blast
+radius of the kill) and is wrapped so its own failure never blocks or masks
+the restart — it's idempotent housekeeping that rarely changes, secondary
+to the actual reason for the deploy. A `pip install` failure is still
+fatal and still blocks the restart: unlike nginx, a missing dependency can
+make the freshly-pulled code genuinely unsafe to load.
 
 ## Why this file uses a two-phase re-exec pattern
 
@@ -17,10 +43,10 @@ imported `app/tools/deploy.py` into memory. The function then runs:
 
     1. git pull    — updates disk
     2. pip install — uses disk state (fine; pip reads files fresh)
-    3. restart     — kills the *next* worker, not the current run
-    4. nginx step  — runs from the in-memory deploy.py loaded at step 1's start
+    3. nginx step  — best-effort, before the restart (see above)
+    4. restart     — last; may kill this process tree
 
-So if step 1's pull brings down a fix to step 4, step 4 still executes the
+So if step 1's pull brings down a fix to step 3, step 3 still executes the
 **pre-fix** code. The fix only takes effect on the NEXT invocation after the
 service restart reloads the module. This bit us on 2026-05-30 with the sophia
 nginx config — two consecutive self-deploys ran the broken step before the
@@ -33,7 +59,7 @@ returns the subprocess's structured output.
 
 Coordination uses an env-var sentinel `AUTOPILOT_DEPLOY_PHASE`:
   - unset (or "phase_one") → entry point: do git pull, fork subprocess
-  - "phase_two_post_pull"   → subprocess: do pip+restart+nginx, return JSON
+  - "phase_two_post_pull"   → subprocess: do pip+nginx+restart, return JSON
 
 The parent stays in-process so the calling FastAPI worker can return the
 JSON result over /chat or via the LLM tool dispatcher without dying mid-
@@ -318,45 +344,9 @@ def _get_current_commit(remote_dir: str) -> str:
         return "unknown"
 
 
-def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
-    """Phase-two: pip install + restart + nginx, using whatever's on disk RIGHT NOW.
-
-    Invoked by phase-one in a fresh subprocess so the freshly-pulled
-    deploy.py is the one running these steps. See module docstring for
-    the full re-exec rationale.
-    """
-    _ELEVATE = __import__("base64").b64decode("c3Vkbw==").decode()
-
-    logger.info("Step 2: pip install")
-    _run_local(
-        "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
-        cwd=remote_dir,
-        timeout=120,
-    )
-    steps.append({"step": "pip_install", "status": "ok"})
-
-    logger.info("Step 3: restart systemd service")
-    # Capture the commit SHA and write a marker file so the new process
-    # can notify the governor that the deploy completed successfully.
-    commit = _get_current_commit(remote_dir)
-    elapsed = round(time.time() - start, 1)
-    _write_deploy_marker(commit, elapsed)
-    subprocess.Popen(
-        [
-            _ELEVATE,
-            "systemctl",
-            "restart",
-            "truesight-autopilot",
-            "truesight-autopilot-telegram",
-            "truesight-autopilot-watchdog",
-            "truesight-vault",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    steps.append({"step": "restart_service", "status": "ok"})
-
-    logger.info("Step 4: nginx + certbot setup")
+def _run_nginx_certbot(remote_dir: str, _ELEVATE: str) -> None:
+    """Idempotent nginx/certbot housekeeping. Raises DeployError on failure —
+    caller decides whether that's fatal (it isn't, see _post_pull_steps)."""
     # Install the http-context zone file FIRST (conf.d gets included in
     # http context), then the server block. Always reinstall the
     # symlinks — they're idempotent — and re-test/reload nginx so this
@@ -385,7 +375,58 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
         cwd=remote_dir,
         timeout=30,
     )
-    steps.append({"step": "nginx_certbot", "status": "ok"})
+
+
+def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
+    """Phase-two: pip install + nginx (best-effort) + restart (last), using
+    whatever's on disk RIGHT NOW.
+
+    Invoked by phase-one in a fresh subprocess so the freshly-pulled
+    deploy.py is the one running these steps. See module docstring for
+    the full re-exec rationale, and for why nginx/certbot runs BEFORE the
+    restart and is best-effort rather than fatal.
+    """
+    _ELEVATE = __import__("base64").b64decode("c3Vkbw==").decode()
+
+    logger.info("Step 2: pip install")
+    _run_local(
+        "bash -c 'source .venv/bin/activate && pip install -r requirements.txt'",
+        cwd=remote_dir,
+        timeout=120,
+    )
+    steps.append({"step": "pip_install", "status": "ok"})
+
+    logger.info("Step 3: nginx + certbot setup (best-effort, before the restart)")
+    try:
+        _run_nginx_certbot(remote_dir, _ELEVATE)
+        steps.append({"step": "nginx_certbot", "status": "ok"})
+    except DeployError as e:
+        # Non-fatal: idempotent housekeeping, secondary to the code-fix
+        # restart below. A broken nginx config must never block or mask a
+        # successful deploy of the actual Python code.
+        logger.warning("nginx/certbot step failed (non-fatal): %s", e)
+        steps.append({"step": "nginx_certbot", "status": "error", "message": str(e)})
+
+    logger.info("Step 4: restart systemd service (last — may kill this process tree)")
+    # Capture the commit SHA and write a marker file so the new process
+    # can notify the governor that the deploy completed successfully.
+    commit = _get_current_commit(remote_dir)
+    elapsed = round(time.time() - start, 1)
+    _write_deploy_marker(commit, elapsed)
+    subprocess.Popen(
+        [
+            _ELEVATE,
+            "systemctl",
+            "restart",
+            "truesight-autopilot",
+            "truesight-autopilot-telegram",
+            "truesight-autopilot-watchdog",
+            "truesight-vault",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    steps.append({"step": "restart_service", "status": "ok"})
 
     result = {
         "status": "success",
