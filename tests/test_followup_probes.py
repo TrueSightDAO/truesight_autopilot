@@ -98,6 +98,39 @@ class TestElapsedDays:
         result = elapsed_days(followup)
         assert result["struck"] is False
 
+    def test_end_to_end_through_real_yaml_parse(self):
+        """Regression guard for the 2026-07-24 silent-follow-up bug: every
+        other test in this file hand-builds the followup dict with
+        created_at as a Python str literal, which never exercises the
+        yaml.safe_load boundary where the actual bug lived (an unquoted
+        `created_at: 2026-06-11` parses to a datetime.date, not a str).
+        This goes through the real parser — app.followups._parse_block —
+        exactly as OPEN_FOLLOWUPS.md is authored, then feeds that parsed
+        dict into the real probe."""
+        from app.followup_probes import elapsed_days
+        from app.followups import _parse_block
+
+        body = (
+            "id: test-real-parse\n"
+            "chat_id: -1003919341801\n"
+            "thread_id: 42\n"
+            "title: End to end parse test\n"
+            "created_at: 2026-06-10\n"
+            "condition:\n"
+            "  kind: elapsed_days\n"
+            "schedule:\n"
+            "  check: daily\n"
+            "  escalate_after_days: 2\n"
+            "  on_escalate: ping_thread\n"
+            "status: open\n"
+        )
+        parsed = _parse_block(body, 1)
+        assert isinstance(parsed, dict), parsed  # not an error string
+
+        now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
+        result = elapsed_days(parsed, now)
+        assert result["struck"] is True, result
+
     def test_never_throws(self):
         """elapsed_days never throws an exception."""
         from app.followup_probes import elapsed_days

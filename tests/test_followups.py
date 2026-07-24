@@ -198,6 +198,27 @@ class TestParseAll:
             results = parse_all()
             assert len(results) == 0
 
+    def test_created_at_is_a_string_not_a_yaml_date(self, sample_md: str):
+        """Root cause of the 2026-07-24 silent-follow-up bug: YAML's default
+        resolver auto-parses an unquoted `created_at: 2026-06-11` into a
+        `datetime.date`, not a string. Every consumer (followup_probes,
+        followup_loop) calls `datetime.fromisoformat(created_at)` expecting a
+        str — a `date` object raises TypeError there, silently caught and
+        logged as "Invalid created_at", so the follow-up never strikes. This
+        is the schema's own documented example (unquoted date), so it must
+        come out of parse_all() as a plain ISO string."""
+        with patch("app.followups._read_md", return_value=sample_md):
+            from app.followups import parse_all
+
+            results = parse_all()
+            chocolate = [
+                r for r in results if r["id"] == "chocolate-subscription-phase2"
+            ][0]
+            assert isinstance(chocolate["created_at"], str), (
+                f"created_at must be a str, got {type(chocolate['created_at'])}"
+            )
+            assert chocolate["created_at"] == "2026-06-11"
+
     def test_invalid_status_skipped(self, md_with_invalid_status: str):
         """Invalid status → block is skipped with warning."""
         with patch("app.followups._read_md", return_value=md_with_invalid_status):

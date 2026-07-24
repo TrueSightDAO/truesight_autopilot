@@ -32,7 +32,7 @@ import os
 import re
 import tempfile
 import yaml
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +137,31 @@ def _write_md(content: str) -> None:
 # ── parsing ──────────────────────────────────────────────────────────────
 
 
+def _normalize_yaml_dates(parsed: dict[str, Any]) -> None:
+    """Normalize top-level date/datetime values to ISO strings, in place.
+
+    YAML's default resolver auto-parses an unquoted ``YYYY-MM-DD`` scalar
+    (the natural, documented way to write ``created_at:`` in a followup
+    block) into a Python ``datetime.date``, not a string. Every consumer of
+    a parsed follow-up (``followup_probes.elapsed_days``,
+    ``followup_loop._process_one``, ``_build_escalation_message``) then
+    calls ``datetime.fromisoformat(created_at)`` expecting a string — that
+    raises ``TypeError`` on a ``date``/``datetime`` object, which every one
+    of those call sites catches and treats as "invalid" (logged as
+    ``Invalid created_at: 2026-07-21``, which reads like the date itself was
+    rejected rather than exposing the actual type mismatch). Net effect: a
+    follow-up authored the documented way never strikes and never escalates,
+    silently. Root-caused 2026-07-24 — every existing follow-up in
+    OPEN_FOLLOWUPS.md at the time (chocolate-subscription-phase2,
+    warmup-conversion-30day-readout) was affected.
+    """
+    for key, value in list(parsed.items()):
+        if isinstance(value, datetime):
+            parsed[key] = value.date().isoformat()
+        elif isinstance(value, date):
+            parsed[key] = value.isoformat()
+
+
 def _parse_block(body: str, line_offset: int) -> dict[str, Any] | str:
     """
     Parse a single ```followup block body into a dict.
@@ -150,6 +175,8 @@ def _parse_block(body: str, line_offset: int) -> dict[str, Any] | str:
 
     if not isinstance(parsed, dict):
         return f"Followup block at line ~{line_offset} is not a mapping"
+
+    _normalize_yaml_dates(parsed)
 
     # Required fields
     for field in ("id", "chat_id", "thread_id", "title", "created_at", "status"):
