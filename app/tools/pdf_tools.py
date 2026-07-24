@@ -323,8 +323,11 @@ def generate_pdf(
         tmp.close()
         output_path = tmp.name
 
+    # Detect CJK content and register fallback font if needed.
+    cjk_font = _ensure_cjk_font() if _needs_cjk(content) else None
+
     buf = io.BytesIO()
-    styles = _brand_styles()
+    styles = _brand_styles(cjk_font=cjk_font)
     page_w, page_h = LETTER
     content_width = page_w - 2 * _PAGE_MARGIN
 
