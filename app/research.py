@@ -155,7 +155,7 @@ def run_research(
         f"You have deep knowledge of the ceremonial cacao market, "
         f"holistic wellness industry, and content marketing strategy.",
         tools=[web_search, web_extract, read_context_file, read_repo_file],
-        llm="deepseek/deepseek-chat",
+        llm="deepseek/deepseek-v4-flash",  # deepseek-chat deprecated 2026-07-24
         verbose=True,
         max_iter=20,
         allow_delegation=False,

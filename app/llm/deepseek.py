@@ -20,7 +20,12 @@ logger = logging.getLogger("autopilot.llm.deepseek")
 
 class DeepSeekProvider(OpenAICompatibleProvider):
     name = "deepseek"
-    pricing = {"deepseek-chat": (0.27, 1.10)}  # input, output USD per million tokens
+    # deepseek-chat deprecated 2026-07-24; deepseek-v4-flash is its like-for-like
+    # successor (deepseek-chat was an alias for v4-flash's non-thinking mode).
+    pricing = {
+        "deepseek-v4-flash": (0.14, 0.28),  # input, output USD per million tokens
+        "deepseek-v4-pro": (0.435, 0.87),
+    }
 
     def __init__(
         self,
