@@ -21,6 +21,24 @@ logger = logging.getLogger("autopilot.followups.probes")
 # ── elapsed_days probe ───────────────────────────────────────────────────
 
 
+def get_escalate_after_days(followup: dict[str, Any], default: int = 1) -> int:
+    """Read `schedule.escalate_after_days` — the canonical location per the
+    schema documented in followups.py's module docstring — falling back to
+    `condition.escalate_after_days` for entries authored the way real
+    OPEN_FOLLOWUPS.md examples have twice mistakenly nested it
+    (chocolate-subscription-phase2, warmup-conversion-30day-readout, both
+    predating this fix). Without this fallback, a misplaced key silently
+    falls back to the hardcoded default of 1 day — which strikes almost
+    immediately instead of after the intended escalation window, and (before
+    the 2026-07-24 created_at fix) never surfaced because every follow-up
+    failed earlier in the pipeline anyway. Root-caused 2026-07-24."""
+    schedule = followup.get("schedule", {}) or {}
+    if "escalate_after_days" in schedule:
+        return schedule["escalate_after_days"]
+    condition = followup.get("condition", {}) or {}
+    return condition.get("escalate_after_days", default)
+
+
 def elapsed_days(
     followup: dict[str, Any], now: datetime | None = None
 ) -> dict[str, Any]:
@@ -36,8 +54,7 @@ def elapsed_days(
     if not created_at_str:
         return {"struck": False, "evidence": "No created_at date"}
 
-    schedule = followup.get("schedule", {})
-    escalate_after = schedule.get("escalate_after_days", 1)
+    escalate_after = get_escalate_after_days(followup)
 
     try:
         # created_at is YYYY-MM-DD
