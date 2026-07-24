@@ -110,13 +110,22 @@ def _apply_inline_markdown(text: str) -> str:
     return text
 
 
-def _brand_styles():
-    """Build the house-style ParagraphStyle set."""
+def _brand_styles(cjk_font: str | None = None):
+    """Build the house-style ParagraphStyle set.
+
+    If *cjk_font* is provided (a registered TTFont name that supports CJK),
+    it will be used for body, bullet, and table-cell styles so that Chinese /
+    Japanese / Korean characters render correctly. Headings keep the bold
+    Helvetica look (they rarely contain long CJK runs, and we lack a bold CJK
+    variant).
+    """
     from reportlab.lib.colors import HexColor  # type: ignore
     from reportlab.lib.styles import ParagraphStyle  # type: ignore
 
+    body_font = cjk_font or _FONT
+
     def style(name, **kw):
-        kw.setdefault("fontName", _FONT)
+        kw.setdefault("fontName", body_font)
         return ParagraphStyle(name, **kw)
 
     return {
