@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from app.followup_probes import run_probe
+from app.followup_probes import get_escalate_after_days, run_probe
 from app.followups import (
     get_state,
     next_due,
@@ -88,8 +88,7 @@ def _build_strike_message(
 def _build_escalation_message(followup: dict[str, Any]) -> str:
     """Build a ping message for escalation (time passed, no strike yet)."""
     title = followup.get("title", "Untitled follow-up")
-    schedule = followup.get("schedule", {})
-    escalate_after = schedule.get("escalate_after_days", 1)
+    escalate_after = get_escalate_after_days(followup)
     created_at = followup.get("created_at", "unknown")
 
     return (
@@ -170,8 +169,7 @@ async def _process_one(followup: dict[str, Any], now: datetime):
         probe_result.get("evidence", "")[:100],
     )
 
-    schedule = followup.get("schedule", {})
-    escalate_after = schedule.get("escalate_after_days", 1)
+    escalate_after = get_escalate_after_days(followup)
     created_at_str = followup.get("created_at", "")
 
     # Calculate days elapsed
@@ -270,9 +268,9 @@ async def _post_to_thread_direct(chat_id: str | None, thread_id: str, message: s
 
     from app.config import settings
 
-    bot_token = settings.telegram_bot_token
+    bot_token = settings.telegram_bot_api_key
     if not bot_token:
-        logger.error("TELEGRAM_BOT_TOKEN not set — cannot post to thread")
+        logger.error("TELEGRAM_BOT_API_KEY not set — cannot post to thread")
         return
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"

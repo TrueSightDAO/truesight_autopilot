@@ -280,3 +280,61 @@ class TestFollowupLoop:
 
             mock_tick.assert_called_once()
             mock_sleep.assert_called_once_with(1)
+
+
+# ── _post_to_thread_direct tests ────────────────────────────────────────
+
+
+class TestPostToThreadDirect:
+    """Regression guard for the 2026-07-24 bug: every existing test in this
+    file mocks _post_to_thread entirely, so none of them ever exercised
+    _post_to_thread_direct's own body -- which is exactly where a typo'd
+    settings attribute (`telegram_bot_token` instead of the real
+    `telegram_bot_api_key`) shipped unnoticed and made every fallback-path
+    Telegram post silently fail with AttributeError."""
+
+    @pytest.mark.asyncio
+    async def test_reads_the_real_settings_attribute(self, monkeypatch):
+        from app.config import settings
+        from app.followup_loop import _post_to_thread_direct
+
+        monkeypatch.setattr(settings, "telegram_bot_api_key", "fake-token-123")
+
+        captured = {}
+
+        class _FakeResponse:
+            status_code = 200
+            text = "ok"
+
+        class _FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None, timeout=None):
+                captured["url"] = url
+                captured["json"] = json
+                return _FakeResponse()
+
+        monkeypatch.setattr(
+            "httpx.AsyncClient", lambda *a, **k: _FakeAsyncClient()
+        )
+
+        # Must not raise AttributeError — that's the exact bug.
+        await _post_to_thread_direct("-1003919341801", "9346", "hello")
+
+        assert "fake-token-123" in captured["url"]
+        assert captured["json"]["chat_id"] == "-1003919341801"
+        assert captured["json"]["message_thread_id"] == 9346
+
+    @pytest.mark.asyncio
+    async def test_missing_token_logs_and_returns_without_raising(self, monkeypatch):
+        from app.config import settings
+        from app.followup_loop import _post_to_thread_direct
+
+        monkeypatch.setattr(settings, "telegram_bot_api_key", "")
+
+        # Must not raise even without a token configured.
+        await _post_to_thread_direct("-1003919341801", "9346", "hello")
