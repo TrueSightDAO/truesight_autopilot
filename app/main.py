@@ -761,7 +761,7 @@ async def oracle_advisory(
     _check_oracle_rate_limit(ip)
 
     # 1. Fetch ADVISORY_SNAPSHOT.md from GitHub raw URL
-    snapshot_url = "https://raw.githubusercontent.com/TrueSightDAO/dao_protocol/main/ADVISORY_SNAPSHOT.md"
+    snapshot_url = "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/ADVISORY_SNAPSHOT.md"
     snapshot_text = ""
     try:
         import httpx
@@ -794,10 +794,28 @@ async def oracle_advisory(
         "Ground every insight in the DAO's actual metrics, treasury, and governance "
         "state from the snapshot below, but always as context for the operator's own "
         "next move, not as a directive to the DAO.\n\n"
-        "Output format: start with one line naming whose reading this is and that it's "
-        "personal, not DAO-wide (e.g. \"Personal reading for the operator — an individual "
-        "practice, not a decision on behalf of the DAO.\"), then a short paragraph (3-6 "
-        "sentences) the operator can personally act on.\n\n"
+        "Personal scope does not mean generic or disconnected from the DAO — the operator's "
+        "day-to-day IS largely spent working within the DAO/Agroverse ecosystem, so naming a "
+        "concrete area of it is one of the most useful things this reading can do. The "
+        "distinction that matters is WHO the suggestion is for (this one operator, choosing "
+        "freely) and WHO it binds (nobody but them) — not whether DAO-related areas come up.\n\n"
+        "Output format:\n"
+        "1) Start with one line naming whose reading this is and that it's personal, not "
+        "DAO-wide (e.g. \"Personal reading for the operator — an individual practice, not a "
+        "decision on behalf of the DAO.\").\n"
+        "2) A short paragraph (3-6 sentences) reading the hexagram for what it illuminates "
+        "about the operator's moment.\n"
+        "3) \"Areas within the DAO you might explore today\" — 1-3 bullets naming specific "
+        "areas of the DAO/Agroverse ecosystem (e.g. supply chain, retail partner outreach, "
+        "treasury, tooling/infrastructure, community & programs, content/reach, or a specific "
+        "stalled thread or contributor relationship named in the snapshot) that resonate with "
+        "today's hexagram and what the snapshot shows is actually live right now. Pick these "
+        "because the hexagram points there, not because a section of the snapshot is loud. "
+        "Frame each as something the operator might personally choose to place an hour on — "
+        "never as something the DAO or other contributors must do. If the hexagram points "
+        "toward rest, stillness, or something entirely outside the DAO, say that plainly "
+        "instead and skip this section — a reading that finds nothing DAO-relevant today is "
+        "a valid, honest reading.\n\n"
         "---\n"
     )
 
