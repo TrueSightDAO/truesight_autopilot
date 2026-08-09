@@ -84,6 +84,75 @@ All four are restarted together by `deploy_autopilot` and `scripts/deploy.sh`. n
 everything else to :8001, and proxies `/dao/*`, `/proxy/gas`, etc. on to the separate
 `dao_protocol` service.
 
+### Concurrency gotcha: never block the brain's event loop
+
+**The brain (`truesight-autopilot`, :8001) runs `uvicorn --workers 1`.** This is not an
+oversight — session history, per-session locks (`_session_lock`), the follow-up loop,
+and other in-process state all live in one process's memory, so adding workers would
+silently split that state across processes and break correctness. That means the brain
+has exactly **one** OS thread running its asyncio event loop for *every* concurrent
+request, including `/health`.
+
+**Consequence: any synchronous blocking call placed directly inside an `async def`
+route handler freezes the entire brain — not just that request — for the call's whole
+duration.** This includes `litellm.completion()` (the LLM call itself, often the
+slowest thing in the process), a plain `httpx.get(...)` (not `httpx.AsyncClient`), a
+`subprocess.run(...)`, or any other call that blocks the calling thread rather than
+yielding to the event loop.
+
+**Incident (2026-08-08/09):** the governor kept seeing "⏳ Sophia is briefly restarting"
+in Telegram. The process had **not** actually crashed (`systemctl show -p NRestarts`
+was `0`, no unexpected stop/start pairs in `journalctl`) — `_chat_blocking_turn`
+(the function backing `/chat-blocking`, which is what every Telegram message goes
+through) called `client.chat(...)` — a fully synchronous `litellm.completion()` —
+directly inside its `async def`. Confirmed live: firing one slow request and hitting
+`/health` five times concurrently during it got **zero response** (HTTP 000) on all
+five, for the entire window `telegram_adapter.py`'s `_wait_for_brain()` was polling.
+It correctly saw `/health` not responding and printed the restart message — the brain
+was just busy, not down, but there was no way to tell from outside. Fixed in
+[`truesight_autopilot#291`](https://github.com/TrueSightDAO/truesight_autopilot/pull/291).
+
+**The fix, and the pattern to use for any new blocking call:**
+
+```python
+# Wrong — blocks the ENTIRE event loop (every session, /health, everything)
+# for the whole duration of the call:
+completion = client.chat(system_prompt, history, tools=tools)
+
+# Right — runs the blocking call on a worker thread, event loop stays free:
+completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=tools)
+```
+
+This applies to *every* `async def` route/handler in `app/main.py`, and to any new tool
+or endpoint added later. Before adding a new one, ask: does this call block the calling
+thread? If it's not `await`-ing an async client/library call, assume yes, and wrap it in
+`asyncio.to_thread(...)`. The main streaming loop (`_run_tool_round_loop` → `_stream_chat`)
+already does this correctly with a heartbeat pattern; that's the reference implementation
+if you need progress events too, not just the bare wrap.
+
+**How to check if you're hitting this class of bug** (rather than an actual crash):
+```bash
+ssh sophia "sudo systemctl show truesight-autopilot -p NRestarts,ActiveEnterTimestamp"
+ssh sophia "sudo journalctl -u truesight-autopilot --since '-3 days' --no-pager | grep -E 'Started TrueSight|Stopped TrueSight|Main process exited'"
+```
+If `NRestarts` is `0` and there's no unexpected stop/start pair, the process never
+crashed — the symptom is a blocked event loop, not a restart. Confirm by firing a slow
+request in the background and hitting `/health` concurrently a few times; if `/health`
+times out (HTTP 000) instead of returning instantly, something in the request path is
+blocking synchronously.
+
+**Related but separate gotcha, found in the same investigation:** DeepSeek's
+`deepseek-v4-flash`/`deepseek-v4-pro` are hybrid reasoning models that emit hidden
+`reasoning_content` ("thinking") by default — unlike the deprecated `deepseek-chat`
+alias they replaced (2026-07-24 migration), which was specifically the non-thinking
+mode. Without `thinking={"type": "disabled"}` in the `litellm.completion(...)` kwargs
+(see `app/llm/litellm_provider.py`), every call silently pays for an extended reasoning
+pass before producing real content — a few seconds of overhead on a trivial prompt, but
+90-135+ seconds observed live on the Oracle's large-context prompt. Fixed in
+[`truesight_autopilot#290`](https://github.com/TrueSightDAO/truesight_autopilot/pull/290).
+If DeepSeek ever ships another model rename, re-check whether the new model defaults to
+thinking-on and whether the same toggle (or an equivalent) is still needed.
+
 ### Repository layout
 
 ```text
