@@ -82,6 +82,17 @@ class LiteLLMProvider(LLMProvider):
             "timeout": 120,
             "num_retries": 2,
         }
+        if model.startswith("deepseek/"):
+            # deepseek-v4-flash/-pro are hybrid reasoning models that emit
+            # reasoning_content (extended "thinking") by default, unlike the
+            # deprecated deepseek-chat alias this migrated from, which was
+            # specifically the non-thinking mode. Without this, every call
+            # silently pays for a hidden reasoning pass before any real
+            # content -- a few seconds for a trivial prompt, 90-135+ seconds
+            # (observed live on /oracle-advisory) for a large one. Confirmed
+            # via a direct DeepSeek API call that this is the correct toggle
+            # (reasoning_content drops to empty/None with it set).
+            kwargs["thinking"] = {"type": "disabled"}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
