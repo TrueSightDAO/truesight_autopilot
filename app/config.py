@@ -105,6 +105,7 @@ class Settings(BaseSettings):
         "ecosystem_change_logs",
         "tribomirimbahia",
         "lineage-engine",
+        "sunmint_farmer",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
