@@ -39,42 +39,59 @@ def test_needs_clean_retry_flags_unusable_text():
     assert not m._needs_clean_retry("Here is the summary you asked for.")
 
 
-def test_good_answer_passes_through_without_forcing():
-    text, forced = m._ensure_nonempty_final(
+@pytest.mark.asyncio
+async def test_good_answer_passes_through_without_forcing():
+    async def _fail():
+        pytest.fail("must not force on a good answer")
+
+    text, forced = await m._ensure_nonempty_final(
         "All done — opened PR #42.",
-        force_clean=lambda: pytest.fail("must not force on a good answer"),
+        force_clean=_fail,
     )
     assert text == "All done — opened PR #42."
     assert forced is False
 
 
-def test_blank_then_clean_retry_recovers_real_text():
-    text, forced = m._ensure_nonempty_final(
+@pytest.mark.asyncio
+async def test_blank_then_clean_retry_recovers_real_text():
+    async def _recover():
+        return "Recovered final answer."
+
+    text, forced = await m._ensure_nonempty_final(
         "",  # stripped-to-empty after DSML removal
-        force_clean=lambda: "Recovered final answer.",
+        force_clean=_recover,
     )
     assert text == "Recovered final answer."
     assert forced is True
 
 
-def test_dsml_only_retry_still_dsml_falls_back_nonempty():
+@pytest.mark.asyncio
+async def test_dsml_only_retry_still_dsml_falls_back_nonempty():
     # The exact incident: forced completion ALSO returns pure DSML → strips to
     # empty → must land on the fixed non-empty fallback, never "".
     # A clean DSML fragment (what DeepSeek actually leaks) strips fully to "".
     assert m._strip_dsml(f"{DSML}read_repo_file>")[0] == ""
-    text, forced = m._ensure_nonempty_final(
+
+    async def _still_dsml():
+        return f"{DSML}read_repo_file>"
+
+    text, forced = await m._ensure_nonempty_final(
         "",
-        force_clean=lambda: f"{DSML}read_repo_file>",
+        force_clean=_still_dsml,
     )
     assert forced is True
     assert text == m._EMPTY_TURN_FALLBACK
     assert text.strip()  # the whole point: never blank
 
 
-def test_placeholder_literal_from_retry_falls_back():
-    text, forced = m._ensure_nonempty_final(
+@pytest.mark.asyncio
+async def test_placeholder_literal_from_retry_falls_back():
+    async def _still_placeholder():
+        return "(no response)"
+
+    text, forced = await m._ensure_nonempty_final(
         "(empty response)",
-        force_clean=lambda: "(no response)",
+        force_clean=_still_placeholder,
     )
     assert forced is True
     assert text == m._EMPTY_TURN_FALLBACK
