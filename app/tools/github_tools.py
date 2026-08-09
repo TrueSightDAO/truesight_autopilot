@@ -144,23 +144,28 @@ def _repo_pat(repo: str) -> str:
     return settings.github_pat
 
 
-def create_repo(repo: str, private: bool = True, description: str = "") -> dict[str, Any]:
+def create_repo(
+    repo: str, private: bool = True, description: str = "", confirm_write: bool = False
+) -> dict[str, Any]:
     """Create a brand-new (empty) GitHub repo under the org resolved for
     ``repo`` via settings.repo_org_overrides (default TrueSightDAO).
 
-    Guardrail: ``repo`` must already be listed in settings.allowed_repos —
-    the same governor-curated allowlist that gates git_push_changes/
-    open_fix_pr. This means a human has to pre-approve the repo name (by
-    adding it to config.py) before this tool can create it; it does not
-    open up creating arbitrary new repos on request.
+    Guardrail: write-class operation, so it requires ``confirm_write=true`` —
+    same convention as aws_query's mutating calls. This tool can only ever
+    create a repo name that doesn't exist yet (GitHub itself refuses to
+    "create" an existing repo), so it can't be used to take over or overwrite
+    anything that already exists. Note this is deliberately a LOWER bar than
+    settings.allowed_repos, which still separately gates git_push_changes/
+    open_fix_pr — creating an empty repo here does not by itself grant
+    permission to push code to it; add the name to allowed_repos for that.
     """
-    if repo not in settings.allowed_repos:
+    if not confirm_write:
         return {
             "status": "error",
             "reason": (
-                f"'{repo}' is not in settings.allowed_repos. A governor must add it there "
-                "first (and to repo_org_overrides if it's not a TrueSightDAO repo) before "
-                "this tool can create it — same gate as git_push_changes."
+                "create_repo is a write-class operation — requires confirm_write=true. "
+                "Re-issue the call with confirm_write set if you are sure you want to "
+                f"create '{repo}'."
             ),
         }
 
@@ -207,6 +212,83 @@ def _create_repo_handler(args: dict, ctx: dict) -> str:
         repo=args.get("repo", ""),
         private=args.get("private", True),
         description=args.get("description", ""),
+        confirm_write=bool(args.get("confirm_write", False)),
+    )
+    return _json.dumps(result)
+
+
+def enable_github_pages(
+    repo: str, branch: str = "main", path: str = "/", confirm_write: bool = False
+) -> dict[str, Any]:
+    """Enable GitHub Pages on ``repo``, building from ``branch``/``path``.
+
+    Guardrail: write-class operation, requires ``confirm_write=true`` (same
+    convention as create_repo / aws_query's mutating calls) — enabling Pages
+    makes the repo's content, at that branch/path, browsable as a public
+    website regardless of the repo's own visibility setting, which is a real
+    exposure change worth a deliberate confirm rather than a silent default.
+    Before calling this, actually look at what's in the repo — if it's an
+    infra/credentials-adjacent doc repo (account IDs, internal hostnames,
+    credential file *locations*, etc.), a public Pages site makes that far
+    more discoverable than it being merely public-on-GitHub already; consider
+    a curated subset or a private-audience alternative instead.
+    """
+    if not confirm_write:
+        return {
+            "status": "error",
+            "reason": (
+                "enable_github_pages is a write-class operation — requires "
+                "confirm_write=true. It publishes the repo's content as a public "
+                f"website; re-issue with confirm_write set if you've checked '{repo}' "
+                "doesn't contain anything sensitive and are sure you want this live."
+            ),
+        }
+
+    org = _repo_org(repo)
+    pat = _repo_pat(repo)
+    if not pat:
+        return {
+            "status": "error",
+            "reason": f"No PAT configured for org '{org}' (checked settings for the matching *_pat field).",
+        }
+
+    try:
+        resp = httpx.post(
+            f"https://api.github.com/repos/{org}/{repo}/pages",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Authorization": f"Bearer {pat}",
+            },
+            json={"source": {"branch": branch, "path": path}},
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "status": "success",
+            "repo": repo,
+            "org": org,
+            "url": data.get("html_url", ""),
+            "status_field": data.get("status", ""),
+        }
+    except httpx.HTTPStatusError as exc:
+        return {
+            "status": "error",
+            "reason": f"GitHub API error ({exc.response.status_code}): {exc.response.text[:300]}",
+        }
+    except httpx.RequestError as exc:
+        return {"status": "error", "reason": f"Request failed: {exc}"}
+
+
+def _enable_github_pages_handler(args: dict, ctx: dict) -> str:
+    import json as _json
+
+    result = enable_github_pages(
+        repo=args.get("repo", ""),
+        branch=args.get("branch", "main"),
+        path=args.get("path", "/"),
+        confirm_write=bool(args.get("confirm_write", False)),
     )
     return _json.dumps(result)
 
@@ -355,19 +437,21 @@ TOOL_SPECS = [
     ToolSpec(
         name="create_repo",
         description=(
-            "Create a brand-new, empty GitHub repo. Guardrail: the repo name must already be "
-            "listed in settings.allowed_repos (same gate as git_push_changes/open_fix_pr) — "
-            "if it's not, a governor needs to add it there first. Org defaults to TrueSightDAO; "
-            "for a different org (e.g. KrakeIO), the governor must also add an entry to "
-            "settings.repo_org_overrides. Use this before git_push_changes when the target "
-            "repo doesn't exist yet."
+            "Create a brand-new, empty GitHub repo. Write-class operation — requires "
+            "confirm_write=true (can only ever create a name that doesn't exist yet, so it "
+            "can't take over or overwrite anything). Org defaults to TrueSightDAO; for a "
+            "different org (e.g. KrakeIO), a governor must add an entry to "
+            "settings.repo_org_overrides first. Note: creating the repo here does NOT by "
+            "itself grant permission to push code to it — git_push_changes/open_fix_pr are "
+            "separately gated by settings.allowed_repos, so a governor still needs to add the "
+            "name there before you can push."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "repo": {
                     "type": "string",
-                    "description": "Repo name to create (must already be in settings.allowed_repos).",
+                    "description": "Repo name to create.",
                 },
                 "private": {
                     "type": "boolean",
@@ -378,10 +462,53 @@ TOOL_SPECS = [
                     "type": "string",
                     "description": "Repo description shown on GitHub.",
                 },
+                "confirm_write": {
+                    "type": "boolean",
+                    "description": "Required true to actually create the repo (write-class op).",
+                    "default": False,
+                },
             },
             "required": ["repo"],
         },
         handler=_create_repo_handler,
+    ),
+    ToolSpec(
+        name="enable_github_pages",
+        description=(
+            "Enable GitHub Pages on a repo, building from a branch/path. Write-class "
+            "operation — requires confirm_write=true, since this makes the repo's content "
+            "at that branch/path browsable as a public website regardless of the repo's own "
+            "visibility. Before calling this, actually check what's in the repo — an "
+            "infra/credentials-adjacent doc repo (account IDs, internal hostnames, credential "
+            "file locations) becomes far more discoverable as an indexed website than merely "
+            "public-on-GitHub; consider a curated subset instead if that applies."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "repo": {
+                    "type": "string",
+                    "description": "Repo name (under the org resolved via repo_org_overrides, default TrueSightDAO).",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch to build Pages from.",
+                    "default": "main",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Path within the branch to build from ('/' or '/docs').",
+                    "default": "/",
+                },
+                "confirm_write": {
+                    "type": "boolean",
+                    "description": "Required true to actually enable Pages (write-class op, publishes content).",
+                    "default": False,
+                },
+            },
+            "required": ["repo"],
+        },
+        handler=_enable_github_pages_handler,
     ),
     ToolSpec(
         name="read_context_file",
