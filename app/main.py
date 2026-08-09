@@ -766,7 +766,7 @@ async def oracle_advisory(
     try:
         import httpx
 
-        resp = httpx.get(snapshot_url, timeout=15.0)
+        resp = await asyncio.to_thread(httpx.get, snapshot_url, timeout=15.0)
         if resp.status_code == 200:
             snapshot_text = resp.text
         else:
@@ -851,8 +851,11 @@ async def oracle_advisory(
         f"with mode '{mode}'. Please provide their personal oracle advisory."
     )
     try:
-        completion = client.chat(
-            system_prompt, [{"role": "user", "content": user_msg}], tools=None
+        completion = await asyncio.to_thread(
+            client.chat,
+            system_prompt,
+            [{"role": "user", "content": user_msg}],
+            tools=None,
         )
         advice = client.extract_text(completion)
         model_used = client.model
@@ -1211,20 +1214,20 @@ def _needs_clean_retry(text: str) -> bool:
     return text.strip() in ("(empty response)", "(no response)")
 
 
-def _ensure_nonempty_final(assistant_text: str, force_clean) -> tuple[str, bool]:
+async def _ensure_nonempty_final(assistant_text: str, force_clean) -> tuple[str, bool]:
     """Guarantee a non-empty, non-leaked final answer for the streaming path.
 
-    `force_clean` is a zero-arg callable that runs ONE `tools=None` completion and
-    returns its extracted text. If the (already DSML-stripped) `assistant_text` is
-    blank / leaked / a placeholder literal, force one clean completion; if that is
-    still unusable, fall back to a fixed non-empty message. Returns
-    `(final_text, forced_again)` so the caller can flag `wanted_more_rounds`.
-    Mirrors the non-streaming `/chat` guard."""
+    `force_clean` is a zero-arg async callable that runs ONE `tools=None` completion
+    (off the event loop, via asyncio.to_thread) and returns its extracted text. If the
+    (already DSML-stripped) `assistant_text` is blank / leaked / a placeholder literal,
+    force one clean completion; if that is still unusable, fall back to a fixed
+    non-empty message. Returns `(final_text, forced_again)` so the caller can flag
+    `wanted_more_rounds`. Mirrors the non-streaming `/chat` guard."""
     forced_again = False
     text = assistant_text
     if _needs_clean_retry(text):
         forced_again = True
-        text, _ = _strip_dsml(force_clean() or "")
+        text, _ = _strip_dsml(await force_clean() or "")
     if _needs_clean_retry(text):
         text = _EMPTY_TURN_FALLBACK
     return text, forced_again
@@ -2902,7 +2905,7 @@ async def _run_tool_round_loop(
             round_num,
         )
         state["wanted_more_rounds"] = True
-        completion = client.chat(system_prompt, history, tools=None)
+        completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=None)
         assistant_text = client.extract_text(completion)
 
     assistant_text, dsml_leaked = _strip_dsml(assistant_text)
@@ -2915,15 +2918,16 @@ async def _run_tool_round_loop(
     # Never let a blank / leaked final answer reach the stream — the non-streaming
     # /chat path is already guarded, this keeps the streaming (Telegram) path
     # symmetric so it can't surface an empty `done.response` banner.
-    def _force_clean() -> str:
+    async def _force_clean() -> str:
         logger.info(
             "[%d] %sForcing clean text-only completion (blank/leaked final answer)",
             req_id,
             log_prefix,
         )
-        return client.extract_text(client.chat(system_prompt, history, tools=None))
+        completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=None)
+        return client.extract_text(completion)
 
-    assistant_text, forced_again = _ensure_nonempty_final(assistant_text, _force_clean)
+    assistant_text, forced_again = await _ensure_nonempty_final(assistant_text, _force_clean)
     if forced_again:
         state["wanted_more_rounds"] = True
 
@@ -4315,7 +4319,7 @@ async def _chat_blocking_turn(
     try:
         for _round in range(max_rounds):
             round_num = _round + 1
-            completion = client.chat(system_prompt, history, tools=tools)
+            completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=tools)
             message = completion["choices"][0].get("message", {})
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
@@ -4392,14 +4396,14 @@ async def _chat_blocking_turn(
         # of reaching the caller as garbled text.
         assistant_text, _dsml_leaked = _strip_dsml(assistant_text)
 
-        def _force_clean_blocking() -> str:
+        async def _force_clean_blocking() -> str:
             logger.info(
                 "Forcing text-only completion (rounds exhausted / blank / leaked)"
             )
-            completion = client.chat(system_prompt, history, tools=None)
+            completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=None)
             return client.extract_text(completion)
 
-        assistant_text, _forced_again = _ensure_nonempty_final(
+        assistant_text, _forced_again = await _ensure_nonempty_final(
             assistant_text, _force_clean_blocking
         )
 
