@@ -1794,11 +1794,16 @@ async def _run_tool(
                 }
             )
 
-        # SALES EVENT guard: Item must be a QR code ID, not a description
+        # SALES EVENT guard: Item must be a QR code ID, not a description.
+        # Loose format sanity check (4-digit year + alphanumeric/underscore
+        # body) — the authoritative existence check is the DAO ledger lookup
+        # (lookup_qr_code) below, the same source of truth the DApp uses.
+        # A strict regex here has rejected valid newer naming families that
+        # DO exist in the ledger (2024_YYYYMMDD_SEQ, ..._CC_..., ..._NIBS_...).
         _sales_item = (attributes.get("Item") or "").strip()
         if event_name.upper() == "SALES EVENT" and _sales_item:
             import re as _re
-            if not _re.match(r"^\d{4}[A-Z]+(?:_[A-Z]+)*_\d{8}_\d+$", _sales_item.split(",")[0].strip()):
+            if not _re.match(r"^\d{4}[A-Za-z0-9_]+$", _sales_item.split(",")[0].strip()):
                 return json.dumps(
                     {
                         "status": "invalid",
