@@ -1283,6 +1283,7 @@ def _auto_process_attachment(
     ext = Path(local_path).suffix.lower()
     pdf_exts = {".pdf"}
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+    docx_exts = {".docx"}
 
     status_id = send_message(chat_id, "📄 Processing attachment…", thread_id)
 
@@ -1398,6 +1399,42 @@ def _auto_process_attachment(
             summary += "\n*(No text detected in image)*\n"
 
         _update_status(f"✅ OCR complete (confidence: {confidence}%)")
+        return summary
+
+    # --- Word (.docx) path ---
+    if ext in docx_exts:
+        _update_status("📄 Extracting Word document text…")
+        docx_result = _run_script("extract_docx_text.py", local_path)
+
+        if docx_result.get("status") != "success":
+            _update_status(
+                f"⚠️ Word extraction failed: {docx_result.get('message', 'unknown error')}"
+            )
+            return None
+
+        extracted_text = docx_result.get("text", "")
+        paragraph_count = docx_result.get("paragraph_count", 0)
+        table_count = docx_result.get("table_count", 0)
+
+        # Do NOT persist the transcript from here (see the PDF branch).
+        filename = Path(local_path).name
+        summary = (
+            f"[Attachment auto-processed: **{filename}**]\n"
+            f"- Type: Word document ({paragraph_count} paragraph"
+            f"{'s' if paragraph_count != 1 else ''}, {table_count} table"
+            f"{'s' if table_count != 1 else ''})\n"
+        )
+        if extracted_text:
+            summary += f"\nExtracted content:\n```\n{extracted_text[:45000]}\n```\n"
+            if len(extracted_text) > 45000:
+                summary += "\n*(content truncated to 45000 chars)*\n"
+        else:
+            summary += "\n*(No text detected in document)*\n"
+
+        _update_status(
+            f"✅ Extracted {paragraph_count} paragraph"
+            f"{'s' if paragraph_count != 1 else ''} from Word document"
+        )
         return summary
 
     # --- Unknown file type ---

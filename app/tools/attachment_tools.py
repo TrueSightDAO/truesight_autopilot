@@ -72,6 +72,24 @@ def extract_pdf_text(path: str) -> str:
     return json.dumps(result, indent=2)
 
 
+def extract_docx_text(path: str) -> str:
+    """Extract text from a Word (.docx) file using python-docx.
+
+    Only the modern .docx (OOXML) format is supported — legacy binary .doc
+    files return an error explaining that.
+
+    Args:
+        path: Full path to the .docx file.
+
+    Returns:
+        JSON string with extracted paragraph and table text.
+    """
+    if not path or not os.path.isfile(path):
+        return json.dumps({"status": "error", "reason": f"File not found: {path}"})
+    result = _run_script("extract_docx_text.py", path)
+    return json.dumps(result, indent=2)
+
+
 def ocr_image(path: str, lang: str = "eng") -> str:
     """Run OCR on an image file using Tesseract.
 
@@ -102,7 +120,7 @@ def append_to_transcript(
         session_id: Session hash/ID.
         content: Main extracted text content.
         filename: Original filename of the attachment.
-        file_type: "PDF" or "Image".
+        file_type: "PDF", "Image", or "Word".
         ocr_text: OCR-extracted text (for images).
         grok_description: Grok vision description (for images).
 
@@ -116,9 +134,9 @@ def append_to_transcript(
                 "reason": "session_id, content, and filename are required",
             }
         )
-    if file_type not in ("PDF", "Image"):
+    if file_type not in ("PDF", "Image", "Word"):
         return json.dumps(
-            {"status": "error", "reason": "file_type must be 'PDF' or 'Image'"}
+            {"status": "error", "reason": "file_type must be 'PDF', 'Image', or 'Word'"}
         )
 
     result = _run_script(
@@ -158,6 +176,21 @@ TOOL_SPECS = [
             "required": ["path"],
         },
         handler=lambda args, ctx: extract_pdf_text(args.get("path", "")),
+    ),
+    ToolSpec(
+        name="extract_docx_text",
+        description="Extract text from a Word (.docx) file using python-docx. Returns paragraph and table text. Use this when a governor sends a .docx attachment. Legacy binary .doc files are not supported.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Full path to the .docx file on disk.",
+                }
+            },
+            "required": ["path"],
+        },
+        handler=lambda args, ctx: extract_docx_text(args.get("path", "")),
     ),
     ToolSpec(
         name="ocr_image",

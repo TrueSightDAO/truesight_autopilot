@@ -9,7 +9,7 @@ Usage:
         --session-id <hash> \
         --content <extracted_text> \
         --filename <original_filename> \
-        --type <PDF|Image> \
+        --type <PDF|Image|Word> \
         [--ocr-text <ocr_result>] \
         [--grok-description <grok_description>] \
         [--chat-id <telegram_chat_id>] \
@@ -150,7 +150,7 @@ def append_to_transcript(
         session_id: Session hash/ID.
         content: Main extracted text content.
         filename: Original filename of the attachment.
-        file_type: "PDF" or "Image".
+        file_type: "PDF", "Image", or "Word".
         ocr_text: OCR-extracted text (for images).
         grok_description: Grok vision description (for images).
         chat_id: Telegram chat ID (optional).
@@ -245,7 +245,7 @@ def main():
     parser.add_argument("--content", required=True, help="Extracted text content")
     parser.add_argument("--filename", required=True, help="Original filename")
     parser.add_argument(
-        "--type", required=True, choices=["PDF", "Image"], help="File type"
+        "--type", required=True, choices=["PDF", "Image", "Word"], help="File type"
     )
     parser.add_argument(
         "--ocr-text", default="", help="OCR extracted text (for images)"
