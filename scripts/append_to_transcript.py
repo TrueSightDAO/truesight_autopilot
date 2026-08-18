@@ -32,7 +32,31 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("append_to_transcript")
 
-TRANSCRIPT_REPO = "truesight_autopilot_transcript"
+_TRANSCRIPT_REPO_DEFAULT = "truesight_autopilot_transcript"
+
+
+def _resolve_transcript_repo() -> str:
+    """Read own_repos["transcript"] from the OWN_REPOS env var (mirrors
+    app.config.Settings.own_repos), defaulting to Sophia's repo.
+
+    This script runs as a standalone subprocess (see app/tools/
+    attachment_tools.py's _run_script) rather than importing app.config
+    directly, so it re-reads the same env var independently — same reason
+    get_github_token() below reads TRUESIGHT_DAO_AUTOPILOT from os.environ
+    rather than importing Settings.
+    """
+    raw = os.environ.get("OWN_REPOS", "")
+    if raw:
+        try:
+            return json.loads(raw).get("transcript", _TRANSCRIPT_REPO_DEFAULT)
+        except (json.JSONDecodeError, AttributeError):
+            logger.warning(
+                "OWN_REPOS env var is not valid JSON, using default transcript repo"
+            )
+    return _TRANSCRIPT_REPO_DEFAULT
+
+
+TRANSCRIPT_REPO = _resolve_transcript_repo()
 GITHUB_API = "https://api.github.com"
 
 
