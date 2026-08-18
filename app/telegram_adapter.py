@@ -835,8 +835,8 @@ def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
 def _brain_unavailable_message() -> str:
     """A clear indicator instead of a raw Errno — names a redeploy when one is underway."""
     if _deploy_in_progress():
-        return "🚀 Sophia is redeploying — back in a few seconds. Please resend your message shortly."
-    return "⏳ Sophia is briefly restarting — please resend in a few seconds."
+        return "🚀 Redeploying — back in a few seconds. Please resend your message shortly."
+    return "⏳ Briefly restarting — please resend in a few seconds."
 
 
 def call_chat(message: str, session_id: str, public_key: str) -> str:
