@@ -448,10 +448,13 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_context_sync_loop())
         except Exception as e:
             logger.warning("Context sync failed to start: %s", e)
-        try:
-            asyncio.create_task(followup_loop())
-        except Exception as e:
-            logger.warning("Follow-up loop failed to start: %s", e)
+        if settings.followups_enabled:
+            try:
+                asyncio.create_task(followup_loop())
+            except Exception as e:
+                logger.warning("Follow-up loop failed to start: %s", e)
+        else:
+            logger.info("FOLLOWUPS_ENABLED=false — follow-up loop not started")
         try:
             asyncio.create_task(_catalog_refresh_loop())
         except Exception as e:

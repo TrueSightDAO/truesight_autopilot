@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     dry_run: bool = Field(default=False, validation_alias="DRY_RUN")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     max_pr_per_day: int = Field(default=5, validation_alias="MAX_PR_PER_DAY")
+    # The follow-up loop (app/followup_loop.py) probes items defined in the
+    # shared, public agentic_ai_context/OPEN_FOLLOWUPS.md and can act on them.
+    # Those follow-ups belong to whichever instance owns that DAO-wide work
+    # (Sophia) — a sibling instance that only reads that repo for context
+    # should not also inherit and act on its follow-up queue. Default True
+    # preserves Sophia's existing behavior; a locked-down sibling sets
+    # FOLLOWUPS_ENABLED=false.
+    followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
 
     # Auto-advance (SOPHIA_AUTO_ADVANCE_PLAN.md): when ON, after a PR turn on a
     # handoff thread the brain emits an "advance" signal and the adapter
