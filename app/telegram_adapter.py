@@ -351,6 +351,8 @@ def _handoff_prefix(thread_id: int | None, text: str = "") -> str:
     gets the generic fallback when the message looks like a go-signal/plan reference.
     A plan marked Auto-start: yes (2026-07-21) skips the go-signal framing entirely —
     Sophia is told she's pre-authorized to execute immediately."""
+    if not settings.handoffs_enabled:
+        return ""
     if not thread_id:
         return ""
     result = _handoff_plan_and_auto_start_for_thread(thread_id)
