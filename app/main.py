@@ -3435,7 +3435,7 @@ async def _sync_pending_to_github(public_key: str, items: list[dict]) -> None:
         logger.debug("Pending GitHub sync skipped: %s", e)
 
 
-_TRANSCRIPT_REPO = "truesight_autopilot_transcript"
+_TRANSCRIPT_REPO = settings.transcript_repo
 
 
 _REDACTION_PATTERNS: list[tuple[re.Pattern, str]] = [

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,6 +67,25 @@ class Settings(BaseSettings):
     # GitHub
     github_pat: str = Field(default="", validation_alias="TRUESIGHT_DAO_AUTOPILOT")
     krake_io_pat: str = Field(default="", validation_alias="KRAKE_IO_PAT")
+    # Optional, broader-but-read-only token: read_repo_file / search_codebase
+    # fall back to it when set. Lets a locked-down instance whose github_pat
+    # is a fine-grained PAT scoped to only its own private repos (for writes)
+    # still read the rest of the public org without a second config surface
+    # per tool. Empty by default — existing unauthenticated-read fallback in
+    # _github_headers() is unchanged for Sophia.
+    github_read_pat: str = Field(default="", validation_alias="GITHUB_READ_PAT")
+
+    # This instance's own API-only DATA repos (§ "REPO CLASSES" in
+    # context.py) — where ITS conversation transcript and Telegram
+    # attachments land. Defaults match Sophia's existing hardcoded repos, so
+    # her behavior is unchanged; a locked-down sibling instance overrides
+    # both via env to point at its own private repos instead.
+    transcript_repo: str = Field(
+        default="truesight_autopilot_transcript", validation_alias="TRANSCRIPT_REPO"
+    )
+    attachments_repo: str = Field(
+        default="store_interaction_attachments", validation_alias="ATTACHMENTS_REPO"
+    )
 
     # Repos in allowed_repos default to the TrueSightDAO org (git_tools.py's
     # historical assumption). Entries here override that for repos that live
@@ -133,6 +152,20 @@ class Settings(BaseSettings):
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
     ]
+
+    @model_validator(mode="after")
+    def _ensure_own_data_repos_are_api_only(self) -> Settings:
+        """Fold ``transcript_repo`` / ``attachments_repo`` into ``api_only_repos``.
+
+        No-op for Sophia (both default to strings already in the literal list
+        above). Lets a sibling instance whose .env overrides those two fields
+        to its own private repos get the same "never clone/branch-edit,
+        Contents-API only" treatment without duplicating the whole list.
+        """
+        for repo in (self.transcript_repo, self.attachments_repo):
+            if repo not in self.api_only_repos:
+                self.api_only_repos.append(repo)
+        return self
 
     # Production deploy repos (forks of their beta base). Beta-first rule:
     # agents NEVER push, branch-edit, or merge PRs here. Flow: change lands in

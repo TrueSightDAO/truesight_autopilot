@@ -55,6 +55,14 @@ def upload_file_to_github(
 
     Returns a dict with 'status' ('success' or 'error') and details.
     """
+    if repo not in settings.allowed_repos and repo not in settings.api_only_repos:
+        return {
+            "status": "error",
+            "error": (
+                f"'{repo}' is not in settings.allowed_repos or settings.api_only_repos — "
+                "refusing to write. A governor must add it there first."
+            ),
+        }
     if content_base64:
         encoded = content_base64
     else:

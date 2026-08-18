@@ -415,7 +415,34 @@ def build_system_prompt() -> str:
     """
     from .host_identity import host_identity_block
 
-    return f"{_SYSTEM_PROMPT_HEADER}\n{host_identity_block()}"
+    prompt = f"{_SYSTEM_PROMPT_HEADER}\n{host_identity_block()}"
+
+    # Only emitted when this instance's own data repos differ from the
+    # defaults referenced in the static REPO CLASSES text above (i.e. never
+    # for Sophia herself — keeps her prompt byte-for-byte unchanged). A
+    # sibling instance with its own transcript_repo/attachments_repo needs
+    # this override so it doesn't write its own transcript/attachments into
+    # Sophia's public repos by following the generic example names verbatim.
+    overrides = []
+    if settings.transcript_repo != "truesight_autopilot_transcript":
+        overrides.append(
+            f"- Your own transcript repo is `{settings.transcript_repo}` — use it "
+            "wherever the REPO CLASSES section above says "
+            "`truesight_autopilot_transcript`."
+        )
+    if settings.attachments_repo != "store_interaction_attachments":
+        overrides.append(
+            f"- Your own Telegram attachments repo is `{settings.attachments_repo}` "
+            "— use it wherever the REPO CLASSES section above says "
+            "`store_interaction_attachments`."
+        )
+    if overrides:
+        prompt += (
+            "\n\n## YOUR OWN DATA REPOS (override the generic examples above)\n"
+            + "\n".join(overrides)
+        )
+
+    return prompt
 
 
 def get_context_file(path: str) -> str | None:
