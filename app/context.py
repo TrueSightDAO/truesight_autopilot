@@ -7,7 +7,7 @@ import fcntl
 import subprocess
 from pathlib import Path
 
-from .config import settings
+from .config import Settings, settings
 
 # Guards context-clone reads (get_context_file / search_context) against the
 # refresh's in-place `git reset --hard`. `git reset --hard` rewrites changed
@@ -340,7 +340,18 @@ def _read_file(path: Path) -> str:
 # and docs committed since the last deploy are visible to read_context_file /
 # search_context — not just to read_repo_file (which always hits GitHub). This
 # closes the recurring "stale clone → Sophia can't find the new plan" gap.
-_CONTEXT_SYNC_REPOS = ("agentic_ai_context", "tokenomics")
+#
+# Always includes settings.own_repos["followups"] — a sibling instance whose
+# own follow-up queue lives in its own private repo (not the shared public
+# agentic_ai_context) still needs THAT repo synced locally, or
+# followups._resolve_followups_md() never finds its OPEN_FOLLOWUPS.md. A
+# plain tuple literal here would only ever know about Sophia's default;
+# dict.fromkeys de-dupes (order-preserving) for the common case where it
+# equals the shared default ("agentic_ai_context" — Sophia's case, and any
+# sibling that hasn't set its own followups repo).
+_CONTEXT_SYNC_REPOS = tuple(
+    dict.fromkeys(["agentic_ai_context", "tokenomics", settings.own_repos["followups"]])
+)
 
 
 def _origin_default_branch(repo_dir: Path) -> str:
@@ -420,21 +431,28 @@ def build_system_prompt() -> str:
     # Only emitted when this instance's own data repos differ from the
     # defaults referenced in the static REPO CLASSES text above (i.e. never
     # for Sophia herself — keeps her prompt byte-for-byte unchanged). A
-    # sibling instance with its own transcript_repo/attachments_repo needs
-    # this override so it doesn't write its own transcript/attachments into
-    # Sophia's public repos by following the generic example names verbatim.
+    # sibling instance with its own OWN_REPOS needs this override so it
+    # doesn't write its own transcript/attachments into Sophia's public
+    # repos by following the generic example names verbatim.
+    _defaults = Settings.model_fields["own_repos"].default
     overrides = []
-    if settings.transcript_repo != "truesight_autopilot_transcript":
+    if settings.own_repos["transcript"] != _defaults["transcript"]:
         overrides.append(
-            f"- Your own transcript repo is `{settings.transcript_repo}` — use it "
+            f"- Your own transcript repo is `{settings.own_repos['transcript']}` — use it "
             "wherever the REPO CLASSES section above says "
-            "`truesight_autopilot_transcript`."
+            f"`{_defaults['transcript']}`."
         )
-    if settings.attachments_repo != "store_interaction_attachments":
+    if settings.own_repos["attachments"] != _defaults["attachments"]:
         overrides.append(
-            f"- Your own Telegram attachments repo is `{settings.attachments_repo}` "
+            f"- Your own Telegram attachments repo is `{settings.own_repos['attachments']}` "
             "— use it wherever the REPO CLASSES section above says "
-            "`store_interaction_attachments`."
+            f"`{_defaults['attachments']}`."
+        )
+    if settings.own_repos["followups"] != _defaults["followups"]:
+        overrides.append(
+            f"- Your own OPEN_FOLLOWUPS.md lives in `{settings.own_repos['followups']}`, "
+            "not the shared public agentic_ai_context — that's where your follow-up "
+            "queue is tracked."
         )
     if overrides:
         prompt += (

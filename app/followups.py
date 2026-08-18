@@ -42,21 +42,26 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _resolve_followups_md() -> Path:
-    """Locate OPEN_FOLLOWUPS.md across the known agentic_ai_context layouts.
+    """Locate OPEN_FOLLOWUPS.md across the known layouts.
 
     Mirrors app.context.get_context_file: the configured context mirror first
-    (the box syncs the repo to ``<context_repos_dir>/agentic_ai_context``, e.g.
-    ``/opt/truesight_autopilot/context/agentic_ai_context``), then a clone next
-    to this checkout, then the developer's ``~/Applications`` clone. Falls back
-    to the configured location so a missing-file error points at the canonical
+    (the box syncs settings.own_repos["followups"] to
+    ``<context_repos_dir>/<that repo>``, e.g.
+    ``/opt/truesight_autopilot/context/agentic_ai_context`` for Sophia), then
+    a dev-convenience fallback next to this checkout, then the developer's
+    ``~/Applications`` clone (both fallbacks assume the public
+    agentic_ai_context — a sibling instance's own followups repo only
+    resolves via the first, deployed-box candidate). Falls back to the
+    configured location so a missing-file error points at the canonical
     path. Resolving against the live config (rather than a hard-coded
     ``<repo>/agentic_ai_context``) is what stopped /vault/followups 500-ing on
     the box, where the repo isn't a sibling of this checkout.
     """
     from .config import settings
 
+    followups_repo = settings.own_repos["followups"]
     candidates = [
-        settings.context_repos_dir / "agentic_ai_context",
+        settings.context_repos_dir / followups_repo,
         _REPO_ROOT / "agentic_ai_context",
         _REPO_ROOT.parent / "agentic_ai_context",
         Path.home() / "Applications" / "agentic_ai_context",
@@ -64,7 +69,7 @@ def _resolve_followups_md() -> Path:
     for c in candidates:
         if (c / "OPEN_FOLLOWUPS.md").exists():
             return c / "OPEN_FOLLOWUPS.md"
-    return settings.context_repos_dir / "agentic_ai_context" / "OPEN_FOLLOWUPS.md"
+    return settings.context_repos_dir / followups_repo / "OPEN_FOLLOWUPS.md"
 
 
 _FOLLOWUPS_MD = _resolve_followups_md()
