@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     # FOLLOWUPS_ENABLED=false.
     followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
 
+    # _handoff_prefix() (app/telegram_adapter.py) reads Sophia's public
+    # HANDOFF_MANIFEST.md and injects "you're pre-authorized to execute this
+    # plan" framing whenever a message LOOKS like a go-signal ("go for it",
+    # "go", "proceed", "ship it") — regardless of whether this instance's
+    # thread_id actually matches a registry row (Telegram topic IDs are small
+    # sequential integers *per group*, so a coincidental collision with one of
+    # Sophia's handoff topics is plausible). This entire feature is specific
+    # to Sophia's autonomous roadmap-execution pattern; a sibling instance
+    # that's a plain chat assistant should never have an ordinary "go for it"
+    # reinterpreted as authorization to execute someone else's plan. Default
+    # True preserves Sophia's existing behavior; a locked-down sibling sets
+    # HANDOFFS_ENABLED=false.
+    handoffs_enabled: bool = Field(default=True, validation_alias="HANDOFFS_ENABLED")
+
     # Auto-advance (SOPHIA_AUTO_ADVANCE_PLAN.md): when ON, after a PR turn on a
     # handoff thread the brain emits an "advance" signal and the adapter
     # continues to the next plan unit without a human prompt, stopping at gates.
