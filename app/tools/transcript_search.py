@@ -4,7 +4,7 @@ Lets the autopilot search past session transcripts for attachment content.
 When a governor says "remember that PDF I sent last week?", this tool finds
 and returns the extracted content from the transcript repo.
 
-Transcript repo: TrueSightDAO/truesight_autopilot_transcript
+Transcript repo: TrueSightDAO/<settings.own_repos["transcript"]> (default: truesight_autopilot_transcript)
 Path pattern: sessions/YYYY-MM-DD/<hash>/transcript.md
 """
 
@@ -17,9 +17,11 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
+from ..config import settings
+
 logger = logging.getLogger("autopilot.tools.transcript_search")
 
-TRANSCRIPT_REPO = "truesight_autopilot_transcript"
+TRANSCRIPT_REPO = settings.own_repos["transcript"]
 GITHUB_API = "https://api.github.com"
 _MAX_DAYS_BACK = 90
 _MAX_TRANSCRIPTS = 50
@@ -234,7 +236,7 @@ from ..tool_registry import ToolSpec  # noqa: E402
 
 TOOL_SPEC = ToolSpec(
     name="search_transcript",
-    description="Search past session transcripts for attachment content matching a query. Use this when a governor says 'remember that file I sent' or asks about something they previously attached. Searches the truesight_autopilot_transcript repo for attachment filenames and extracted text.",
+    description=f"Search past session transcripts for attachment content matching a query. Use this when a governor says 'remember that file I sent' or asks about something they previously attached. Searches the {TRANSCRIPT_REPO} repo for attachment filenames and extracted text.",
     parameters={
         "type": "object",
         "properties": {

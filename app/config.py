@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     dry_run: bool = Field(default=False, validation_alias="DRY_RUN")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     max_pr_per_day: int = Field(default=5, validation_alias="MAX_PR_PER_DAY")
+    # The follow-up loop (app/followup_loop.py) probes items defined in the
+    # shared, public agentic_ai_context/OPEN_FOLLOWUPS.md and can act on them.
+    # Those follow-ups belong to whichever instance owns that DAO-wide work
+    # (Sophia) — a sibling instance that only reads that repo for context
+    # should not also inherit and act on its follow-up queue. Default True
+    # preserves Sophia's existing behavior; a locked-down sibling sets
+    # FOLLOWUPS_ENABLED=false.
+    followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
 
     # Auto-advance (SOPHIA_AUTO_ADVANCE_PLAN.md): when ON, after a PR turn on a
     # handoff thread the brain emits an "advance" signal and the adapter
@@ -67,6 +75,65 @@ class Settings(BaseSettings):
     # GitHub
     github_pat: str = Field(default="", validation_alias="TRUESIGHT_DAO_AUTOPILOT")
     krake_io_pat: str = Field(default="", validation_alias="KRAKE_IO_PAT")
+    # Optional, broader-but-read-only token: read_repo_file / search_codebase
+    # fall back to it when set. Lets a locked-down instance whose github_pat
+    # is a fine-grained PAT scoped to only its own private repos (for writes)
+    # still read the rest of the public org without a second config surface
+    # per tool. Empty by default — existing unauthenticated-read fallback in
+    # _github_headers() is unchanged for Sophia.
+    github_read_pat: str = Field(default="", validation_alias="GITHUB_READ_PAT")
+
+    # This instance's own repo identity, consolidated into one structured
+    # setting rather than one field per repo class (was heading that way:
+    # transcript_repo, attachments_repo, and a third for OPEN_FOLLOWUPS.md
+    # source were each about to become their own Field()). A future sibling
+    # instance is instantiated by supplying ONE env var — no code change, no
+    # new Settings field to add per repo class discovered.
+    #
+    # Keys and their defaults match Sophia's existing hardcoded repos
+    # exactly, so her behavior is unchanged with no override at all:
+    #   context      — read-only DAO context mirror (app/context.py); a
+    #                  locked-down sibling normally leaves this at the
+    #                  public default (it still wants the shared DAO
+    #                  context), unlike the other three.
+    #   transcript   — where ITS conversation transcript lands
+    #                  (api_only_repos; app/main.py, transcript_search.py).
+    #   attachments  — where ITS Telegram attachments land (api_only_repos).
+    #   followups    — source of OPEN_FOLLOWUPS.md for the follow-up loop
+    #                  (app/followups.py) — a sibling instance should
+    #                  probe ITS OWN follow-up queue, not Sophia's.
+    # Override via env: OWN_REPOS='{"transcript":"bionpact_autopilot_transcription",...}'
+    # (only the overridden keys need to be present — merged onto defaults).
+    own_repos: dict[str, str] = Field(
+        default={
+            "context": "agentic_ai_context",
+            "transcript": "truesight_autopilot_transcript",
+            "attachments": "store_interaction_attachments",
+            "followups": "agentic_ai_context",
+        },
+        validation_alias="OWN_REPOS",
+    )
+
+    @field_validator("own_repos", mode="before")
+    @classmethod
+    def _merge_own_repos_onto_defaults(cls, value: object) -> object:
+        """A partial OWN_REPOS override (e.g. just {"transcript": "..."})
+        merges onto the defaults instead of replacing the whole dict — so
+        omitting "context" (the common case) keeps it at the shared default
+        rather than raising a KeyError wherever own_repos["context"] is read.
+
+        Runs ``mode="before"`` type coercion, so a JSON-string env var value
+        hasn't been parsed into a dict yet — parse it here before merging
+        (a dict passed directly, e.g. in a test, is used as-is).
+        """
+        import json
+
+        defaults = cls.model_fields["own_repos"].default
+        if not value:
+            return defaults
+        if isinstance(value, str):
+            value = json.loads(value)
+        return {**defaults, **value}
 
     # Repos in allowed_repos default to the TrueSightDAO org (git_tools.py's
     # historical assumption). Entries here override that for repos that live
@@ -134,6 +201,20 @@ class Settings(BaseSettings):
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
     ]
+
+    @model_validator(mode="after")
+    def _ensure_own_data_repos_are_api_only(self) -> Settings:
+        """Fold ``own_repos["transcript"]`` / ``["attachments"]`` into ``api_only_repos``.
+
+        No-op for Sophia (both default to strings already in the literal list
+        above). Lets a sibling instance whose OWN_REPOS overrides those two
+        keys to its own private repos get the same "never clone/branch-edit,
+        Contents-API only" treatment without duplicating the whole list.
+        """
+        for repo in (self.own_repos["transcript"], self.own_repos["attachments"]):
+            if repo not in self.api_only_repos:
+                self.api_only_repos.append(repo)
+        return self
 
     # Production deploy repos (forks of their beta base). Beta-first rule:
     # agents NEVER push, branch-edit, or merge PRs here. Flow: change lands in

@@ -29,7 +29,9 @@ def extract_with_pymupdf(path: str) -> dict:
     """Extract text using pymupdf (fitz)."""
     import time
 
-    import fitz  # pymupdf
+    import pymupdf as fitz  # the `fitz` compat shim prints a deprecation
+    # notice to stdout on import (pymupdf>=1.25ish), corrupting this script's
+    # JSON-on-stdout contract — import the real module name instead.
 
     start = time.time()
     doc = fitz.open(path)
@@ -119,7 +121,7 @@ def extract_pdf_text(path: str) -> dict:
 
     # Try pymupdf first
     try:
-        import fitz
+        import pymupdf as fitz  # see extract_with_pymupdf() for why not `import fitz`
 
         return extract_with_pymupdf(path)
     except ImportError:
