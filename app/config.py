@@ -128,6 +128,18 @@ class Settings(BaseSettings):
         validation_alias="OWN_REPOS",
     )
 
+    # This instance's own name in the agent registry
+    # (agentic_ai_context/agents/<name>.json) — used by app/tools/
+    # agent_handoff.py to address outgoing handoffs (the "from" field) and
+    # filter incoming ones (files prefixed "<agent_name>_from_..." in the
+    # shared TrueSightDAO/agent_handoffs repo). Unlike own_repos, this
+    # doesn't vary the REPO used — every instance shares the same
+    # agent_handoffs mailbox repo — it's the instance's own identity within
+    # that shared repo. Default "sophia" preserves her existing behavior; a
+    # sibling instance sets AGENT_NAME=bionpact (etc.) to match its
+    # agents/<name>.json registry entry.
+    agent_name: str = Field(default="sophia", validation_alias="AGENT_NAME")
+
     @field_validator("own_repos", mode="before")
     @classmethod
     def _merge_own_repos_onto_defaults(cls, value: object) -> object:
@@ -214,6 +226,11 @@ class Settings(BaseSettings):
         "lineage-assets",
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
+        # shared agent-to-agent handoff mailbox (app/tools/agent_handoff.py) —
+        # every registered agent instance writes here via Contents API only,
+        # never branch/PR. Same repo name for every instance (unlike
+        # own_repos, this doesn't vary per-instance).
+        "agent_handoffs",
     ]
 
     @model_validator(mode="after")
