@@ -73,7 +73,7 @@ class EmailPoller:
                 await asyncio.sleep(interval_seconds)
         while True:
             try:
-                self.poll_once()
+                await asyncio.to_thread(self.poll_once)
             except Exception as e:
                 logger.error("Email poll failed: %s", e)
             await asyncio.sleep(interval_seconds)
