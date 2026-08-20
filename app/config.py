@@ -198,6 +198,7 @@ class Settings(BaseSettings):
         "ecosystem_change_logs",
         "tribomirimbahia",
         "lineage-engine",
+        "lineage-assets",
         "sunmint_farmer",
     ]
 
@@ -223,7 +224,6 @@ class Settings(BaseSettings):
         "qr_codes",
         "sunmint",
         "store_interaction_attachments",
-        "lineage-assets",
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
         # shared agent-to-agent handoff mailbox (app/tools/agent_handoff.py) —
