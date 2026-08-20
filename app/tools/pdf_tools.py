@@ -14,9 +14,12 @@ House style applied here:
 - Cacao-brown headings, #222 body, muted-gray footer with page numbers.
 - **Markdown tables render as real tables** (gray header + zebra rows) — never
   as raw ``| pipe |`` text.
+- **CJK / Chinese text**: if the content contains non-ASCII characters (e.g.
+  Chinese, Japanese, Korean), the DroidSansFallbackFull.ttf font is registered
+  and used instead of Helvetica, ensuring CJK glyphs render correctly.
 
 Markdown subset: ``#``/``##``/``###`` headings, paragraphs, ``-``/``*`` bullets,
-``**bold**`` / ``*italic*``, and pipe tables (``| a | b |`` + ``|---|---|``).
+``**bold`` / ``*italic*``, and pipe tables (``| a | b |`` + ``|---|---|``).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 import tempfile
 from typing import Any
@@ -50,6 +54,41 @@ _FONT_BOLD = "Helvetica-Bold"
 _FONT_ITALIC = "Helvetica-Oblique"
 _FONT_MONO = "Courier"
 
+# ── CJK font support ──────────────────────────────────────────────────────
+_DROID_FONT_PATH = "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
+_CJK_FONT_NAME = "DroidSansFallbackFull"
+_cjk_registered = False  # module-level flag: register once
+
+
+def _ensure_cjk_font() -> str | None:
+    """Register DroidSansFallbackFull.ttf with reportlab if available.
+
+    Returns the font name (``_CJK_FONT_NAME``) on success, or ``None`` if the
+    font file is missing / registration fails.
+    """
+    global _cjk_registered
+    if _cjk_registered:
+        return _CJK_FONT_NAME
+    if not os.path.isfile(_DROID_FONT_PATH):
+        logger.warning("CJK font not found at %s — falling back to Helvetica", _DROID_FONT_PATH)
+        return None
+    try:
+        from reportlab.pdfbase import pdfmetrics  # type: ignore
+        from reportlab.pdfbase.ttfonts import TTFont  # type: ignore
+
+        pdfmetrics.registerFont(TTFont(_CJK_FONT_NAME, _DROID_FONT_PATH))
+        _cjk_registered = True
+        logger.info("Registered CJK font: %s", _DROID_FONT_PATH)
+        return _CJK_FONT_NAME
+    except Exception as exc:
+        logger.warning("Failed to register CJK font: %s", exc)
+        return None
+
+
+def _needs_cjk(content: str) -> bool:
+    """Return True if *content* contains any non-ASCII character."""
+    return any(ord(ch) > 127 for ch in content)
+
 _PAGE_MARGIN = 60  # L/R/bottom margin (pt)
 _BAND_HEIGHT = 42  # saffron header band height (pt)
 
@@ -71,13 +110,22 @@ def _apply_inline_markdown(text: str) -> str:
     return text
 
 
-def _brand_styles():
-    """Build the house-style ParagraphStyle set."""
+def _brand_styles(cjk_font: str | None = None):
+    """Build the house-style ParagraphStyle set.
+
+    If *cjk_font* is provided (a registered TTFont name that supports CJK),
+    it will be used for body, bullet, and table-cell styles so that Chinese /
+    Japanese / Korean characters render correctly. Headings keep the bold
+    Helvetica look (they rarely contain long CJK runs, and we lack a bold CJK
+    variant).
+    """
     from reportlab.lib.colors import HexColor  # type: ignore
     from reportlab.lib.styles import ParagraphStyle  # type: ignore
 
+    body_font = cjk_font or _FONT
+
     def style(name, **kw):
-        kw.setdefault("fontName", _FONT)
+        kw.setdefault("fontName", body_font)
         return ParagraphStyle(name, **kw)
 
     return {
@@ -275,8 +323,11 @@ def generate_pdf(
         tmp.close()
         output_path = tmp.name
 
+    # Detect CJK content and register fallback font if needed.
+    cjk_font = _ensure_cjk_font() if _needs_cjk(content) else None
+
     buf = io.BytesIO()
-    styles = _brand_styles()
+    styles = _brand_styles(cjk_font=cjk_font)
     page_w, page_h = LETTER
     content_width = page_w - 2 * _PAGE_MARGIN
 
