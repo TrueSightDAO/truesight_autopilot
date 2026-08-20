@@ -1628,7 +1628,7 @@ def _validate_required_fields(event_name: str, attributes: dict) -> list[str]:
     return missing
 
 
-async def _run_tool(
+def _run_tool_sync(
     func_name: str,
     func_args: dict,
     history: list[dict] | None = None,
@@ -2358,6 +2358,23 @@ async def _run_tool(
             account=func_args.get("account"),
         )
     return f"Unknown tool: {func_name}"
+
+
+async def _run_tool(
+    func_name: str,
+    func_args: dict,
+    history: list[dict] | None = None,
+    session_id: str | None = None,
+    governor_name: str | None = None,
+) -> str:
+    # Run the (blocking, synchronous) tool body in a worker thread so a long
+    # call — ssh_run's subprocess.run, GitHub/Sheets API calls, gspread, … —
+    # cannot stall the single-worker event loop. Otherwise /health goes dark
+    # and the Telegram adapter misreports "Sophia is briefly restarting" even
+    # though the brain is up and merely busy on a tool. (2026-08-20)
+    return await asyncio.to_thread(
+        _run_tool_sync, func_name, func_args, history, session_id, governor_name
+    )
 
 
 # Tools that change shared state (PRs, deploys, ledger, infra). A turn that runs
