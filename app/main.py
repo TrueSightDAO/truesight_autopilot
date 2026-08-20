@@ -2539,17 +2539,26 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
         return None
     try:
         plan_file = _extract_plan_file(history)
+        # "Progress" = a PR was opened OR merged this turn. In run-to-UAT mode
+        # (AUTO_ADVANCE_UNTIL_UAT) also accept any tool activity so UAT/test
+        # units that don't create PRs still auto-advance. The RESUME HERE pointer,
+        # the always-stop (deploy/money) rule, and the turn cap still bound it.
+        progress_tools = {"open_fix_pr", "open_pr", "merge_pr"}
         opened_pr = any(
-            (t or {}).get("name") == "open_fix_pr" for t in (tool_trace or [])
+            (t or {}).get("name") in progress_tools for t in (tool_trace or [])
         )
+        if settings.auto_advance_until_uat and not opened_pr:
+            opened_pr = bool(tool_trace)
         logger.info(
-            "auto-advance: plan_file=%s opened_pr=%s tool_trace_len=%d",
+            "auto-advance: plan_file=%s progress=%s tool_trace_len=%d",
             plan_file, opened_pr, len(tool_trace or []),
         )
         if plan_file:
             plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
             plan_text = plan_path.read_text(encoding="utf-8")
-            dec = next_action(plan_text, opened_pr)
+            dec = next_action(
+                plan_text, opened_pr, run_to_uat=settings.auto_advance_until_uat
+            )
             return {
                 "decision": dec.decision,
                 "gate_reason": dec.gate_reason,

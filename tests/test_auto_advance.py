@@ -175,6 +175,57 @@ def test_decision_for_unit_tdg_issuance_gates():
     assert d.decision == "gate"
 
 
+# ── merge-to-main + UAT gating (2026-08-20) ──────────────────────────────────
+
+
+def test_decision_for_unit_merge_to_main_is_auto():
+    # PR merges are no longer an always-stop category — Sophia merges her own PRs.
+    plan = (
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| PR2 — merge PR1 to main | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "PR2")
+    assert d.decision == "auto"
+
+
+def test_decision_for_unit_uat_gates_by_default():
+    plan = (
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| PR4 — rollout + UAT | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "PR4")
+    assert d.decision == "gate" and "UAT" in d.gate_reason
+
+
+def test_decision_for_unit_uat_auto_when_run_to_uat():
+    plan = (
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| PR4 — rollout + UAT | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "PR4", run_to_uat=True)
+    assert d.decision == "auto"
+
+
+def test_decision_for_unit_deploy_still_gates_in_run_to_uat():
+    # run-to-UAT must NOT un-gate prod deploys / money.
+    plan = (
+        "| Unit | Advance | PR opened |\n|------|---------|-----------|\n"
+        "| PR5 — deploy to prod | `auto` | ☐ |\n"
+    )
+    d = decision_for_unit(plan, "PR5", run_to_uat=True)
+    assert d.decision == "gate" and "deploy" in d.gate_reason
+
+
+def test_next_action_run_to_uat_suppresses_uat_gate():
+    plan = PLAN.replace("**RESUME HERE:** PR2", "**RESUME HERE:** PR4")
+    # default: UAT gates
+    d = next_action(plan, opened_pr=True)
+    assert d.decision == "gate" and "UAT" in d.gate_reason
+    # run_to_uat: UAT is auto
+    d = next_action(plan, opened_pr=True, run_to_uat=True)
+    assert d.decision == "auto"
+
+
 # ── next_action (the high-level brain call) ─────────────────────────────────
 
 

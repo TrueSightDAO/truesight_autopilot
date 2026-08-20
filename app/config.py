@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     auto_advance_max_turns: int = Field(
         default=8, validation_alias="AUTO_ADVANCE_MAX_TURNS"
     )
+    # Run-to-UAT (Gary 2026-08-20): when ON, UAT / human-acceptance units are no
+    # longer an always-stop gate — Sophia runs them and keeps going until the
+    # plan is done, a test fails (needs a human), or an irreversible always-stop
+    # (prod deploy / promote / TDG / money). Also lets a turn count as "progress"
+    # when it ran any tool (not just opened/merged a PR), so UAT/test units that
+    # don't create PRs still auto-advance. OFF by default.
+    auto_advance_until_uat: bool = Field(
+        default=False, validation_alias="AUTO_ADVANCE_UNTIL_UAT"
+    )
 
     # Catalog-driven field normalizer. When ON, _normalize_submission_labels uses
     # the live events catalog's canonical_labels to map LLM-supplied attribute keys

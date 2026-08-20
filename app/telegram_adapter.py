@@ -1146,13 +1146,16 @@ def _run_turn_with_auto_advance(
                 current_msg = (
                     f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
                     f"RESUME HERE marker in {plan_ref} points at. "
-                    f"Do exactly that one PR (open the PR, report the contribution, tick "
-                    f"the resume tracker), then stop. Honor any gate marker."
+                    f"Do exactly that one unit (make the change, open and merge the PR "
+                    f"yourself when the unit calls for it, run any tests, report the "
+                    f"contribution, tick the resume tracker), then stop. Honor any gate "
+                    f"marker. Never deploy to production or move money on your own."
                 )
             else:
                 current_msg = (
                     f"[AUTO-ADVANCE] Execute only the next unit ({nxt}). "
-                    f"Open the next fix PR, report the contribution, then stop."
+                    f"Open and merge the next fix PR yourself, report the contribution, "
+                    f"then stop. Never deploy to production on your own."
                 )
             continue
         if decision == "gate":

@@ -41,19 +41,35 @@ _RESUME_RE = re.compile(r"RESUME\s+HERE\s*[:=]?\s*(.*)", re.I)
 # Irreversible / outward-facing work that ALWAYS gates (by rule, even with no/`auto`
 # marker), matched against the next unit's text. A forgetful author cannot arm these
 # for unattended auto-run. Explicit `gate:` markers remain the primary mechanism.
+#
+# NOTE (Gary 2026-08-20): "merge to main/master" is deliberately ABSENT — PR merges
+# are no longer gated; Sophia merges her own PRs and keeps going (the `merge_pr` tool
+# still refuses prod repos, so prod stays protected). UAT / human-acceptance moved to
+# `_UAT_STOP_RE` and only gates when run-to-UAT mode is off.
 _ALWAYS_STOP_RE = re.compile(
     r"(?i)("
     r"\bdeploy|\bpromote\b|gh\s+repo\s+sync|clasp\s+(?:push|deploy)|"
-    r"merge\s+to\s+(?:main|master)|\bto\s+prod\b|\bproduction\b|"
+    r"\bto\s+prod\b|\bproduction\b|"
     r"issu\w*\s+tdg|tdg\s+issuance|mass[\s-]+approv\w*|\btreasury\b|\bpayout\b|"
-    r"capital\s+injection|move\s+money|\bUAT\b|human\s+acceptance"
+    r"capital\s+injection|move\s+money"
     r")"
 )
+
+# UAT / human-acceptance units. Gate by default; skipped when run-to-UAT is on
+# (AUTO_ADVANCE_UNTIL_UAT) so Sophia runs the UAT/test steps herself and only
+# stops on a failure, completion, the cap, or an always-stop (deploy/money).
+_UAT_STOP_RE = re.compile(r"(?i)(\bUAT\b|human\s+acceptance)")
 
 
 def _always_stop_reason(text: str) -> str | None:
     """Return the matched always-stop keyword in ``text``, else None."""
     m = _ALWAYS_STOP_RE.search(text or "")
+    return m.group(1) if m else None
+
+
+def _uat_stop_reason(text: str) -> str | None:
+    """Return the matched UAT/human-acceptance keyword in ``text``, else None."""
+    m = _UAT_STOP_RE.search(text or "")
     return m.group(1) if m else None
 # Separators between a unit's short label and its description ("PR1 — parser").
 _UNIT_SEPARATORS = ("—", "–", " - ")
@@ -186,14 +202,18 @@ def find_unit_row(rows: list[TrackerRow], target: str) -> int | None:
     return None
 
 
-def decision_for_unit(plan_text: str, unit: str) -> AdvanceDecision:
+def decision_for_unit(plan_text: str, unit: str, *, run_to_uat: bool = False) -> AdvanceDecision:
     """Decision for running ``unit`` (the next unit to do).
 
     Default is ``auto`` (revised 2026-06-23). Forces ``gate`` when: the unit's text
     is an always-stop (irreversible/outward) category, its marker is an explicit
     ``gate:``, or — when a tracker is present — the unit cannot be located in it
     (ambiguity about *where she is* still fails closed). A plan with no tracker /
-    no ``Advance`` column defaults to ``auto`` for the located unit."""
+    no ``Advance`` column defaults to ``auto`` for the located unit.
+
+    ``run_to_uat`` (AUTO_ADVANCE_UNTIL_UAT) suppresses the UAT / human-acceptance
+    always-stop so Sophia runs UAT/test units herself. PR merges are never gated
+    here; prod deploys / TDG / money always are."""
     rows = parse_resume_tracker(plan_text)
     if rows:
         idx = find_unit_row(rows, unit)
@@ -211,10 +231,18 @@ def decision_for_unit(plan_text: str, unit: str) -> AdvanceDecision:
         marker_dec = AdvanceDecision(decision="auto")
         unit_text = unit
 
-    # An explicit gate marker wins.
+    # An explicit gate marker wins — unless run-to-UAT suppresses a purely-UAT gate
+    # (its reason names UAT/acceptance and NOT an irreversible always-stop keyword).
     if marker_dec.decision == "gate":
-        marker_dec.next_unit = next_unit
-        return marker_dec
+        if run_to_uat and _uat_stop_reason(marker_dec.gate_reason or "") and not (
+            _always_stop_reason(marker_dec.gate_reason or "")
+            or _always_stop_reason(unit_text)
+            or _always_stop_reason(unit)
+        ):
+            pass  # UAT-only gate suppressed; fall through to auto
+        else:
+            marker_dec.next_unit = next_unit
+            return marker_dec
 
     # Always-stop by rule: irreversible / outward-facing units gate even without a marker.
     reason = _always_stop_reason(unit_text) or _always_stop_reason(unit)
@@ -224,18 +252,32 @@ def decision_for_unit(plan_text: str, unit: str) -> AdvanceDecision:
             gate_reason=f"always-stop: irreversible/outward unit ({reason})",
             next_unit=next_unit,
         )
+
+    # UAT / human-acceptance gates by default; skipped in run-to-UAT mode.
+    if not run_to_uat:
+        uat_reason = _uat_stop_reason(unit_text) or _uat_stop_reason(unit)
+        if uat_reason:
+            return AdvanceDecision(
+                decision="gate",
+                gate_reason=f"always-stop: UAT/human-acceptance unit ({uat_reason})",
+                next_unit=next_unit,
+            )
+
     return AdvanceDecision(decision="auto", next_unit=next_unit)
 
 
-def next_action(plan_text: str, opened_pr: bool) -> AdvanceDecision:
+def next_action(plan_text: str, opened_pr: bool, *, run_to_uat: bool = False) -> AdvanceDecision:
     """High-level decision the brain emits at turn-end.
 
-    Fails closed to ``gate`` unless the turn clearly completed a unit (a PR was
-    opened) AND the plan's ``RESUME HERE`` points at a next unit marked ``auto``.
+    Fails closed to ``gate`` unless the turn clearly completed a unit (``opened_pr``
+    is True — a PR was opened OR merged, or, in run-to-UAT mode, the turn ran tools)
+    AND the plan's ``RESUME HERE`` points at a next unit marked ``auto``.
 
     Args:
         plan_text: the active roadmap's full markdown.
-        opened_pr: whether THIS turn opened a PR (the unit-completed signal).
+        opened_pr: whether THIS turn made progress (opened/merged a PR, or ran
+            UAT/test work under run-to-UAT).
+        run_to_uat: suppress the UAT/human-acceptance always-stop.
     """
     if not opened_pr:
         return AdvanceDecision(
@@ -249,4 +291,4 @@ def next_action(plan_text: str, opened_pr: bool) -> AdvanceDecision:
         )
     if _DONE_RE.search(resume):
         return AdvanceDecision(decision="done")
-    return decision_for_unit(plan_text, resume)
+    return decision_for_unit(plan_text, resume, run_to_uat=run_to_uat)
