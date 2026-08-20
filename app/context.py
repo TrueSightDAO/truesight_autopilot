@@ -221,7 +221,7 @@ Three classes; the tools enforce these, but know them so you don't fight the gua
    branch → PR via git_push_changes / open_fix_pr. Normal flow.
 2. **API-only DATA repos** — machine-owned caches, ledgers, transcripts, blob stores:
    treasury-cache, places-cache, contributors-cache, truesight_autopilot_transcript,
-   oracle_logs, lineage-credentials, lineage-assets, ecosystem_change_logs, .github,
+   oracle_logs, lineage-credentials, ecosystem_change_logs, .github,
    qr_codes, sunmint, store_interaction_attachments, agroverse-inventory.
    NEVER clone or branch-edit. Read via read_repo_file / raw.githubusercontent.com;
    single-file writes via upload_file_to_github (Contents API). These hold derived or
