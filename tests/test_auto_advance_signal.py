@@ -107,9 +107,9 @@ def test_signal_none_when_not_handoff(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "auto_advance", True)
     _write_plan(tmp_path)
     monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
-    # Non-handoff message + NO PR opened → nothing to advance. (Since #268 a non-handoff
-    # message that DID open a PR auto-advances via the "normal threads" fallback, so the
-    # no-PR trace is what exercises the None path here.)
+    # Non-handoff message → nothing to advance. (The plan-less "normal threads"
+    # fallback was REMOVED 2026-08-21: a thread with no plan file never auto-advances,
+    # even when it opens a PR — that fallback was the cross-thread bleed root cause.)
     assert m._compute_advance_signal([{"role": "user", "content": "hi"}], []) is None
 
 
@@ -119,3 +119,53 @@ def test_signal_none_when_plan_file_missing(monkeypatch, tmp_path):
     (tmp_path / "agentic_ai_context").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
     assert m._compute_advance_signal([HANDOFF_MSG], OPENED_PR_TRACE) is None
+
+
+# ---- Cross-thread bleed fixes (2026-08-21) ----
+
+
+def test_signal_none_when_no_plan_even_if_pr_opened(monkeypatch, tmp_path):
+    """A thread with NO plan file must NEVER auto-advance, even when it opened a
+    PR. This is the cross-thread bleed fix: without a plan there is no safe
+    'next unit' (previously the plan-less fallback emitted
+    next_unit='the next PR' which bled into other threads' plans)."""
+    monkeypatch.setattr(settings, "auto_advance", True)
+    _write_plan(
+        tmp_path
+    )  # plan file exists in context dir but history has no handoff block
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    sig = m._compute_advance_signal(
+        [{"role": "user", "content": "please fix the bug"}], OPENED_PR_TRACE
+    )
+    assert sig is None
+
+
+def test_signal_read_only_tools_are_not_progress_in_run_to_uat(monkeypatch, tmp_path):
+    """run-to-UAT mode must NOT count read-only tool calls as progress; only
+    real UAT/test tooling. Previously bool(tool_trace) made any chat turn with
+    an ssh_run/read auto-advance."""
+    monkeypatch.setattr(settings, "auto_advance", True)
+    monkeypatch.setattr(settings, "auto_advance_until_uat", True)
+    _write_plan(tmp_path)
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    trace = [
+        {"name": "ssh_run", "result": "ok"},
+        {"name": "read_repo_file", "result": "..."},
+    ]
+    sig = m._compute_advance_signal([HANDOFF_MSG], trace)
+    # plan file present + handoff, but no real progress -> gate, NOT auto
+    assert sig is None or sig["decision"] == "gate"
+
+
+def test_signal_uat_tools_are_progress_in_run_to_uat(monkeypatch, tmp_path):
+    """run-to-UAT mode counts UAT/test tooling (extract_pdf_text, run_tests) as
+    progress so UAT units still auto-advance, without treating read-only lookups
+    as progress."""
+    monkeypatch.setattr(settings, "auto_advance", True)
+    monkeypatch.setattr(settings, "auto_advance_until_uat", True)
+    _write_plan(tmp_path)
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    trace = [{"name": "extract_pdf_text", "result": "..."}]
+    sig = m._compute_advance_signal([HANDOFF_MSG], trace)
+    assert sig is not None and sig["decision"] == "auto"
+    assert sig["plan"] == "MY_PLAN.md"

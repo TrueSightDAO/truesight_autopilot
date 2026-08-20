@@ -193,7 +193,13 @@ _HANDOFF_REGISTRY_RAW = "https://raw.githubusercontent.com/TrueSightDAO/agentic_
 # actually used — silently making this resolver dead code since #128 (found
 # 2026-07-18 while investigating a thread that got a generic reply instead of
 # its plan context; see agentic_ai_context/plans/HANDOFF_REGISTRY_CONSOLIDATION_PLAN.md).
-_TERMINAL_STATUS_MARKERS = ("completed", "superseded", "demo · live", "demo·live", "stale")
+_TERMINAL_STATUS_MARKERS = (
+    "completed",
+    "superseded",
+    "demo · live",
+    "demo·live",
+    "stale",
+)
 
 
 def _handoff_plan_and_auto_start_for_thread(
@@ -233,7 +239,9 @@ def _handoff_plan_and_auto_start_for_thread(
             / "handoffs"
             / "HANDOFF_MANIFEST.md"
         )
-        result = _parse_handoff_plan_and_flags(reg.read_text(encoding="utf-8"), thread_id)
+        result = _parse_handoff_plan_and_flags(
+            reg.read_text(encoding="utf-8"), thread_id
+        )
         if result:
             return result
     except Exception:  # noqa: BLE001 — context enrichment must never break dispatch
@@ -318,7 +326,9 @@ def _parse_handoff_plan_and_flags(
             if not matched:
                 continue
             if any(
-                marker in c.lower() for c in cells for marker in _TERMINAL_STATUS_MARKERS
+                marker in c.lower()
+                for c in cells
+                for marker in _TERMINAL_STATUS_MARKERS
             ):
                 continue
             if idx < len(cells):
@@ -537,13 +547,16 @@ def download_telegram_file(file_id: str) -> str | None:
             if attempt < 3:
                 logger.info(
                     "telegram getFile returned no file_path for %s (attempt %s/3, file_size=%s), retrying...",
-                    file_id, attempt, result.get("file_size", "unknown"),
+                    file_id,
+                    attempt,
+                    result.get("file_size", "unknown"),
                 )
                 time.sleep(3 * attempt)
         else:
             logger.warning(
                 "telegram getFile returned no file_path after 3 attempts for %s: %s",
-                file_id, last_meta.text if last_meta else "no response",
+                file_id,
+                last_meta.text if last_meta else "no response",
             )
             return None
         ext = os.path.splitext(file_path)[1] or ".bin"
@@ -1141,22 +1154,21 @@ def _run_turn_with_auto_advance(
                 f"(auto-advance {auto_count}/{settings.auto_advance_max_turns}).",
                 thread_id,
             )
-            plan_ref = advance.get('plan') or 'the plan'
-            if advance.get('plan'):
-                current_msg = (
-                    f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
-                    f"RESUME HERE marker in {plan_ref} points at. "
-                    f"Do exactly that one unit (make the change, open and merge the PR "
-                    f"yourself when the unit calls for it, run any tests, report the "
-                    f"contribution, tick the resume tracker), then stop. Honor any gate "
-                    f"marker. Never deploy to production or move money on your own."
-                )
-            else:
-                current_msg = (
-                    f"[AUTO-ADVANCE] Execute only the next unit ({nxt}). "
-                    f"Open and merge the next fix PR yourself, report the contribution, "
-                    f"then stop. Never deploy to production on your own."
-                )
+            plan_ref = advance.get("plan") or "the plan"
+            # The brain only emits auto signals for plan-scoped threads (no
+            # plan-less fallback since 2026-08-21), so the synthetic turn must
+            # carry the SAME handoff prefix as the original dispatch — this
+            # re-scopes every continued turn to THIS thread's plan and prevents
+            # it from picking up units from other threads' plans.
+            current_msg = (
+                f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
+                f"RESUME HERE marker in {plan_ref} points at. "
+                f"Do exactly that one unit (make the change, open and merge the PR "
+                f"yourself when the unit calls for it, run any tests, report the "
+                f"contribution, tick the resume tracker), then stop. Honor any gate "
+                f"marker. Never deploy to production or move money on your own."
+            )
+            current_msg = _handoff_prefix(thread_id, current_msg) + current_msg
             continue
         if decision == "gate":
             reason = advance.get("gate_reason") or "(no reason given)"
@@ -1167,9 +1179,7 @@ def _run_turn_with_auto_advance(
             )
             return
         if decision == "done":
-            send_message(
-                chat_id, "✅ Plan complete — all units finished.", thread_id
-            )
+            send_message(chat_id, "✅ Plan complete — all units finished.", thread_id)
             return
         return  # unknown decision -> fail closed (stop)
 
