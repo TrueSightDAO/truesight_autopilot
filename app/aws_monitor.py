@@ -175,15 +175,15 @@ class AWSMonitor:
             try:
                 for acct in self._accounts:
                     if acct.cw:
-                        self.check_ec2_health(acct)
+                        await asyncio.to_thread(self.check_ec2_health, acct)
                     if acct.health:
-                        self.check_aws_health_events(acct)
+                        await asyncio.to_thread(self.check_aws_health_events, acct)
 
                 now = datetime.now(timezone.utc)
                 if last_cost_check is None or (now - last_cost_check).days >= 1:
                     for acct in self._accounts:
                         if acct.ce:
-                            self.check_daily_cost(acct)
+                            await asyncio.to_thread(self.check_daily_cost, acct)
                     last_cost_check = now
             except Exception as e:
                 logger.error("AWS monitor loop error: %s", e)

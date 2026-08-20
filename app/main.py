@@ -504,7 +504,11 @@ def _check_oracle_rate_limit(ip: str) -> None:
 
 @app.get("/health")
 async def health():
-    gov_data = load_governors()
+    # load_governors() can do a synchronous network fetch (cache miss / TTL
+    # expiry, up to 15s). Run it off the event loop so a slow governors fetch
+    # never stalls /health — otherwise the Telegram adapter's probe times out
+    # and misreports "Sophia is briefly restarting". (2026-08-20)
+    gov_data = await asyncio.to_thread(load_governors)
     return {
         "status": "ok",
         "version": "0.2.0",
@@ -3414,7 +3418,9 @@ async def _pending_janitor_loop():
                         continue
                     pr_num, repo = int(m.group(1)), m.group(2)
                     try:
-                        pr = gh.g.get_repo(gh._full_name(repo)).get_pull(pr_num)
+                        pr = await asyncio.to_thread(
+                            lambda: gh.g.get_repo(gh._full_name(repo)).get_pull(pr_num)
+                        )
                         if pr.state == "open":
                             cleaned.append(item)
                         else:
@@ -5169,7 +5175,9 @@ async def _branch_janitor_loop():
             total_deleted = 0
             for repo in settings.allowed_repos:
                 try:
-                    branches = gh.list_branches_matching(repo, _AUTOPILOT_BRANCH_PREFIX)
+                    branches = await asyncio.to_thread(
+                        gh.list_branches_matching, repo, _AUTOPILOT_BRANCH_PREFIX
+                    )
                 except Exception as e:
                     logger.warning("Janitor: list_branches failed on %s: %s", repo, e)
                     continue
@@ -5181,7 +5189,7 @@ async def _branch_janitor_loop():
                         continue
                     if ts > cutoff:
                         continue
-                    if gh.delete_branch(repo, b["name"]):
+                    if await asyncio.to_thread(gh.delete_branch, repo, b["name"]):
                         total_deleted += 1
             if total_deleted:
                 logger.info(
