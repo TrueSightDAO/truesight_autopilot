@@ -786,13 +786,13 @@ async def oracle_advisory(
     # 2. Build system prompt
     system_prompt = (
         "You are an advisor inside the TrueSight DAO oracle — a wise, grounded interpreter "
-        "of the I Ching for whoever just drew this cast (\"the operator\"). Your role is to "
+        'of the I Ching for whoever just drew this cast ("the operator"). Your role is to '
         "read their current hexagram (primary + relating) against the DAO's live state "
         "snapshot as background context, then produce a concise advisory for THEM.\n\n"
         "Scope, always: this reading is the operator's own individual practice — it is "
         "personal to them, not a decision, mandate, or position on behalf of the TrueSight "
         "DAO as a collective, and it does not bind or speak for any other contributor. The "
-        "snapshot is background terrain, not a brief to advise \"the DAO\" on; it exists so "
+        'snapshot is background terrain, not a brief to advise "the DAO" on; it exists so '
         "you can ground the operator's own next move in what is actually happening. Never "
         "phrase the advisory as the DAO's voice, consensus, or official direction — it is "
         "one person's reading of one moment.\n\n"
@@ -808,11 +808,11 @@ async def oracle_advisory(
         "freely) and WHO it binds (nobody but them) — not whether DAO-related areas come up.\n\n"
         "Output format:\n"
         "1) Start with one line naming whose reading this is and that it's personal, not "
-        "DAO-wide (e.g. \"Personal reading for the operator — an individual practice, not a "
-        "decision on behalf of the DAO.\").\n"
+        'DAO-wide (e.g. "Personal reading for the operator — an individual practice, not a '
+        'decision on behalf of the DAO.").\n'
         "2) A short paragraph (3-6 sentences) reading the hexagram for what it illuminates "
         "about the operator's moment.\n"
-        "3) \"Areas within the DAO you might explore today\" — 1-3 bullets naming specific "
+        '3) "Areas within the DAO you might explore today" — 1-3 bullets naming specific '
         "areas of the DAO/Agroverse ecosystem (e.g. supply chain, retail partner outreach, "
         "treasury, tooling/infrastructure, community & programs, content/reach, or a specific "
         "stalled thread or contributor relationship named in the snapshot) that resonate with "
@@ -1810,7 +1810,10 @@ def _run_tool_sync(
         _sales_item = (attributes.get("Item") or "").strip()
         if event_name.upper() == "SALES EVENT" and _sales_item:
             import re as _re
-            if not _re.match(r"^\d{4}[A-Za-z0-9_]+$", _sales_item.split(",")[0].strip()):
+
+            if not _re.match(
+                r"^\d{4}[A-Za-z0-9_]+$", _sales_item.split(",")[0].strip()
+            ):
                 return json.dumps(
                     {
                         "status": "invalid",
@@ -1894,7 +1897,10 @@ def _run_tool_sync(
                                 _args = json.loads(
                                     (_tc.get("function") or {}).get("arguments", "{}")
                                 )
-                                if _args.get("event_name", "").upper() == event_name.upper():
+                                if (
+                                    _args.get("event_name", "").upper()
+                                    == event_name.upper()
+                                ):
                                     _found_lookup = True
                                     break
                             except (json.JSONDecodeError, ValueError):
@@ -1917,7 +1923,9 @@ def _run_tool_sync(
                     # Fallback: use the in-memory catalog dicts
                     _lookup_injected = {
                         "canonical_labels": _CANONICAL_LABELS.get(event_name, []),
-                        "required_fields": _VALIDATE_REQUIRED_FIELDS.get(event_name, []),
+                        "required_fields": _VALIDATE_REQUIRED_FIELDS.get(
+                            event_name, []
+                        ),
                         "description": "",
                     }
 
@@ -2427,6 +2435,28 @@ async def _run_tool(
 # several instructions are queued for one topic and run as back-to-back turns —
 # the governor sees exactly what each turn accomplished before the next begins.
 # See agentic_ai_context/plans/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR3, invariant 7).
+# UAT/test tooling that counts as "progress" under AUTO_ADVANCE_UNTIL_UAT, so
+# UAT/test units (which may not open a PR) still auto-advance — while plain
+# read-only lookups do NOT. This keeps run-to-UAT mode from auto-advancing on
+# every chat turn (cross-thread bleed fix, 2026-08-21).
+_UAT_PROGRESS_TOOLS = {
+    "open_fix_pr",
+    "open_pr",
+    "merge_pr",
+    "extract_pdf_text",
+    "extract_docx_text",
+    "ocr_image",
+    "scan_qr_from_file",
+    "scan_qr_batch",
+    "run_tests",
+    "deploy_autopilot",
+    "gas_deploy_project",
+    "create_dao_submission",
+    "submit_contribution",
+    "upload_file_to_github",
+    "upload_local_file_to_github",
+}
+
 _SIDE_EFFECT_TOOLS = {
     "open_fix_pr",
     "merge_pr",
@@ -2529,29 +2559,32 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
     Returns None when auto-advance is off. Fails CLOSED — any error yields None
     (no auto-advance); the pure decision logic lives in app/auto_advance.next_action.
 
-    Two modes:
-    1. **Handoff threads** (plan file found via SOPHIA_HANDOFFS.md): uses the full
-       plan-based gate logic from next_action().
-    2. **Normal threads** (no plan file): if the turn opened a PR via open_fix_pr,
-       emits an auto signal with next_unit="the next PR" — this makes auto-advance
-       work on ALL threads where Sophia opens a PR, not just handoff threads."""
+    Plan-scoped only: an auto signal is emitted ONLY for threads whose history
+    carries a handoff plan file (the plan-based gate logic from next_action()).
+    Threads with no plan file NEVER auto-advance — a plain chat thread that opens
+    a PR does not wander into "the next PR" from some other plan (root cause of
+    cross-thread task bleed, fixed 2026-08-21)."""
     if not settings.auto_advance:
         return None
     try:
         plan_file = _extract_plan_file(history)
-        # "Progress" = a PR was opened OR merged this turn. In run-to-UAT mode
-        # (AUTO_ADVANCE_UNTIL_UAT) also accept any tool activity so UAT/test
-        # units that don't create PRs still auto-advance. The RESUME HERE pointer,
-        # the always-stop (deploy/money) rule, and the turn cap still bound it.
+        # "Progress" = this turn opened/merged a PR, or (in run-to-UAT mode) ran
+        # real UAT/test tooling. Read-only lookups (ssh_run, read_*, lookup_*,
+        # search_*) are NOT progress — otherwise any chat turn auto-advances
+        # (cross-thread bleed fix).
         progress_tools = {"open_fix_pr", "open_pr", "merge_pr"}
         opened_pr = any(
             (t or {}).get("name") in progress_tools for t in (tool_trace or [])
         )
         if settings.auto_advance_until_uat and not opened_pr:
-            opened_pr = bool(tool_trace)
+            opened_pr = any(
+                (t or {}).get("name") in _UAT_PROGRESS_TOOLS for t in (tool_trace or [])
+            )
         logger.info(
             "auto-advance: plan_file=%s progress=%s tool_trace_len=%d",
-            plan_file, opened_pr, len(tool_trace or []),
+            plan_file,
+            opened_pr,
+            len(tool_trace or []),
         )
         if plan_file:
             plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
@@ -2565,14 +2598,9 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
                 "next_unit": dec.next_unit,
                 "plan": plan_file,
             }
-        # Fallback for normal threads: if a PR was opened, auto-advance to the next PR.
-        if opened_pr:
-            return {
-                "decision": "auto",
-                "gate_reason": None,
-                "next_unit": "the next PR",
-                "plan": None,
-            }
+        # NO plan-scoped fallback: a thread with no plan file gets no auto signal,
+        # even if it opened a PR. Auto-advance is a plan-following behavior; without
+        # a plan there is no safe "next unit" (cross-thread bleed fix, 2026-08-21).
         return None
     except Exception:  # noqa: BLE001 — advance is best-effort; never break the turn
         logger.debug("auto-advance signal computation failed", exc_info=True)
@@ -2912,9 +2940,7 @@ async def _run_tool_round_loop(
                     converge_nudged = True
                     state["converge_reason"] = converge_reason
                     history.append(
-                        convergence_message(
-                            converge_reason, round_num, MAX_TOOL_ROUNDS
-                        )
+                        convergence_message(converge_reason, round_num, MAX_TOOL_ROUNDS)
                     )
                     logger.info(
                         "[%d] %sConvergence nudge (%s) at round %d/%d",
@@ -2943,7 +2969,9 @@ async def _run_tool_round_loop(
             round_num,
         )
         state["wanted_more_rounds"] = True
-        completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=None)
+        completion = await asyncio.to_thread(
+            client.chat, system_prompt, history, tools=None
+        )
         assistant_text = client.extract_text(completion)
 
     assistant_text, dsml_leaked = _strip_dsml(assistant_text)
@@ -2962,10 +2990,14 @@ async def _run_tool_round_loop(
             req_id,
             log_prefix,
         )
-        completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=None)
+        completion = await asyncio.to_thread(
+            client.chat, system_prompt, history, tools=None
+        )
         return client.extract_text(completion)
 
-    assistant_text, forced_again = await _ensure_nonempty_final(assistant_text, _force_clean)
+    assistant_text, forced_again = await _ensure_nonempty_final(
+        assistant_text, _force_clean
+    )
     if forced_again:
         state["wanted_more_rounds"] = True
 
@@ -3958,9 +3990,7 @@ async def chat(request: Request):
                 ):
                     yield event
             except Exception as exc:
-                logger.exception(
-                    "SSE stream crashed for session %s", session_id[:16]
-                )
+                logger.exception("SSE stream crashed for session %s", session_id[:16])
                 yield _sse_event(
                     "error",
                     f"internal error — the thread self-heals, please resend: {exc}",
@@ -4359,7 +4389,9 @@ async def _chat_blocking_turn(
     try:
         for _round in range(max_rounds):
             round_num = _round + 1
-            completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=tools)
+            completion = await asyncio.to_thread(
+                client.chat, system_prompt, history, tools=tools
+            )
             message = completion["choices"][0].get("message", {})
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
@@ -4440,7 +4472,9 @@ async def _chat_blocking_turn(
             logger.info(
                 "Forcing text-only completion (rounds exhausted / blank / leaked)"
             )
-            completion = await asyncio.to_thread(client.chat, system_prompt, history, tools=None)
+            completion = await asyncio.to_thread(
+                client.chat, system_prompt, history, tools=None
+            )
             return client.extract_text(completion)
 
         assistant_text, _forced_again = await _ensure_nonempty_final(
