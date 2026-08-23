@@ -199,6 +199,7 @@ class Settings(BaseSettings):
         "tribomirimbahia",
         "lineage-engine",
         "sunmint_farmer",
+        "sunmint_mobile",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
