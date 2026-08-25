@@ -40,6 +40,13 @@ from typing import Any
 
 logger = logging.getLogger("autopilot.tools.gas_deploy_project")
 
+from ..deploy_ledger import (  # noqa: E402
+    acquire_lease,
+    append_deploy_record,
+    check_lease,
+    close_lease,
+)
+
 DEFAULT_TOKENOMICS_ROOT = "/opt/truesight_autopilot/context/tokenomics"
 DEPLOY_SCRIPT_REL = "scripts/deploy_gas_project.py"
 # Cap on stdout/stderr returned to the model — clasp push output can be
@@ -58,6 +65,7 @@ def _resolve_clasp_oauth() -> str | None:
     """Vault-first: try clasp_oauth_gary, fall back to ~/.clasprc-gary.json."""
     try:
         from ..vault import Vault
+
         v = Vault()
         if v.is_initialized():
             v.initialize()
@@ -75,6 +83,7 @@ def _resolve_clasp_oauth() -> str | None:
     gary_clasp = Path.home() / ".clasprc-gary.json"
     if gary_clasp.is_file():
         import shutil
+
         shutil.copy2(gary_clasp, Path.home() / ".clasprc.json")
         logger.info("Fell back to .clasprc-gary.json")
         return gary_clasp.read_text()
@@ -155,6 +164,36 @@ def gas_deploy_project(
             cmd.append("--no-hooks")
     # else: dry-run (no flags)
 
+    # DEPLOY_PUSH_SOP Phase 2: soft-lock lease before any real push.
+    lease_id = ""
+    if push:
+        lease = check_lease("clasp", script_id)
+        if lease.get("status") == "blocked":
+            return _err(
+                "push blocked by a live deploy lease (DEPLOY_PUSH_SOP)",
+                leases=lease.get("leases", []),
+                fix=(
+                    "Another agent is mid-push on this scriptId. Wait for them "
+                    "to close the lease (TTL 30 min), or alert the owner."
+                ),
+            )
+        if lease.get("status") == "error":
+            logger.warning(
+                "deploy_ledger: lease check failed open for %s: %s",
+                script_id,
+                lease.get("reason", lease.get("error", "?")),
+            )
+        acq = acquire_lease("clasp", script_id, " ".join(cmd))
+        if acq.get("status") == "success":
+            lease_id = acq.get("lease_id", "")
+            logger.info(
+                "deploy_ledger: acquired lease %s for clasp %s", lease_id, script_id
+            )
+        else:
+            logger.warning(
+                "deploy_ledger: lease acquire failed (fail-open): %s", acq.get("error")
+            )
+
     try:
         result = subprocess.run(
             cmd,
@@ -196,6 +235,33 @@ def gas_deploy_project(
         with_hooks,
         result.returncode,
     )
+
+    # DEPLOY_PUSH_SOP Phase 2: append the audit record + close the lease.
+    if push:
+        rec = append_deploy_record(
+            agent="sophia",
+            target_type="clasp",
+            target_id=script_id,
+            action=" ".join(cmd),
+            result="success" if result.returncode == 0 else "failure",
+            evidence_url=(
+                f"https://github.com/TrueSightDAO/tokenomics/tree/main/google_app_scripts/{script_id}"
+                if result.returncode == 0
+                else ""
+            ),
+            lease_id=lease_id,
+            notes=(
+                "gas_deploy_project autopilot tool (DEPLOY_PUSH_SOP Phase 2)"
+                if result.returncode == 0
+                else f"exit={result.returncode} stderr={stderr[:300]}"
+            ),
+        )
+        if rec.get("status") != "success":
+            logger.warning("deploy_ledger: record append failed: %s", rec.get("error"))
+        if lease_id:
+            close_lease(lease_id)
+        payload["deploy_ledger"] = rec
+
     return json.dumps(payload)
 
 

@@ -322,6 +322,7 @@ def _check_deploy_marker() -> None:
             data = json.load(f)
         commit = data.get("commit", "unknown")
         elapsed = data.get("elapsed_seconds", 0)
+        lease_id = data.get("lease_id", "")
         logger.info(
             "Deploy marker found: commit=%s elapsed=%.1fs — sending notification",
             commit,
@@ -333,6 +334,31 @@ def _check_deploy_marker() -> None:
         from .telegram_adapter import send_deploy_notification
 
         send_deploy_notification(commit, elapsed)
+
+        # DEPLOY_PUSH_SOP Phase 2: close the deploy lease + append the success
+        # record now that the new process is up (the old process was killed
+        # mid-restart, so this runs in the fresh boot).
+        if lease_id:
+            try:
+                from .deploy_ledger import append_deploy_record, close_lease
+
+                rec = append_deploy_record(
+                    agent="sophia",
+                    target_type="ec2",
+                    target_id="autopilot",
+                    action="deploy_autopilot (local)",
+                    result="success",
+                    evidence_url=f"https://github.com/TrueSightDAO/truesight_autopilot/commit/{commit}",
+                    lease_id=lease_id,
+                    notes=f"autopilot restarted onto {commit}; marker processed on boot.",
+                )
+                if rec.get("status") != "success":
+                    logger.warning(
+                        "deploy_ledger: record append failed: %s", rec.get("error")
+                    )
+                close_lease(lease_id)
+            except Exception as e:
+                logger.warning("deploy_ledger: close/record failed on boot: %s", e)
     except Exception as e:
         logger.warning("Failed to process deploy marker: %s", e)
     finally:

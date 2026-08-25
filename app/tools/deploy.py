@@ -80,6 +80,7 @@ import time
 import paramiko
 
 from ..config import settings
+from ..deploy_ledger import acquire_lease, check_lease
 
 logger = logging.getLogger("autopilot.deploy")
 
@@ -87,6 +88,7 @@ logger = logging.getLogger("autopilot.deploy")
 # docstring above; set by phase-one (parent), read by phase-two (subprocess).
 _PHASE_ENV = "AUTOPILOT_DEPLOY_PHASE"
 _PHASE_TWO = "phase_two_post_pull"
+_LEASE_ENV = "AUTOPILOT_DEPLOY_LEASE"
 
 
 class DeployError(Exception):
@@ -257,7 +259,9 @@ def _is_process_stale(remote_dir: str) -> bool:
         with open("/proc/self/stat") as f:
             stat_parts = f.read().split()
         if len(stat_parts) < 22:
-            logger.debug("Cannot determine process start time — /proc/self/stat has <22 fields")
+            logger.debug(
+                "Cannot determine process start time — /proc/self/stat has <22 fields"
+            )
             return False
         proc_start_jiffies = int(stat_parts[21])  # field 22, 0-indexed = 21
 
@@ -283,7 +287,9 @@ def _is_process_stale(remote_dir: str) -> bool:
         # the running process is definitely stale.
         ref_file = os.path.join(remote_dir, "app", "tools", "deploy.py")
         if not os.path.isfile(ref_file):
-            logger.debug("Reference file %s not found — cannot check staleness", ref_file)
+            logger.debug(
+                "Reference file %s not found — cannot check staleness", ref_file
+            )
             return False
         file_mtime = os.path.getmtime(ref_file)
 
@@ -313,11 +319,13 @@ def _is_process_stale(remote_dir: str) -> bool:
         return False
 
 
-def _write_deploy_marker(commit: str, elapsed: float) -> None:
+def _write_deploy_marker(commit: str, elapsed: float, lease_id: str = "") -> None:
     """Write a marker file so the NEW process can notify the governor on startup.
 
     Written just before systemctl restart so the new process (which starts
     moments later) can read it, send a Telegram notification, and delete it.
+    The lease_id (DEPLOY_PUSH_SOP Phase 2) is carried through the restart so
+    the new process can close the lease + append the success record.
     """
     import json as _json
     from datetime import datetime, timezone
@@ -328,6 +336,7 @@ def _write_deploy_marker(commit: str, elapsed: float) -> None:
             "commit": commit,
             "elapsed_seconds": round(elapsed, 1),
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "lease_id": lease_id,
         }
         with open(marker, "w") as f:
             _json.dump(data, f)
@@ -412,7 +421,7 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     # can notify the governor that the deploy completed successfully.
     commit = _get_current_commit(remote_dir)
     elapsed = round(time.time() - start, 1)
-    _write_deploy_marker(commit, elapsed)
+    _write_deploy_marker(commit, elapsed, lease_id=os.environ.get(_LEASE_ENV, ""))
     subprocess.Popen(
         [
             _ELEVATE,
@@ -612,7 +621,42 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
             logger.info(
                 "Re-exec'ing phase-two subprocess with freshly-pulled deploy.py"
             )
+            # DEPLOY_PUSH_SOP Phase 2: soft-lock lease on this host before the
+            # re-exec/restart. If another agent holds a live lease, refuse.
+            lease_id = ""
+            lease = check_lease("ec2", "autopilot")
+            if lease.get("status") == "blocked":
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": (
+                            "deploy blocked by a live deploy lease (DEPLOY_PUSH_SOP): "
+                            f"{lease.get('leases')}. Wait for the other agent to close "
+                            "it (TTL 30 min) or alert the owner."
+                        ),
+                        "steps": steps,
+                    }
+                )
+            if lease.get("status") == "error":
+                logger.warning(
+                    "deploy_ledger: lease check failed open: %s",
+                    lease.get("reason", lease.get("error", "?")),
+                )
+            acq = acquire_lease("ec2", "autopilot", "deploy_autopilot (local)")
+            if acq.get("status") == "success":
+                lease_id = acq.get("lease_id", "")
+                logger.info(
+                    "deploy_ledger: acquired lease %s for ec2/autopilot", lease_id
+                )
+            else:
+                logger.warning(
+                    "deploy_ledger: lease acquire failed (fail-open): %s",
+                    acq.get("error"),
+                )
+
             child_env = {**os.environ, _PHASE_ENV: _PHASE_TWO}
+            if lease_id:
+                child_env[_LEASE_ENV] = lease_id
             # Use python -c rather than -m so we work regardless of how the
             # parent was launched (uvicorn module, direct script, REPL).
             child = subprocess.run(

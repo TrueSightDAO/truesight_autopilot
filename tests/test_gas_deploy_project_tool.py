@@ -13,6 +13,21 @@ from app.tools import gas_deploy_project as gdp
 @pytest.fixture(autouse=True)
 def _reset_env(monkeypatch):
     monkeypatch.delenv("GAS_DEPLOY_TOKENOMICS_ROOT", raising=False)
+    # Hermetic DEPLOY_PUSH_SOP ledger: never hit the real GitHub API in tests.
+    monkeypatch.setattr(
+        gdp, "check_lease", lambda *a, **k: {"status": "clear", "leases_checked": 0}
+    )
+    monkeypatch.setattr(
+        gdp,
+        "acquire_lease",
+        lambda *a, **k: {"status": "success", "lease_id": "L-TEST-000"},
+    )
+    monkeypatch.setattr(
+        gdp,
+        "append_deploy_record",
+        lambda *a, **k: {"status": "success", "record_id": "R-TEST-000"},
+    )
+    monkeypatch.setattr(gdp, "close_lease", lambda *a, **k: {"status": "success"})
 
 
 def test_missing_script_id():

@@ -16,11 +16,20 @@ CNAME breaks the production domain binding. Escalate to the governor instead.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
 
 from ..config import settings
+
+logger = logging.getLogger("autopilot.tools.sync_beta_to_prod")
+from ..deploy_ledger import (
+    acquire_lease,
+    append_deploy_record,
+    check_lease,
+    close_lease,
+)
 from ..tool_registry import ToolSpec
 
 
@@ -38,6 +47,30 @@ def sync_beta_to_prod(prod_repo: str) -> dict[str, Any]:
             "message": "TRUESIGHT_DAO_AUTOPILOT PAT not configured.",
         }
 
+    # DEPLOY_PUSH_SOP Phase 2: soft-lock lease on the prod repo before sync.
+    lease_id = ""
+    lease = check_lease("prod-sync", prod_repo)
+    if lease.get("status") == "blocked":
+        return {
+            "status": "error",
+            "message": (
+                "push blocked by a live deploy lease (DEPLOY_PUSH_SOP). "
+                f"Leases: {lease.get('leases', [])}. Wait for them to close (TTL 30 min)."
+            ),
+        }
+    if lease.get("status") == "error":
+        logger.warning(
+            "deploy_ledger: lease check failed open for %s: %s",
+            prod_repo,
+            lease.get("reason", lease.get("error", "?")),
+        )
+    acq = acquire_lease("prod-sync", prod_repo, f"sync_beta_to_prod {prod_repo}")
+    if acq.get("status") == "success":
+        lease_id = acq.get("lease_id", "")
+        logger.info(
+            "deploy_ledger: acquired lease %s for prod-sync %s", lease_id, prod_repo
+        )
+
     url = f"https://api.github.com/repos/TrueSightDAO/{prod_repo}/merge-upstream"
     headers = {
         "Authorization": f"token {settings.github_pat}",
@@ -50,14 +83,41 @@ def sync_beta_to_prod(prod_repo: str) -> dict[str, Any]:
 
     if resp.status_code == 200:
         data = resp.json()
+        rec = append_deploy_record(
+            agent="sophia",
+            target_type="prod-sync",
+            target_id=prod_repo,
+            action=f"sync_beta_to_prod {prod_repo}",
+            result="success",
+            evidence_url=f"https://github.com/TrueSightDAO/{prod_repo}/commits/main",
+            lease_id=lease_id,
+            notes="sync_beta_to_prod autopilot tool (DEPLOY_PUSH_SOP Phase 2)",
+        )
+        if rec.get("status") != "success":
+            logger.warning("deploy_ledger: record append failed: %s", rec.get("error"))
+        if lease_id:
+            close_lease(lease_id)
         return {
             "status": "ok",
             "prod_repo": prod_repo,
             "beta_source": settings.prod_repos[prod_repo],
             "merge_type": data.get("merge_type"),
             "message": data.get("message", "Synced."),
+            "deploy_ledger": rec,
         }
     if resp.status_code == 409:
+        append_deploy_record(
+            agent="sophia",
+            target_type="prod-sync",
+            target_id=prod_repo,
+            action=f"sync_beta_to_prod {prod_repo}",
+            result="failure",
+            evidence_url="",
+            lease_id=lease_id,
+            notes="409 merge conflict — histories diverged; DO NOT force. Human reconcile.",
+        )
+        if lease_id:
+            close_lease(lease_id)
         return {
             "status": "conflict",
             "message": (
@@ -66,6 +126,18 @@ def sync_beta_to_prod(prod_repo: str) -> dict[str, Any]:
                 "the governor — a human must reconcile."
             ),
         }
+    append_deploy_record(
+        agent="sophia",
+        target_type="prod-sync",
+        target_id=prod_repo,
+        action=f"sync_beta_to_prod {prod_repo}",
+        result="failure",
+        evidence_url="",
+        lease_id=lease_id,
+        notes=f"GitHub API {resp.status_code}: {resp.text[:200]}",
+    )
+    if lease_id:
+        close_lease(lease_id)
     return {
         "status": "error",
         "message": f"GitHub API {resp.status_code}: {resp.text[:300]}",
