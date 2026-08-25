@@ -35,7 +35,9 @@ except Exception as exc:  # noqa: BLE001
 
 def _wire_common(monkeypatch, calls: list[str]):
     monkeypatch.setattr(dep, "_get_current_commit", lambda remote_dir: "abc1234")
-    monkeypatch.setattr(dep, "_write_deploy_marker", lambda commit, elapsed: None)
+    monkeypatch.setattr(
+        dep, "_write_deploy_marker", lambda commit, elapsed, lease_id="": None
+    )
 
     class _FakePopen:
         def __init__(self, *a, **k):
