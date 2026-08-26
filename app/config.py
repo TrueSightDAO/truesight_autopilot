@@ -210,6 +210,8 @@ class Settings(BaseSettings):
         "lineage-assets",
         "sunmint_farmer",
         "sunmint_mobile",
+        "sunmint_beta",
+        "sunmint_prod",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
