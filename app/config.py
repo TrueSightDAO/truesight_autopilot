@@ -268,6 +268,7 @@ class Settings(BaseSettings):
         "agroverse_shop_prod": "agroverse_shop_beta",
         "truesight_me_prod": "truesight_me_beta",
         "dapp_prod": "dapp_beta",
+        "sunmint_prod": "sunmint_beta",
     }
 
     # Gmail
