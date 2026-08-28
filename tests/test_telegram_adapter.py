@@ -122,7 +122,7 @@ def test_call_chat_whitespace_response_falls_back(monkeypatch):
     # in this hermetic test there is no brain, so force the readiness gate open.
     monkeypatch.setattr(ta, "_wait_for_brain", lambda: True)
 
-    def fake_post(url, json=None, headers=None, timeout=None):  # noqa: A002
+    def fake_post(url, json=None, headers=None, timeout=None):
         return httpx.Response(
             200, json={"response": "  \n "}, request=httpx.Request("POST", url)
         )
@@ -509,4 +509,210 @@ def test_verified_governor_admitted_through_gate(monkeypatch, sent):
     ta.handle_message(
         _dm(user_id=777, text="what shipped?"), allowed={111}, public_key="PK"
     )
+    assert captured.get("hit") is True
+
+
+# ── Group mention-gating (2026-08-28) ──
+
+
+def _group_msg(user_id=111, chat_id=555, text="hello", entities=None, reply_from=None):
+    m = {
+        "chat": {"id": chat_id, "type": "group"},
+        "from": {"id": user_id, "username": "someuser"},
+        "text": text,
+    }
+    if entities:
+        m["entities"] = entities
+    if reply_from:
+        m["reply_to_message"] = {"from": {"username": reply_from}}
+    return m
+
+
+@pytest.fixture(autouse=True)
+def _reset_mention_gating_caches():
+    ta._own_username_cache = None
+    ta._member_count_cache.clear()
+    yield
+    ta._own_username_cache = None
+    ta._member_count_cache.clear()
+
+
+def test_bot_was_mentioned_true_on_entity_match(monkeypatch):
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    msg = _group_msg(
+        text="@nelanco_bot hi there",
+        entities=[{"type": "mention", "offset": 0, "length": 12}],
+    )
+    assert ta._bot_was_mentioned(msg) is True
+
+
+def test_bot_was_mentioned_false_on_other_mention(monkeypatch):
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    msg = _group_msg(
+        text="@someone_else hi there",
+        entities=[{"type": "mention", "offset": 0, "length": 13}],
+    )
+    assert ta._bot_was_mentioned(msg) is False
+
+
+def test_bot_was_mentioned_true_on_reply_to_own_message(monkeypatch):
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    msg = _group_msg(text="ok thanks", reply_from="nelanco_bot")
+    assert ta._bot_was_mentioned(msg) is True
+
+
+def test_bot_was_mentioned_false_with_no_signal(monkeypatch):
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    msg = _group_msg(text="just chatting")
+    assert ta._bot_was_mentioned(msg) is False
+
+
+def test_should_always_respond_private_chat():
+    assert ta._should_always_respond("private", 555) is True
+
+
+def test_should_always_respond_two_person_group(monkeypatch):
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 2)
+    assert ta._should_always_respond("group", 555) is True
+
+
+def test_should_always_respond_large_group(monkeypatch):
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 12)
+    assert ta._should_always_respond("supergroup", 555) is False
+
+
+def test_should_always_respond_fails_open_on_unknown_count(monkeypatch):
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: None)
+    assert ta._should_always_respond("group", 555) is True
+
+
+def test_get_member_count_caches(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_get(url, params=None, timeout=None):
+        calls["n"] += 1
+        return httpx.Response(
+            200, json={"result": 7}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(ta.httpx, "get", fake_get)
+    assert ta._get_member_count(555) == 7
+    assert ta._get_member_count(555) == 7
+    assert calls["n"] == 1  # second call hit the cache
+
+
+def test_log_observed_message_posts_to_chat_observe(monkeypatch):
+    monkeypatch.setattr(ta, "create_jwt", lambda pk: "tok")
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.update(url=url, json=json, headers=headers)
+        return httpx.Response(200, json={"status": "logged"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ta.httpx, "post", fake_post)
+    ta.log_observed_message("just chatting", "tg:555:0", "PK", "Alice")
+    assert captured["url"].endswith("/chat/observe")
+    assert captured["json"] == {"message": "just chatting", "sender_name": "Alice"}
+    assert captured["headers"]["X-Session-Id"] == "tg:555:0"
+
+
+def test_handle_message_large_group_unmentioned_logs_only(monkeypatch, sent):
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 5)
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    logged = {}
+    monkeypatch.setattr(
+        ta,
+        "log_observed_message",
+        lambda message, session_id, public_key, sender_name: logged.update(
+            message=message, session_id=session_id, sender_name=sender_name
+        ),
+    )
+    called_chat = {"n": 0}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda *a, **k: called_chat.__setitem__("n", called_chat["n"] + 1) or ("", True),
+    )
+    ta.handle_message(
+        _group_msg(user_id=111, chat_id=555, text="just chatting about lunch"),
+        allowed={111},
+        public_key="PK",
+    )
+    assert logged["message"] == "just chatting about lunch"
+    assert logged["sender_name"] == "someuser"
+    assert called_chat["n"] == 0
+    assert sent == []  # no reply sent for unmentioned chatter
+
+
+def test_handle_message_large_group_mentioned_calls_chat(monkeypatch, sent):
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 5)
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    monkeypatch.setattr(ta, "log_observed_message", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("should not log-only when mentioned")
+    ))
+    captured = {}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
+            captured.update(hit=True) or ("", True)
+        ),
+    )
+    msg = _group_msg(
+        user_id=111,
+        chat_id=555,
+        text="@nelanco_bot what's the status?",
+        entities=[{"type": "mention", "offset": 0, "length": 12}],
+    )
+    ta.handle_message(msg, allowed={111}, public_key="PK")
+    assert captured.get("hit") is True
+
+
+def test_handle_message_two_person_group_always_responds(monkeypatch, sent):
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 2)
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    monkeypatch.setattr(ta, "log_observed_message", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("should not log-only in a 2-person group")
+    ))
+    captured = {}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
+            captured.update(hit=True) or ("", True)
+        ),
+    )
+    ta.handle_message(
+        _group_msg(user_id=111, chat_id=555, text="no mention needed here"),
+        allowed={111},
+        public_key="PK",
+    )
+    assert captured.get("hit") is True
+
+
+def test_handle_message_large_group_attachment_always_processed(monkeypatch, sent):
+    # Attachments bypass the mention gate entirely — always full processing.
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 8)
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    monkeypatch.setattr(ta, "log_observed_message", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("attachments must not be gated")
+    ))
+    monkeypatch.setattr(
+        ta, "download_telegram_file", lambda fid: "/tmp/tg_attachments/x.jpg"
+    )
+    captured = {}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
+            captured.update(hit=True) or ("", True)
+        ),
+    )
+    msg = {
+        "chat": {"id": 555, "type": "group"},
+        "from": {"id": 111, "username": "someuser"},
+        "photo": [{"file_id": "small"}, {"file_id": "big"}],
+        "caption": "look at this",
+    }
+    ta.handle_message(msg, allowed={111}, public_key="PK")
     assert captured.get("hit") is True

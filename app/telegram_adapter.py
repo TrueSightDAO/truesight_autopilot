@@ -510,6 +510,106 @@ def get_updates(offset: int | None) -> list[dict[str, Any]]:
     return resp.json().get("result", [])
 
 
+# ── Group mention-gating (2026-08-28) ───────────────────────────────────────
+# In a group with 3+ members, only respond when explicitly @-mentioned or
+# replied-to; unmentioned chatter is still logged (via /chat/observe) so it's
+# available as context next time she IS addressed, but costs no LLM tokens.
+# DMs and 2-person groups (her + one human) always get a full response —
+# every message there is implicitly directed at her.
+
+_own_username_cache: str | None = None
+_member_count_cache: dict[int, tuple[int, float]] = {}
+_MEMBER_COUNT_TTL = 300.0  # seconds; group membership rarely changes minute-to-minute
+
+
+def _resolve_own_username() -> str | None:
+    """getMe, cached for the process lifetime — used to detect @-mentions."""
+    global _own_username_cache
+    if _own_username_cache is not None:
+        return _own_username_cache
+    try:
+        resp = httpx.get(_api("getMe"), timeout=10.0)
+        resp.raise_for_status()
+        username = resp.json().get("result", {}).get("username")
+        if username:
+            _own_username_cache = username
+            return username
+    except Exception as e:  # noqa: BLE001
+        logger.warning("getMe failed while resolving own username: %s", e)
+    return None
+
+
+def _bot_was_mentioned(msg: dict[str, Any]) -> bool:
+    """True if this message @-mentions the bot by username, or is a reply to
+    one of the bot's own messages — both count as "directed at her"."""
+    username = _resolve_own_username()
+    if username:
+        text = msg.get("text") or msg.get("caption") or ""
+        entities = msg.get("entities") or msg.get("caption_entities") or []
+        needle = f"@{username}".lower()
+        for ent in entities:
+            if ent.get("type") != "mention":
+                continue
+            start, length = ent.get("offset", 0), ent.get("length", 0)
+            if text[start : start + length].lower() == needle:
+                return True
+    reply_to = msg.get("reply_to_message") or {}
+    reply_from = (reply_to.get("from") or {}).get("username")
+    if username and reply_from and reply_from.lower() == username.lower():
+        return True
+    return False
+
+
+def _get_member_count(chat_id: int) -> int | None:
+    now = time.time()
+    cached = _member_count_cache.get(chat_id)
+    if cached is not None and (now - cached[1]) < _MEMBER_COUNT_TTL:
+        return cached[0]
+    try:
+        resp = httpx.get(
+            _api("getChatMemberCount"), params={"chat_id": chat_id}, timeout=10.0
+        )
+        resp.raise_for_status()
+        count = resp.json().get("result")
+        if isinstance(count, int):
+            _member_count_cache[chat_id] = (count, now)
+            return count
+    except Exception as e:  # noqa: BLE001
+        logger.warning("getChatMemberCount failed for chat_id=%s: %s", chat_id, e)
+    return None
+
+
+def _should_always_respond(chat_type: str | None, chat_id: int) -> bool:
+    """DMs and 2-person groups (bot + one human) always get a full response;
+    larger groups need an explicit mention. Unknown member count fails open
+    (always respond) rather than silently going quiet on a real question."""
+    if chat_type == "private":
+        return True
+    if chat_type not in ("group", "supergroup"):
+        return True
+    count = _get_member_count(chat_id)
+    if count is None:
+        return True
+    return count <= 2
+
+
+def log_observed_message(
+    message: str, session_id: str, public_key: str, sender_name: str
+) -> None:
+    """POST to /chat/observe — appends to session history, no model call."""
+    try:
+        token = create_jwt(public_key)
+        headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
+        httpx.post(
+            f"{settings.autopilot_chat_url.rstrip('/')}/chat/observe",
+            json={"message": message, "sender_name": sender_name},
+            headers=headers,
+            timeout=15.0,
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort; never block the poll loop
+        logger.warning("log_observed_message failed: %s", e)
+
+
 def extract_attachment_file_id(msg: dict[str, Any]) -> str | None:
     """Return the Telegram file_id of a photo (largest size) or document, if any."""
     photos = msg.get("photo")
@@ -1634,6 +1734,24 @@ def handle_message(
                 )
                 send_message(chat_id, "⛔ Not authorized.", thread_id)
             return
+
+    # Group mention-gating: in a group with 3+ members, stay quiet unless
+    # explicitly mentioned/replied-to. Attachments and voice notes are
+    # deliberate enough actions that they always get full processing — this
+    # gate only applies to plain unmentioned chatter. Log it as context
+    # (no LLM call, no reply) rather than dropping it silently.
+    if (
+        not attachment_file_id
+        and not voice_file_id
+        and text
+        and not _should_always_respond(chat_type, chat_id)
+        and not _bot_was_mentioned(msg)
+    ):
+        if public_key is not None:
+            session_id = build_session_id(chat_id, thread_id)
+            sender_name = display_name or username or str(user_id)
+            log_observed_message(text, session_id, public_key, sender_name)
+        return
 
     # Voice note → transcribe locally (faster-whisper)
     is_voice = bool(voice_file_id and not text)
