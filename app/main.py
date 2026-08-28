@@ -4011,6 +4011,41 @@ async def chat(request: Request):
     )
 
 
+@app.post("/chat/observe")
+async def chat_observe(request: Request):
+    """Passively log a group message into session history WITHOUT calling the
+    model. Used by the Telegram adapter's mention-gating (2026-08-28): in a
+    group with 3+ members, unmentioned chatter is appended here instead of
+    going through /chat, so it's available as context the next time she IS
+    mentioned — at zero LLM-token cost. Attachments and DMs/2-person groups
+    always go through the normal /chat path, never this one.
+    """
+    body = await request.json()
+    public_key = verify_jwt(request)
+    user_message = body.get("message", "")
+    sender_name = body.get("sender_name") or "someone"
+    if not user_message:
+        raise HTTPException(status_code=400, detail="message is required.")
+
+    session_id = _session_key(public_key, request)
+    async with _session_lock(session_id):
+        _append_observed_message(session_id, user_message, sender_name)
+    return {"status": "logged"}
+
+
+def _append_observed_message(session_id: str, message: str, sender_name: str) -> None:
+    """Core logic for /chat/observe, split out so it's unit-testable without
+    a FastAPI Request — mirrors the _run_tool extraction pattern elsewhere."""
+    history = _load_or_create_session(session_id)
+    history.append(
+        {
+            "role": "user",
+            "content": f"[observed, not directed at you — {sender_name}]: {message}",
+        }
+    )
+    _log_session(session_id, history)
+
+
 @app.post("/chat/upload")
 async def chat_upload(
     request: Request,
