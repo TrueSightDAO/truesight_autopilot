@@ -162,7 +162,8 @@ def _delete_file(path: str, message: str) -> dict[str, Any]:
         sha = head.json().get("sha")
         if not sha:
             return {"status": "error", "error": f"no sha for {path}"}
-        resp = httpx.delete(
+        resp = httpx.request(
+            "DELETE",
             _api_url(path),
             headers=_headers(),
             json={"message": message, "sha": sha, "branch": "main"},
