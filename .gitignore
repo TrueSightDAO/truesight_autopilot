@@ -16,6 +16,11 @@ config/google/*.json
 # Gmail OAuth tokens (per-account) — also out-of-band. See config/gmail/README.md.
 config/gmail/*.json
 
+# YouTube OAuth — upload creds + helper script for the admin@truesight.me channel.
+# Whole dir ignored so deploy's `git clean -fd` never wipes the token (same trap as
+# the 2026-06-15 vault wipe below). See config/youtube/README.md.
+config/youtube/
+
 # .env backups (created automatically by some flows) — never commit
 .env.backup.*
 .req-hash
