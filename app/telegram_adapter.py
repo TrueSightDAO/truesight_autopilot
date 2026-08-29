@@ -2288,12 +2288,16 @@ def _reaction_reactor_authorized(user_id: int, allowed: set[int]) -> bool:
 
 
 def handle_message_reaction(reaction: dict[str, Any], allowed: set[int]) -> None:
-    """Process a Telegram message_reaction update (PR1: log + verdict only).
+    """Process a Telegram message_reaction update (PR1 receive + PR3 resume).
 
     Parses chat_id, message_id, the reacting user and the new_reaction emoji
-    set, then logs the reaction plus the authorized/go verdict. PR3 turns a
-    "go" verdict by an authorized user on a resume-awaiting message into a
-    synthesized go-signal; nothing is resumed here yet.
+    set, logs the reaction plus the authorized/go verdict, and — when an
+    AUTHORIZED user gives a "go" verdict (deny-list, decision 0.1) on a
+    message we flagged resume-awaiting (decision 0.2) — synthesizes a
+    ``[emoji-go: <emoji> from user <id>] go for it`` text and enqueues it
+    through the SAME per-thread lock + turn path a typed go-signal uses
+    (decision 0.6: additive; text go-signals keep working unchanged). The
+    registry entry is consumed on lookup (decision 0.4).
     """
     chat = reaction.get("chat") or {}
     chat_id = chat.get("id")
@@ -2322,6 +2326,82 @@ def handle_message_reaction(reaction: dict[str, Any], allowed: set[int]) -> None
         verdict,
         authorized,
     )
+    if authorized and verdict == "go":
+        _maybe_resume_from_reaction(chat_id, message_id, user_id, emoji)
+
+
+def _reaction_resume_entry_thread(entry: dict | None) -> int | None:
+    """Parse the registry's stored thread_id (a str) back to int, or None."""
+    if not entry:
+        return None
+    tid = str(entry.get("thread_id") or "").strip()
+    if tid.lstrip("-").isdigit():
+        return int(tid)
+    return None
+
+
+def _maybe_resume_from_reaction(
+    chat_id: int, message_id: int, user_id: int, emoji: str
+) -> None:
+    """PR3: turn an authorized 'go' reaction on a resume-awaiting message into a
+    synthesized go-signal, exactly as if the governor had typed it.
+
+    The registry lookup is CONSUMING — a successful resume marks the entry used
+    (decision 0.4). No resume happens when: the message is not resume-awaiting
+    (lookup returns None), the registry has no usable thread, or no governor
+    identity is configured (same guard as the text path).
+    """
+    entry = resume_registry.lookup(message_id)
+    if not entry:
+        return  # not resume-awaiting -> never a resume trigger (decision 0.2)
+    thread_id = _reaction_resume_entry_thread(entry)
+    if thread_id is None:
+        logger.info(
+            "emoji go-signal dropped: no usable thread in registry entry %s", entry
+        )
+        return
+    public_key = resolve_governor_public_key()
+    if public_key is None:
+        send_message(
+            chat_id, "⚠️ No governor identity configured — cannot resume.", thread_id
+        )
+        return
+    resume_text = (entry.get("text") or "").strip()
+    suffix = f" — original resume text: {resume_text[:200]}" if resume_text else ""
+    go_text = f"[emoji-go: {emoji} from user {user_id}] go for it{suffix}"
+    dispatch = _handoff_prefix(thread_id, go_text) + go_text
+    if thread_id:
+        dispatch = (
+            f"[Telegram context: chat_id={chat_id}, thread_id={thread_id}] {dispatch}"
+        )
+    else:
+        dispatch = f"[Telegram context: chat_id={chat_id}] {dispatch}"
+    session_id = build_session_id(chat_id, thread_id)
+    logger.info(
+        "emoji go-signal: msg=%s thread=%s emoji=%r -> dispatching turn",
+        message_id,
+        thread_id,
+        emoji,
+    )
+    try:
+        lock = _thread_dispatch_lock(chat_id, thread_id)
+        with lock:
+            _run_turn_with_auto_advance(
+                chat_id,
+                thread_id,
+                dispatch,
+                session_id,
+                public_key,
+                is_voice=False,
+                transcribed_text=None,
+            )
+    except Exception:  # noqa: BLE001 — never let a reaction crash the poll loop
+        logger.exception("emoji go-signal dispatch failed")
+        send_message(
+            chat_id,
+            "⚠️ Failed to resume after your reaction — please retype the go-signal.",
+            thread_id,
+        )
 
 
 def _handle_reaction_safe(reaction: dict[str, Any], allowed: set[int]) -> None:

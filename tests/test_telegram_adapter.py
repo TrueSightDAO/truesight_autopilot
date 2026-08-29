@@ -890,3 +890,134 @@ def test_send_message_no_flag_does_not_register(monkeypatch):
     )
     ta.send_message(-1001, "plain message", thread_id=15728, resume_awaiting=False)
     assert marked == []  # not flagged -> nothing registered
+
+
+def _reaction(emoji="👍", user_id=111, message_id=9001):
+    return {
+        "chat": {"id": -1001, "type": "supergroup"},
+        "message_id": message_id,
+        "user": {"id": user_id, "is_bot": False},
+        "date": 1700000000,
+        "old_reaction": [],
+        "new_reaction": [{"type": "emoji", "emoji": emoji}],
+    }
+
+
+def test_reaction_go_resumes_from_registry(monkeypatch):
+    """Authorized go reaction on a resume-awaiting message -> enqueues a turn."""
+    import app.resume_registry as rr
+
+    resumed = {}
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    monkeypatch.setattr(
+        rr,
+        "lookup",
+        lambda mid: (
+            {"thread_id": "15728", "text": "✅ Ready — reply go for it"}
+            if mid == 9001
+            else None
+        ),
+    )
+    monkeypatch.setattr(ta, "resolve_governor_public_key", lambda: "PUBKEY")
+    monkeypatch.setattr(
+        ta,
+        "_run_turn_with_auto_advance",
+        lambda chat_id, thread_id, dispatch_text, session_id, public_key, is_voice, transcribed_text: (
+            resumed.update(
+                {
+                    "chat_id": chat_id,
+                    "thread_id": thread_id,
+                    "dispatch_text": dispatch_text,
+                    "session_id": session_id,
+                    "public_key": public_key,
+                }
+            )
+        ),
+    )
+    ta.handle_message_reaction(_reaction("👍"), allowed={111})
+    assert resumed["thread_id"] == 15728
+    assert "[emoji-go: 👍 from user 111] go for it" in resumed["dispatch_text"]
+    assert (
+        "[Telegram context: chat_id=-1001, thread_id=15728]" in resumed["dispatch_text"]
+    )
+
+
+def test_reaction_thumbsdown_not_a_go(monkeypatch):
+    """👎 is explicitly NOT a go (decision 0.1) — nothing is enqueued."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    called = []
+    monkeypatch.setattr(
+        rr,
+        "lookup",
+        lambda mid: called.append(mid) or {"thread_id": "15728", "text": "x"},
+    )
+    monkeypatch.setattr(
+        ta, "_run_turn_with_auto_advance", lambda *a, **k: called.append("RUN")
+    )
+    ta.handle_message_reaction(_reaction("👎"), allowed={111})
+    assert "RUN" not in called  # lookup never even consulted for a blocked emoji
+
+
+def test_reaction_on_non_resume_message_ignored(monkeypatch):
+    """Reaction on a message NOT flagged resume-awaiting -> no resume (decision 0.2)."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    monkeypatch.setattr(rr, "lookup", lambda mid: None)  # not resume-awaiting
+    monkeypatch.setattr(ta, "resolve_governor_public_key", lambda: "PUBKEY")
+    ran = []
+    monkeypatch.setattr(
+        ta, "_run_turn_with_auto_advance", lambda *a, **k: ran.append(1)
+    )
+    ta.handle_message_reaction(_reaction("👍", message_id=7777), allowed={111})
+    assert ran == []
+
+
+def test_reaction_non_allowed_reactor_ignored(monkeypatch):
+    """Non-allowlisted reactor -> no resume (decision 0.3)."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: False)
+    monkeypatch.setattr(rr, "lookup", lambda mid: {"thread_id": "15728", "text": "x"})
+    ran = []
+    monkeypatch.setattr(
+        ta, "_run_turn_with_auto_advance", lambda *a, **k: ran.append(1)
+    )
+    ta.handle_message_reaction(_reaction("👍", user_id=999), allowed={111})
+    assert ran == []
+
+
+def test_reaction_unusable_thread_dropped(monkeypatch):
+    """Registry entry with no usable thread -> dropped, no turn."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    monkeypatch.setattr(rr, "lookup", lambda mid: {"thread_id": "", "text": "x"})
+    ran = []
+    monkeypatch.setattr(
+        ta, "_run_turn_with_auto_advance", lambda *a, **k: ran.append(1)
+    )
+    ta.handle_message_reaction(_reaction("👍"), allowed={111})
+    assert ran == []
+
+
+def test_reaction_no_governor_identity_notifies(monkeypatch):
+    """No governor identity configured -> notify in the recovered thread, no turn."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    monkeypatch.setattr(rr, "lookup", lambda mid: {"thread_id": "15728", "text": "x"})
+    monkeypatch.setattr(ta, "resolve_governor_public_key", lambda: None)
+    sent = []
+    monkeypatch.setattr(
+        ta, "send_message", lambda cid, text, tid=None: sent.append((cid, text, tid))
+    )
+    ran = []
+    monkeypatch.setattr(
+        ta, "_run_turn_with_auto_advance", lambda *a, **k: ran.append(1)
+    )
+    ta.handle_message_reaction(_reaction("👍"), allowed={111})
+    assert ran == []
+    assert any("No governor identity configured" in t for _, t, _ in sent)
