@@ -80,3 +80,60 @@ def test_deploy_defers_when_a_thread_is_busy(monkeypatch):
 def test_idle_means_no_busy_threads(monkeypatch):
     monkeypatch.setattr(m, "_active_streams", {}, raising=False)
     assert dep._other_threads_busy(caller_session="tg:me:1") == []
+
+
+# ── (C) process-staleness detection ──────────────────────────────────────────
+
+
+def test_newest_source_mtime_finds_latest(tmp_path):
+    import time
+
+    app_dir = tmp_path / "app"
+    scripts_dir = tmp_path / "scripts"
+    app_dir.mkdir()
+    scripts_dir.mkdir()
+
+    old = app_dir / "old.py"
+    old.write_text("x")
+    os.utime(old, (1_000_000, 1_000_000))
+
+    latest = scripts_dir / "latest.py"
+    latest.write_text("y")
+    os.utime(latest, (2_000_000, 2_000_000))
+
+    # Newest on disk, but inside a .venv dir — must be excluded
+    venv_dir = app_dir / ".venv"
+    venv_dir.mkdir()
+    venv_file = venv_dir / "lib.py"
+    venv_file.write_text("z")
+    os.utime(venv_file, (9_000_000, 9_000_000))
+
+    assert dep._newest_source_mtime(str(tmp_path)) == 2_000_000
+
+
+def test_service_pids_parses_systemctl(monkeypatch):
+    class _FakeCompleted:
+        stdout = "424242\n"
+
+    monkeypatch.setattr(dep.subprocess, "run", lambda *a, **k: _FakeCompleted())
+    assert dep._service_pids() == [424242] * 4
+
+
+def test_is_process_stale_detects_old_service(monkeypatch):
+    import time
+
+    now = time.time()
+    monkeypatch.setattr(dep, "_service_pids", lambda: [424242])
+    monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now - 100)
+    monkeypatch.setattr(dep, "_newest_source_mtime", lambda rd: now)
+    assert dep._is_process_stale("/some/remote/dir") is True
+
+
+def test_is_process_stale_fresh_when_started_after(monkeypatch):
+    import time
+
+    now = time.time()
+    monkeypatch.setattr(dep, "_service_pids", lambda: [424242])
+    monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now + 10)
+    monkeypatch.setattr(dep, "_newest_source_mtime", lambda rd: now)
+    assert dep._is_process_stale("/some/remote/dir") is False
