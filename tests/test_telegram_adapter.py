@@ -893,8 +893,10 @@ def test_send_message_auto_flags_resume_here_text(monkeypatch):
     assert marked == [(888, 15991)]  # auto-flagged from text
 
 
-def test_send_message_plain_text_not_auto_flagged(monkeypatch):
-    """Ordinary turn report without the marker stays unflagged."""
+def test_send_message_plain_text_also_flagged(monkeypatch):
+    """Every posted message is resume-awaiting now (2026-08-29: dropped the
+    RESUME HERE / resume_awaiting gate) — any positive emoji reaction on ANY
+    of her messages should mean "continue", not just specially-marked ones."""
     import app.resume_registry as rr
 
     monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
@@ -908,10 +910,11 @@ def test_send_message_plain_text_not_auto_flagged(monkeypatch):
         rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
     )
     ta.send_message(-1001, "All done, nothing to resume.", thread_id=15991)
-    assert marked == []  # no marker -> not flagged
+    assert marked == [999]
 
 
-def test_send_message_no_flag_does_not_register(monkeypatch):
+def test_send_message_resume_awaiting_false_still_registers(monkeypatch):
+    """resume_awaiting=False no longer opts out — flagging is unconditional now."""
     import app.resume_registry as rr
 
     monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
@@ -925,7 +928,7 @@ def test_send_message_no_flag_does_not_register(monkeypatch):
         rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
     )
     ta.send_message(-1001, "plain message", thread_id=15728, resume_awaiting=False)
-    assert marked == []  # not flagged -> nothing registered
+    assert marked == [777]
 
 
 # ── edit_message_text: RESUME HERE auto-flag (PR #336 — the edit path) ──
@@ -952,8 +955,9 @@ def test_edit_message_text_auto_flags_resume_here(monkeypatch):
     assert (4242, 15991) in marked  # the EDITED message_id is what the reaction hits
 
 
-def test_edit_message_text_plain_not_flagged(monkeypatch):
-    """Ordinary edit (progress heartbeat, no marker) stays unflagged."""
+def test_edit_message_text_plain_also_flagged(monkeypatch):
+    """Every edited message is resume-awaiting too now (2026-08-29: dropped
+    the RESUME HERE gate) — as long as it has a thread to resume into."""
     import app.resume_registry as rr
 
     monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
@@ -967,7 +971,7 @@ def test_edit_message_text_plain_not_flagged(monkeypatch):
         rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
     )
     ta.edit_message_text(-1001, 4243, "Still working on it…", 15991)
-    assert marked == []
+    assert marked == [4243]
 
 
 def test_edit_message_text_without_thread_not_flagged(monkeypatch):

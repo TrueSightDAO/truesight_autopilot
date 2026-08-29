@@ -122,11 +122,11 @@ def create_telegram_topic(
                 },
                 timeout=_TIMEOUT,
             )
+            # Unconditional (dropped the resume_awaiting/looks_resume_awaiting
+            # regex gate, 2026-08-29): any positive-emoji reaction on any
+            # posted message means "continue", not just specially-flagged ones.
             posted = bool(pr.json().get("ok"))
-            if posted and (
-                resume_awaiting
-                or resume_registry.looks_resume_awaiting(kickoff_message)
-            ):
+            if posted:
                 mid = (pr.json().get("result") or {}).get("message_id")
                 if mid:
                     resume_registry.mark_resume_awaiting(

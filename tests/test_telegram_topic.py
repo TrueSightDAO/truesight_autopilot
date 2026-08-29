@@ -194,7 +194,10 @@ def test_post_auto_flags_resume_here_text(monkeypatch):
     assert marked == [(557, 15728, "Dependency ready. 📌 RESUME HERE")]
 
 
-def test_post_plain_text_not_auto_flagged(monkeypatch):
+def test_post_plain_text_also_flagged(monkeypatch):
+    """Every post is resume-awaiting now (2026-08-29: dropped the RESUME HERE
+    / resume_awaiting gate) — any positive emoji reaction on any of her
+    messages should mean "continue", not just specially-marked ones."""
     import app.resume_registry as rr
 
     monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "dummy", raising=False)
@@ -213,26 +216,4 @@ def test_post_plain_text_not_auto_flagged(monkeypatch):
         chat_id="-1003919341801",
         resume_awaiting=False,
     )
-    assert marked == []
-
-
-def test_post_no_flag_does_not_register(monkeypatch):
-    import app.resume_registry as rr
-
-    monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "dummy", raising=False)
-    monkeypatch.setattr(
-        tp.httpx,
-        "post",
-        lambda *a, **k: _FakeResp({"ok": True, "result": {"message_id": 556}}),
-    )
-    marked = []
-    monkeypatch.setattr(
-        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
-    )
-    tp.post_to_telegram_topic(
-        message="plain update",
-        thread_id=15728,
-        chat_id="-1003919341801",
-        resume_awaiting=False,
-    )
-    assert marked == []
+    assert marked == [558]
