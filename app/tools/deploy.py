@@ -449,15 +449,27 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     commit = _get_current_commit(remote_dir)
     elapsed = round(time.time() - start, 1)
     _write_deploy_marker(commit, elapsed, lease_id=os.environ.get(_LEASE_ENV, ""))
+    # truesight-autopilot MUST be LAST in this list (2026-08-29 fix): this
+    # `systemctl restart` command is itself a child process of
+    # truesight-autopilot (spawned via this very subprocess.Popen call from
+    # inside the running brain process). Restarting truesight-autopilot
+    # tears down its whole process tree -- if it's processed before the
+    # other three units, that kills this systemctl client mid-command,
+    # aborting the rest of the restart list. Observed live 2026-08-29: after
+    # a deploy, truesight-autopilot showed the new commit's ActiveEnterTimestamp
+    # but truesight-autopilot-telegram/-watchdog and truesight-vault were all
+    # still running the PREVIOUS deploy's process, silently stuck on old code
+    # (e.g. the emoji-reaction go-signal fixes never reached the Telegram
+    # polling process at all, even though `git log` on disk showed them).
     subprocess.Popen(
         [
             _ELEVATE,
             "systemctl",
             "restart",
-            "truesight-autopilot",
             "truesight-autopilot-telegram",
             "truesight-autopilot-watchdog",
             "truesight-vault",
+            "truesight-autopilot",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
