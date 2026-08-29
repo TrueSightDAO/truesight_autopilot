@@ -1042,6 +1042,47 @@ def test_reaction_go_resumes_from_registry(monkeypatch):
     )
 
 
+def test_reaction_go_does_not_deadlock_on_thread_lock(monkeypatch):
+    """Regression test (2026-08-29): _maybe_resume_from_reaction used to wrap
+    _run_turn_with_auto_advance() in its OWN `with lock:`, but that function
+    acquires the SAME per-thread lock itself on every loop iteration -- a
+    plain (non-reentrant) threading.Lock double-acquired from the same thread
+    blocks forever, silently, with no exception. Every previous test in this
+    file mocks _run_turn_with_auto_advance() entirely, so none of them could
+    have caught this: this one exercises the REAL function (only mocking the
+    innermost network call) and fails via timeout if the deadlock returns."""
+    import threading
+
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    monkeypatch.setattr(
+        rr,
+        "lookup",
+        lambda mid: (
+            {"thread_id": "15728", "text": "ready"} if mid == 9001 else None
+        ),
+    )
+    monkeypatch.setattr(ta, "resolve_governor_public_key", lambda: "PUBKEY")
+    monkeypatch.setattr(ta.settings, "auto_advance", False, raising=False)
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda *a, **k: ("ok", True),
+    )
+
+    done = threading.Event()
+
+    def run():
+        ta.handle_message_reaction(_reaction("👍"), allowed={111})
+        done.set()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    finished = done.wait(timeout=5)
+    assert finished, "handle_message_reaction deadlocked (see 2026-08-29 fix)"
+
+
 def test_reaction_thumbsdown_not_a_go(monkeypatch):
     """👎 is explicitly NOT a go (decision 0.1) — nothing is enqueued."""
     import app.resume_registry as rr
