@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Plot the TrueSight DAO cacao sourcing network map from REAL coordinates.
+"""Plot the TrueSight DAO cacao sourcing network map from REAL coordinates,
+with per-site role + constraint annotations.
 
-Replaces the old Gemini-generated AI map (pins were decorative, not geocoded).
+Replaces the old Gemini-generated AI map (pins were decorative, not geocoded)
+and annotates each location's constraint (per CACAO_SOURCING_NETWORK_OVERVIEW.md).
 
 Dependencies: matplotlib, a Natural Earth 50m GeoJSON (auto-downloaded once
 if missing). Output: cacao_sourcing_network_map.png.
@@ -20,18 +22,24 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.patches import FancyArrowPatch  # noqa: E402
+from matplotlib.patches import Circle, FancyArrowPatch  # noqa: E402
 
 NE_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson"
 NE_CACHE = Path("/tmp/ne50_countries.geojson")
 
-# name -> (lat, lng, role) — geocoded via OSM Nominatim, 2026-08-29
+# name, lat, lng, role, constraint, label offset (dx, dy in degrees)
+# Geocoded via OSM Nominatim 2026-08-29; constraints per CACAO_SOURCING_NETWORK_OVERVIEW.md
 SITES = [
-    ("Manicoré (AM)", -5.8046180, -61.2894830, "exploratory source"),
-    ("Altamira (PA)", -3.2040650, -52.2099610, "beans supplier (CEPOTX)"),
-    ("Itabuna (BA)", -14.7931730, -39.2750341, "conversion + export (Coopercabruca)"),
-    ("Ilhéus (BA)", -14.7925990, -39.0453843, "exporter / warehouse (Black King)"),
-    ("Dongguan (CN)", 23.0183568, 113.7452332, "destination market (Elizabeth Wong)"),
+    ("Manicoré (AM)", -5.804618, -61.289483, "exploratory source",
+     "no logistics / fermentation / freight infra known", 0.9, 1.6),
+    ("Altamira (PA)", -3.204065, -52.209961, "beans supplier (CEPOTX)",
+     "beans only · NO conversion · needs CN-side warehouse", 0.9, 1.6),
+    ("Itabuna (BA)", -14.793173, -39.275034, "conversion + export (Coopercabruca)",
+     "members-only · NO warehousing · exact spec upfront", -2.2, 2.2),
+    ("Ilhéus (BA)", -14.792599, -39.045384, "exporter / warehouse (Black King)",
+     "⚠ CNPJ INAPTA · NO export NF-e — BLOCKER", 0.9, -2.6),
+    ("Dongguan (CN)", 23.018357, 113.745233, "destination market (Elizabeth Wong)",
+     "SKU spec pending", -10.5, -3.2),
 ]
 
 
@@ -66,6 +74,28 @@ def _plot_polys(ax, polys: list, **kw) -> None:
             ax.fill([p[0] for p in hole], [p[1] for p in hole], color="white", zorder=2.1)
 
 
+def _annotate(ax, site, pin_color, is_blocker=False) -> None:
+    name, lat, lng, role, constraint, dx, dy = site
+    label = "\n".join([name, role, constraint])
+    ax.plot(lng, lat, "o", ms=11, mfc=pin_color, mec="white", mew=1.6, zorder=6)
+    if is_blocker:
+        ring = Circle((lng, lat), 2.1, fill=False, ec="#c0392b", lw=1.4, alpha=0.9, zorder=5)
+        ax.add_patch(ring)
+    ax.annotate(
+        label,
+        xy=(lng, lat),
+        xytext=(lng + dx, lat + dy),
+        fontsize=8.2,
+        color="#4a2a10",
+        zorder=7,
+        ha="left",
+        va="bottom",
+        linespacing=1.35,
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=pin_color, alpha=0.93, lw=1.1),
+        arrowprops=dict(arrowstyle="-", color="#888888", lw=0.8, alpha=0.7),
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("output", nargs="?", default="/tmp/cacao_sourcing_network_map.png")
@@ -78,36 +108,19 @@ def main() -> int:
         print("error: could not extract Brazil/China outlines from GeoJSON", file=sys.stderr)
         return 1
 
-    fig, ax = plt.subplots(figsize=(14, 8), dpi=160)
+    fig, ax = plt.subplots(figsize=(14, 8.2), dpi=160)
     ax.set_facecolor("#f4f9f4")
     _plot_polys(ax, brazil, color="#d5ecd4", edgecolor="#3e7d4e", linewidth=1.2, zorder=2)
     _plot_polys(ax, china, color="#fde8d7", edgecolor="#c97a3d", linewidth=1.2, zorder=2)
 
-    for name, lat, lng, role in SITES:
+    for site in SITES:
+        name, lat, lng, role, constraint, dx, dy = site
         if lng < -20:  # Brazil
-            ax.plot(lng, lat, "o", ms=11, mfc="#c0392b", mec="white", mew=1.6, zorder=6)
-            ax.annotate(
-                name,
-                xy=(lng, lat),
-                xytext=(lng + 0.4, lat + 0.6),
-                fontsize=9.5,
-                fontweight="bold",
-                color="#5a2d0c",
-                zorder=7,
-                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#c0392b", alpha=0.92, lw=0.8),
-            )
+            pin_color = "#c0392b"
         else:  # China
-            ax.plot(lng, lat, "o", ms=11, mfc="#e67e22", mec="white", mew=1.6, zorder=6)
-            ax.annotate(
-                name,
-                xy=(lng, lat),
-                xytext=(lng - 8.5, lat - 2.2),
-                fontsize=9.5,
-                fontweight="bold",
-                color="#5a2d0c",
-                zorder=7,
-                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#e67e22", alpha=0.92, lw=0.8),
-            )
+            pin_color = "#e67e22"
+        is_blocker = "BLOCKER" in constraint
+        _annotate(ax, site, pin_color, is_blocker=is_blocker)
 
     # sourcing flow arrow Brazil -> China
     br_ring = brazil[0][0]
@@ -150,11 +163,17 @@ def main() -> int:
         pad=18,
     )
     ax.text(
-        24,
-        47,
-        "Plotted from real coordinates (OSM Nominatim) — not AI-generated",
+        24, 47,
+        "Plotted from real coordinates (OSM Nominatim) — not AI-generated · constraints per 29 Aug 2026 network doc",
         fontsize=9.5,
         color="#666666",
+        ha="center",
+    )
+    ax.text(
+        24, -32.5,
+        "⚠ = export blocker (Ilhéus: Black King CNPJ INAPTA) · red = Brazil network · orange = destination (China)",
+        fontsize=9,
+        color="#555555",
         ha="center",
     )
     ax.set_xticks([])
