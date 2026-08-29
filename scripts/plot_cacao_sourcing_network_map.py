@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Plot the TrueSight DAO cacao sourcing network map from REAL coordinates,
-with per-site role + constraint annotations.
+numbered pins + legend panel (no on-map text boxes -> zero label overlap).
 
-Replaces the old Gemini-generated AI map (pins were decorative, not geocoded)
-and annotates each location's constraint (per CACAO_SOURCING_NETWORK_OVERVIEW.md).
+Replaces the old Gemini-generated AI map and the earlier on-map annotation
+layout (whose Bahia labels overlapped). Pin numbers 1-5 reference the legend.
 
 Dependencies: matplotlib, a Natural Earth 50m GeoJSON (auto-downloaded once
 if missing). Output: cacao_sourcing_network_map.png.
