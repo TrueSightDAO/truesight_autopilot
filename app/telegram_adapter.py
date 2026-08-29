@@ -548,6 +548,32 @@ def _resolve_own_username() -> str | None:
     return None
 
 
+def _strip_bot_mention(msg: dict[str, Any], text: str) -> str:
+    """Remove the bot's own @mention entity from *text*, if present.
+
+    Group mention-gating (2026-08-28) requires @-mentioning the bot in groups
+    with 3+ members, but nothing stripped that mention before the text was
+    dispatched onward — so e.g. a role-selection reply of "@truesight_autopilot_bot 7"
+    never matched resolve_role()'s short alias list ("7"), permanently stuck
+    the role prompt in a loop (found 2026-08-29). Uses the message's own
+    mention entity (exact offset/length), not a blind string replace, so a
+    literal "@word" elsewhere in the text (an email, another handle) is never
+    touched.
+    """
+    username = _resolve_own_username()
+    if not username:
+        return text
+    entities = msg.get("entities") or msg.get("caption_entities") or []
+    needle = f"@{username}".lower()
+    for ent in entities:
+        if ent.get("type") != "mention":
+            continue
+        start, length = ent.get("offset", 0), ent.get("length", 0)
+        if text[start : start + length].lower() == needle:
+            return (text[:start] + text[start + length :]).strip()
+    return text
+
+
 def _bot_was_mentioned(msg: dict[str, Any]) -> bool:
     """True if this message @-mentions the bot by username, or is a reply to
     one of the bot's own messages — both count as "directed at her"."""
@@ -1910,7 +1936,7 @@ def handle_message(
 
     # Voice messages: give the assistant channel context so it does not assume the DApp
     # and knows its reply is spoken back. Not part of the transcript shown to the user.
-    dispatch_text = text
+    dispatch_text = _strip_bot_mention(msg, text) if not is_voice else text
     if is_voice:
         dispatch_text = (
             text
