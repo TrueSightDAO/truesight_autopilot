@@ -86,8 +86,6 @@ def test_idle_means_no_busy_threads(monkeypatch):
 
 
 def test_newest_source_mtime_finds_latest(tmp_path):
-    import time
-
     app_dir = tmp_path / "app"
     scripts_dir = tmp_path / "scripts"
     app_dir.mkdir()
