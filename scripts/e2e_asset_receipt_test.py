@@ -23,6 +23,7 @@ Exit code 0 = PASS (guard held + self-clean verified), 1 = FAIL.
 """
 
 import datetime
+import json
 import os
 import sys
 import time
@@ -104,7 +105,9 @@ def delete_offchain_legs(marker: str) -> int:
 
 
 def main() -> int:
-    marker = "E2E QA Asset (Test " + datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S") + ")"
+    marker = (
+        "E2E QA Asset (Test " + datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S") + ")"
+    )
     attrs = {
         "Currency": marker,
         "Amount": "1",
@@ -117,8 +120,12 @@ def main() -> int:
     resp = client.submit("ASSET RECEIPT EVENT", attrs)
     body = getattr(resp, "text", "")
     print(f"      HTTP {getattr(resp, 'status_code', resp)} {body[:200]}")
-    if '"signature_verification": "success"' not in body:
-        print("FAIL: signature verification did not succeed")
+    try:
+        resp_json = json.loads(body)
+    except Exception:
+        resp_json = {}
+    if resp_json.get("status") != "ok" or resp_json.get("signature_verification") != "success":
+        print(f"FAIL: signature verification did not succeed (body: {body[:200]})")
         return 1
 
     print("[2/6] Firing ingest webhook (Telegram Chat Logs -> audit + offchain)")
@@ -146,7 +153,9 @@ def main() -> int:
 
     print("[4/6] Verifying QA guard: no Currencies rate row created")
     if find_currency_row(marker):
-        print("FAIL: QA guard broken - a Currencies rate row was created for a (Test ...) currency")
+        print(
+            "FAIL: QA guard broken - a Currencies rate row was created for a (Test ...) currency"
+        )
         return 1
     print("      PASS: no Currencies rate row (guard held)")
 
