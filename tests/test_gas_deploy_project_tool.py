@@ -179,6 +179,30 @@ def test_output_truncation(monkeypatch, tmp_path):
     assert len(out["stdout"]) <= gdp._MAX_OUTPUT_CHARS
 
 
+def test_deployment_id_passed_when_push(monkeypatch, tmp_path):
+    """deployment_id must be forwarded as --deployment-id <id> to the deploy script."""
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "deploy_gas_project.py").write_text("# fake")
+    monkeypatch.setattr(gdp, "_resolve_tokenomics_root", lambda: tmp_path)
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="pushed + repoint", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = json.loads(
+        gdp.gas_deploy_project("1Dj3-fake", push=True, deployment_id="AKfycbzLIVE")
+    )
+    assert out["status"] == "ok"
+    assert "--deployment-id" in captured["cmd"]
+    assert "AKfycbzLIVE" in captured["cmd"]
+    assert out["deployment_id"] == "AKfycbzLIVE"
+
+
 def test_tool_spec_in_registry():
     """Regression: the tool is auto-discovered by the capability manifest."""
     from app.tool_registry import discover_tools
