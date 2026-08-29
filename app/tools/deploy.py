@@ -240,33 +240,65 @@ def _capture_forensic_evidence() -> dict:
     }
 
 
-def _is_process_stale(remote_dir: str) -> bool:
-    """Check if the running process is stale relative to source files on disk.
+# systemd services that must be restarted together on a deploy. A merge-PR
+# auto-pull may restart only SOME of them (e.g. truesight-autopilot but not
+# truesight-autopilot-telegram), leaving the others running pre-merge code, so
+# staleness must be checked per-service rather than against deploy.py alone.
+_SERVICE_NAMES = (
+    "truesight-autopilot",
+    "truesight-autopilot-telegram",
+    "truesight-autopilot-watchdog",
+    "truesight-vault",
+)
 
-    Reads the process start time from /proc/self/stat (field 22, start time in
-    clock ticks since boot) and compares it to the mtime of a key source file
-    (app/tools/deploy.py). If the process started BEFORE the file was last
-    modified, the process is running old code and needs a restart — even if
-    HEAD matches origin/main.
 
-    Returns True if the process is stale (should proceed with deploy),
-    False if the process is fresh enough (no restart needed).
+def _service_pids() -> list[int]:
+    """Read the MainPID of each truesight systemd service via systemctl.
+
+    Returns a list of live pids (>1; pid 1 = systemd means the unit is not
+    running an actual service process). Returns [] on any failure so callers
+    can fall back to checking their own process.
+    """
+    pids: list[int] = []
+    for svc in _SERVICE_NAMES:
+        try:
+            r = subprocess.run(
+                ["systemctl", "show", svc, "-p", "MainPID", "--value"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception as e:
+            logger.debug("systemctl show %s failed: %s", svc, e)
+            continue
+        if r.returncode != 0:
+            logger.debug("systemctl show %s exited %s", svc, r.returncode)
+            continue
+        try:
+            pid = int(r.stdout.strip())
+        except ValueError:
+            continue
+        if pid > 1:
+            pids.append(pid)
+    return pids
+
+
+def _proc_start_epoch(pid: int) -> float | None:
+    """Return a process's start time as a unix timestamp, or None.
+
+    starttime (field 22 of /proc/<pid>/stat) is in clock ticks since boot;
+    add btime from /proc/stat and divide by SC_CLK_TCK to get epoch seconds.
     """
     try:
-        # ── Get process start time (jiffies since boot) from /proc/self/stat ──
-        # Field 22 (1-indexed) is starttime in clock ticks. /proc/self/stat
-        # format: pid (comm) state ppid ... (field 22 = starttime)
-        with open("/proc/self/stat") as f:
+        with open(f"/proc/{pid}/stat") as f:
             stat_parts = f.read().split()
         if len(stat_parts) < 22:
             logger.debug(
-                "Cannot determine process start time — /proc/self/stat has <22 fields"
+                "Cannot determine start time — /proc/%s/stat has <22 fields", pid
             )
-            return False
+            return None
         proc_start_jiffies = int(stat_parts[21])  # field 22, 0-indexed = 21
 
-        # ── Get boot time (seconds since epoch) ──────────────────────────────
-        # /proc/stat has "btime <unix_timestamp>" line
         with open("/proc/stat") as f:
             for line in f:
                 if line.startswith("btime "):
@@ -274,49 +306,85 @@ def _is_process_stale(remote_dir: str) -> bool:
                     break
             else:
                 logger.debug("Cannot determine boot time — no btime in /proc/stat")
-                return False
+                return None
 
-        # ── Get CLK_TCK (clock ticks per second) ────────────────────────────
         clk_tck = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
-
-        # ── Compute process start time as unix timestamp ─────────────────────
-        proc_start_epoch = boot_time + (proc_start_jiffies / clk_tck)
-
-        # ── Get mtime of a key source file ───────────────────────────────────
-        # Use app/tools/deploy.py as the reference — if this file changed,
-        # the running process is definitely stale.
-        ref_file = os.path.join(remote_dir, "app", "tools", "deploy.py")
-        if not os.path.isfile(ref_file):
-            logger.debug(
-                "Reference file %s not found — cannot check staleness", ref_file
-            )
-            return False
-        file_mtime = os.path.getmtime(ref_file)
-
-        # ── Compare ──────────────────────────────────────────────────────────
-        # If the process started more than 2 seconds before the file was
-        # modified, it's stale. The 2s margin accounts for sub-second timing
-        # jitter between the two measurements.
-        stale = proc_start_epoch < (file_mtime - 2.0)
-        if stale:
-            logger.info(
-                "Process stale: started at %.1f, file mtime %.1f (diff=%.1fs)",
-                proc_start_epoch,
-                file_mtime,
-                file_mtime - proc_start_epoch,
-            )
-        else:
-            logger.debug(
-                "Process fresh: started at %.1f, file mtime %.1f (diff=%.1fs)",
-                proc_start_epoch,
-                file_mtime,
-                file_mtime - proc_start_epoch,
-            )
-        return stale
-
+        return boot_time + (proc_start_jiffies / clk_tck)
     except Exception as e:
-        logger.warning("Process-staleness check failed (%s) — assuming fresh", e)
+        logger.debug("Cannot determine start time for pid %s: %s", pid, e)
+        return None
+
+
+def _newest_source_mtime(remote_dir: str) -> float:
+    """Newest mtime of any *.py under app/ and scripts/ (0.0 if none).
+
+    Skips directories named .venv or __pycache__ so vendored/bytecode files
+    never count as a source change.
+    """
+    newest = 0.0
+    for subdir in ("app", "scripts"):
+        base = os.path.join(remote_dir, subdir)
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in (".venv", "__pycache__")]
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                try:
+                    newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+                except OSError:
+                    continue
+    return newest
+
+
+def _is_process_stale(remote_dir: str) -> bool:
+    """Check if any truesight service process is running old code.
+
+    Compares each service's process start time (from systemctl MainPID +
+    /proc/<pid>/stat) against the newest mtime of any source file under
+    app/ and scripts/. If a service started more than 2s BEFORE the newest
+    source change, it is running pre-change code and needs a restart — even
+    if HEAD matches origin/main (a merge-PR auto-pull can update disk and
+    restart only SOME services, leaving e.g. the telegram adapter on old code).
+
+    Returns True if ANY service is stale (should proceed with deploy),
+    False if every service started after the newest source change.
+    """
+    newest_mtime = _newest_source_mtime(remote_dir)
+    if newest_mtime <= 0:
+        logger.debug(
+            "No source files found under %s — cannot check staleness", remote_dir
+        )
         return False
+
+    pids = _service_pids()
+    if not pids:
+        logger.debug(
+            "No systemd service pids found — falling back to own pid %s", os.getpid()
+        )
+        pids = [os.getpid()]
+
+    stale = False
+    for pid in pids:
+        start = _proc_start_epoch(pid)
+        if start is None:
+            continue
+        if start < (newest_mtime - 2.0):
+            logger.info(
+                "Process stale: pid %s started at %.1f, newest source mtime "
+                "%.1f (diff=%.1fs)",
+                pid,
+                start,
+                newest_mtime,
+                newest_mtime - start,
+            )
+            stale = True
+    if not stale:
+        logger.debug(
+            "All service processes fresh — newest source mtime %.1f", newest_mtime
+        )
+    return stale
 
 
 def _write_deploy_marker(commit: str, elapsed: float, lease_id: str = "") -> None:
