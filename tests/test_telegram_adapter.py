@@ -928,6 +928,66 @@ def test_send_message_no_flag_does_not_register(monkeypatch):
     assert marked == []  # not flagged -> nothing registered
 
 
+# ── edit_message_text: RESUME HERE auto-flag (PR #336 — the edit path) ──
+
+
+def test_edit_message_text_auto_flags_resume_here(monkeypatch):
+    """A short turn-report is delivered by EDITING the status message — the edited
+    text carrying '📌 RESUME HERE' must flag that message_id (same message,
+    same id), so a 👍 on it triggers a resume."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: _send_ok({}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append((mid, tid))
+    )
+    ok = ta.edit_message_text(-1001, 4242, "📌 RESUME HERE = next unit", 15991)
+    assert ok is True
+    assert (4242, 15991) in marked  # the EDITED message_id is what the reaction hits
+
+
+def test_edit_message_text_plain_not_flagged(monkeypatch):
+    """Ordinary edit (progress heartbeat, no marker) stays unflagged."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: _send_ok({}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
+    )
+    ta.edit_message_text(-1001, 4243, "Still working on it…", 15991)
+    assert marked == []
+
+
+def test_edit_message_text_without_thread_not_flagged(monkeypatch):
+    """No thread -> no registry entry (registry needs a thread to resume into)."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: _send_ok({}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
+    )
+    ta.edit_message_text(-1001, 4244, "📌 RESUME HERE", None)
+    assert marked == []
+
+
 def _reaction(emoji="👍", user_id=111, message_id=9001):
     return {
         "chat": {"id": -1001, "type": "supergroup"},

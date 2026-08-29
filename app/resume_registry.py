@@ -64,12 +64,11 @@ def _prune(data: dict, now: float | None = None) -> None:
         data.pop(mid, None)
 
 
-_RESUME_HERE_RE = re.compile(r"RESUME HERE|\U0001F4CC", re.IGNORECASE)
+_RESUME_HERE_RE = re.compile(r"RESUME HERE", re.IGNORECASE)
 
 
 def looks_resume_awaiting(text: str | None) -> bool:
-    """True when *text* itself declares a resume point — contains "RESUME HERE"
-    or the 📌 pin marker — so a posted message carrying it is auto-flagged
+    """True when *text* itself declares a resume point — contains "RESUME HERE" — so a posted message carrying it is auto-flagged
     resume-awaiting even when the caller didn't pass resume_awaiting=True.
 
     Closes the 👍-on-RESUME-HERE gap (2026-09-02): the text go-signal regex
@@ -78,7 +77,9 @@ def looks_resume_awaiting(text: str | None) -> bool:
     registry only flagged messages at post-time when the caller passed
     resume_awaiting=True. Turn-reports carrying "📌 RESUME HERE" were ordinary
     posts, never flagged, so the registry lookup returned nothing and the
-    reaction was ignored. Now any post containing the marker self-flags.
+    reaction was ignored. Now any post whose text carries the resume point
+    self-flags. (2026-09-03: the 📌 pin emoji ALONE does not flag — only
+    the literal "RESUME HERE" text does.)
     """
     if not text:
         return False

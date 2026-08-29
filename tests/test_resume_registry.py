@@ -30,10 +30,11 @@ def test_looks_resume_awaiting_text():
 
 
 def test_looks_resume_awaiting_pin_marker_alone():
-    # The 📌 pin marker alone also declares a resume point (handoff convention).
-    assert rr.looks_resume_awaiting("📌 RESUME HERE") is True
-    assert rr.looks_resume_awaiting("📌") is True
-    assert rr.looks_resume_awaiting("Here is a 📌 reminder") is True
+    # 📌 ALONE does NOT flag — only the literal "RESUME HERE" text does
+    # (Gary correction 2026-09-03: drop the 📌-alone alternation).
+    assert rr.looks_resume_awaiting("📌 RESUME HERE") is True  # has the text
+    assert rr.looks_resume_awaiting("📌") is False  # pin alone: no flag
+    assert rr.looks_resume_awaiting("Here is a 📌 reminder") is False
     assert rr.looks_resume_awaiting("Pinned: RESUME HERE next turn") is True
 
 
