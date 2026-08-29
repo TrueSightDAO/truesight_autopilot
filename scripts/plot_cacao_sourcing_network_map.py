@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Plot the TrueSight DAO cacao sourcing network map from REAL coordinates,
-with per-site role + constraint annotations.
+numbered pins + legend panel (no on-map text boxes -> zero label overlap).
 
-Replaces the old Gemini-generated AI map (pins were decorative, not geocoded)
-and annotates each location's constraint (per CACAO_SOURCING_NETWORK_OVERVIEW.md).
+Replaces the old Gemini-generated AI map and the earlier on-map annotation
+layout (whose Bahia labels overlapped). Pin numbers 1-5 reference the legend.
 
 Dependencies: matplotlib, a Natural Earth 50m GeoJSON (auto-downloaded once
 if missing). Output: cacao_sourcing_network_map.png.
 
 Usage: python3 plot_cacao_sourcing_network_map.py [output.png]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,25 +23,57 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.gridspec import GridSpec  # noqa: E402
 from matplotlib.patches import Circle, FancyArrowPatch  # noqa: E402
 
 NE_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson"
 NE_CACHE = Path("/tmp/ne50_countries.geojson")
 
-# name, lat, lng, role, constraint, label offset (dx, dy in degrees)
+# number, name, lat, lng, role, constraint
 # Geocoded via OSM Nominatim 2026-08-29; constraints per CACAO_SOURCING_NETWORK_OVERVIEW.md
 SITES = [
-    ("Manicoré (AM)", -5.804618, -61.289483, "exploratory source",
-     "no logistics /\nfermentation /\nfreight infra known", 1.3, 2.4),
-    ("Altamira (PA)", -3.204065, -52.209961, "beans supplier (CEPOTX)",
-     "beans only · NO conversion\n· needs CN-side warehouse", 1.3, 2.4),
-    ("Itabuna (BA)", -14.793173, -39.275034, "conversion + export (Coopercabruca)",
-     "members-only ·\nNO warehousing ·\nexact spec upfront", -4.6, 3.8),
-    ("Ilhéus (BA)", -14.792599, -39.045384, "exporter / warehouse (Black King)",
-     "⚠ CNPJ INAPTA ·\nNO export NF-e\n— BLOCKER", 2.2, -3.4),
-    ("Dongguan (CN)", 23.018357, 113.745233, "destination market (Elizabeth Wong)",
-     "SKU spec pending", -11.5, -3.6),
+    (
+        1,
+        "Manicoré (AM)",
+        -5.804618,
+        -61.289483,
+        "exploratory source",
+        "no logistics / fermentation / freight infra known",
+    ),
+    (
+        2,
+        "Altamira (PA)",
+        -3.204065,
+        -52.209961,
+        "beans supplier (CEPOTX)",
+        "beans only · NO conversion · needs CN-side warehouse",
+    ),
+    (
+        3,
+        "Itabuna (BA)",
+        -14.793173,
+        -39.275034,
+        "conversion + export (Coopercabruca)",
+        "members-only · NO warehousing · exact spec upfront",
+    ),
+    (
+        4,
+        "Ilhéus (BA)",
+        -14.792599,
+        -39.045384,
+        "exporter / warehouse (Black King)",
+        "⚠ CNPJ INAPTA · NO export NF-e — BLOCKER",
+    ),
+    (
+        5,
+        "Dongguan (CN)",
+        23.018357,
+        113.745233,
+        "destination market (Elizabeth Wong)",
+        "SKU spec pending",
+    ),
 ]
+BRAZIL_PINS = {1, 2, 3, 4}
 
 
 def _load_world() -> dict:
@@ -71,28 +104,97 @@ def _plot_polys(ax, polys: list, **kw) -> None:
         ring = poly[0]
         ax.fill([p[0] for p in ring], [p[1] for p in ring], **kw)
         for hole in poly[1:]:
-            ax.fill([p[0] for p in hole], [p[1] for p in hole], color="white", zorder=2.1)
+            ax.fill(
+                [p[0] for p in hole], [p[1] for p in hole], color="white", zorder=2.1
+            )
 
 
-def _annotate(ax, site, pin_color, is_blocker=False) -> None:
-    name, lat, lng, role, constraint, dx, dy = site
-    label = "\n".join([name, role, constraint])
-    ax.plot(lng, lat, "o", ms=11, mfc=pin_color, mec="white", mew=1.6, zorder=6)
-    if is_blocker:
-        ring = Circle((lng, lat), 2.1, fill=False, ec="#c0392b", lw=1.4, alpha=0.9, zorder=5)
-        ax.add_patch(ring)
-    ax.annotate(
-        label,
-        xy=(lng, lat),
-        xytext=(lng + dx, lat + dy),
-        fontsize=7.6,
-        color="#4a2a10",
+def _draw_pin(ax, lng, lat, num, pin_color) -> None:
+    ax.plot(lng, lat, "o", ms=13, mfc=pin_color, mec="white", mew=1.8, zorder=6)
+    ax.text(
+        lng,
+        lat,
+        str(num),
+        ha="center",
+        va="center",
+        fontsize=8,
+        fontweight="bold",
+        color="white",
         zorder=7,
-        ha="left",
-        va="bottom",
-        linespacing=1.35,
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=pin_color, alpha=0.93, lw=1.1),
-        arrowprops=dict(arrowstyle="-", color="#888888", lw=0.8, alpha=0.7),
+    )
+
+
+def _draw_legend(ax, world) -> None:
+    """Right-hand legend panel: number -> site -> role -> constraint."""
+    ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.text(
+        0.02,
+        0.97,
+        "Network legend",
+        fontsize=13,
+        fontweight="bold",
+        color="#3e5d3a",
+        va="top",
+    )
+    ax.text(
+        0.02,
+        0.935,
+        "(plotted from real coordinates — OSM Nominatim)",
+        fontsize=8,
+        color="#888888",
+        va="top",
+    )
+    y = 0.87
+    for num, name, lat, lng, role, constraint in SITES:
+        color = "#c0392b" if num in BRAZIL_PINS else "#e67e22"
+        ax.text(
+            0.02,
+            y,
+            f"{num}",
+            fontsize=10,
+            fontweight="bold",
+            color="white",
+            bbox=dict(boxstyle="circle,pad=0.28", fc=color, ec="white", lw=1.0),
+            va="top",
+        )
+        ax.text(
+            0.08,
+            y,
+            f"{name} — {role}",
+            fontsize=9.5,
+            fontweight="bold",
+            color="#4a2a10",
+            va="top",
+        )
+        ax.text(0.08, y - 0.032, constraint, fontsize=8.4, color="#555555", va="top")
+        if "BLOCKER" in constraint:
+            ax.text(
+                0.08,
+                y - 0.032,
+                constraint,
+                fontsize=8.4,
+                color="#c0392b",
+                va="top",
+                fontweight="bold",
+            )
+        y -= 0.145
+    ax.text(
+        0.02,
+        y - 0.015,
+        "⚠ = export blocker (Ilhéus: Black King CNPJ INAPTA)",
+        fontsize=8,
+        color="#c0392b",
+        va="top",
+    )
+    ax.text(
+        0.02,
+        y - 0.05,
+        "red = Brazil network · orange = destination (China)",
+        fontsize=8,
+        color="#555555",
+        va="top",
     )
 
 
@@ -105,22 +207,39 @@ def main() -> int:
     brazil = _polys(world, {"Brazil"})
     china = _polys(world, {"China", "Hong Kong"})
     if not brazil or not china:
-        print("error: could not extract Brazil/China outlines from GeoJSON", file=sys.stderr)
+        print(
+            "error: could not extract Brazil/China outlines from GeoJSON",
+            file=sys.stderr,
+        )
         return 1
 
-    fig, ax = plt.subplots(figsize=(14, 8.2), dpi=160)
+    fig = plt.figure(figsize=(16.5, 8.2), dpi=160)
+    fig.patch.set_facecolor("white")
+    gs = GridSpec(1, 2, width_ratios=[2.55, 1.0], wspace=0.05)
+    ax = fig.add_subplot(gs[0])
     ax.set_facecolor("#f4f9f4")
-    _plot_polys(ax, brazil, color="#d5ecd4", edgecolor="#3e7d4e", linewidth=1.2, zorder=2)
-    _plot_polys(ax, china, color="#fde8d7", edgecolor="#c97a3d", linewidth=1.2, zorder=2)
+    _plot_polys(
+        ax, brazil, color="#d5ecd4", edgecolor="#3e7d4e", linewidth=1.2, zorder=2
+    )
+    _plot_polys(
+        ax, china, color="#fde8d7", edgecolor="#c97a3d", linewidth=1.2, zorder=2
+    )
 
-    for site in SITES:
-        name, lat, lng, role, constraint, dx, dy = site
-        if lng < -20:  # Brazil
-            pin_color = "#c0392b"
-        else:  # China
-            pin_color = "#e67e22"
-        is_blocker = "BLOCKER" in constraint
-        _annotate(ax, site, pin_color, is_blocker=is_blocker)
+    for num, name, lat, lng, role, constraint in SITES:
+        pin_color = "#c0392b" if num in BRAZIL_PINS else "#e67e22"
+        _draw_pin(ax, lng, lat, num, pin_color)
+        if "BLOCKER" in constraint:
+            ax.add_patch(
+                Circle(
+                    (lng, lat),
+                    2.1,
+                    fill=False,
+                    ec="#c0392b",
+                    lw=1.4,
+                    alpha=0.9,
+                    zorder=5,
+                )
+            )
 
     # sourcing flow arrow Brazil -> China
     br_ring = brazil[0][0]
@@ -156,24 +275,18 @@ def main() -> int:
     ax.set_ylim(-34, 50)
     ax.set_aspect(1.15)
     ax.set_title(
-        "TrueSight DAO — Cacao Sourcing Network (Brazil \u2192 China)",
+        "TrueSight DAO \u2014 Cacao Sourcing Network (Brazil \u2192 China)",
         fontsize=16,
         fontweight="bold",
         color="#3e5d3a",
         pad=18,
     )
     ax.text(
-        24, 47,
-        "Plotted from real coordinates (OSM Nominatim) — not AI-generated · constraints per 29 Aug 2026 network doc",
+        24,
+        47,
+        "Plotted from real coordinates \u2014 not AI-generated \u00b7 constraints per 29 Aug 2026 network doc",
         fontsize=9.5,
         color="#666666",
-        ha="center",
-    )
-    ax.text(
-        24, -32.5,
-        "⚠ = export blocker (Ilhéus: Black King CNPJ INAPTA) · red = Brazil network · orange = destination (China)",
-        fontsize=9,
-        color="#555555",
         ha="center",
     )
     ax.set_xticks([])
@@ -181,8 +294,12 @@ def main() -> int:
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    fig.tight_layout()
-    fig.savefig(args.output, dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    leg = fig.add_subplot(gs[1])
+    _draw_legend(leg, world)
+
+    fig.savefig(
+        args.output, dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor()
+    )
     print(f"saved {args.output}")
     return 0
 
