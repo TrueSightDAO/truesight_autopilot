@@ -63,9 +63,11 @@ def test_deploy_defers_when_a_thread_is_busy(monkeypatch):
 
     # Mock the git hash check so it returns different SHAs (passes the check
     # and reaches the idle-drain guard instead of short-circuiting with noop)
-    monkeypatch.setattr(dep, "_run_local", lambda cmd, cwd, timeout: (
-        "abc123" if "rev-parse HEAD" in cmd else "def456"
-    ))
+    monkeypatch.setattr(
+        dep,
+        "_run_local",
+        lambda cmd, cwd, timeout: "abc123" if "rev-parse HEAD" in cmd else "def456",
+    )
     monkeypatch.setattr(dep, "_is_process_stale", lambda rd: False)
 
     monkeypatch.setattr(
@@ -80,3 +82,76 @@ def test_deploy_defers_when_a_thread_is_busy(monkeypatch):
 def test_idle_means_no_busy_threads(monkeypatch):
     monkeypatch.setattr(m, "_active_streams", {}, raising=False)
     assert dep._other_threads_busy(caller_session="tg:me:1") == []
+
+
+# ---- (C) process-staleness detection ----
+
+
+def test_newest_source_mtime_finds_latest(tmp_path):
+    import time
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "scripts").mkdir()
+    a = tmp_path / "app" / "telegram_adapter.py"
+    a.write_text("x")
+    b = tmp_path / "scripts" / "deploy.sh"
+    b.write_text("x")
+    now = time.time()
+    os.utime(a, (now - 100, now - 100))
+    os.utime(b, (now, now))
+    assert dep._newest_source_mtime(str(tmp_path)) == pytest.approx(now)
+    # .venv dirs are excluded
+    v = tmp_path / "app" / ".venv"
+    v.mkdir()
+    c = v / "lib.py"
+    c.write_text("x")
+    os.utime(c, (now + 1000, now + 1000))
+    assert dep._newest_source_mtime(str(tmp_path)) == pytest.approx(now)
+
+
+def test_service_pids_parses_systemctl(monkeypatch):
+    class R:
+        stdout = "424242\n"
+
+    calls = []
+
+    def fake_run(cmd, capture_output, text, timeout):
+        calls.append(cmd)
+        return R()
+
+    monkeypatch.setattr(dep.subprocess, "run", fake_run)
+    assert dep._service_pids() == [424242, 424242, 424242, 424242]
+    assert calls[0] == [
+        "systemctl",
+        "show",
+        "truesight-autopilot",
+        "-p",
+        "MainPID",
+        "--value",
+    ]
+
+
+def test_is_process_stale_detects_old_service(monkeypatch, tmp_path):
+    import time
+
+    now = time.time()
+    (tmp_path / "app").mkdir()
+    f = tmp_path / "app" / "telegram_adapter.py"
+    f.write_text("x")
+    os.utime(f, (now, now))
+    monkeypatch.setattr(dep, "_service_pids", lambda: [12345])
+    monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now - 100)
+    assert dep._is_process_stale(str(tmp_path)) is True
+
+
+def test_is_process_stale_fresh_when_started_after(monkeypatch, tmp_path):
+    import time
+
+    now = time.time()
+    (tmp_path / "app").mkdir()
+    f = tmp_path / "app" / "telegram_adapter.py"
+    f.write_text("x")
+    os.utime(f, (now, now))
+    monkeypatch.setattr(dep, "_service_pids", lambda: [12345])
+    monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now + 10)
+    assert dep._is_process_stale(str(tmp_path)) is False
