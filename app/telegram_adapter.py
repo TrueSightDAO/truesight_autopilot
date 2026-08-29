@@ -575,11 +575,22 @@ def _strip_bot_mention(msg: dict[str, Any], text: str) -> str:
 
 
 def _bot_was_mentioned(msg: dict[str, Any]) -> bool:
-    """True if this message @-mentions the bot by username, or is a reply to
-    one of the bot's own messages — both count as "directed at her"."""
+    """True if this message @-mentions the bot by username, is a reply to one
+    of the bot's own messages, or addresses her by name/persona — all count
+    as "directed at her".
+
+    Falls back to engagement.is_addressed() (2026-08-29 fix), which already
+    handled name-based addressing ("Sophia", "@sophia", "hey sophia") before
+    this gate existed (2026-08-28, PR #319) — but PR #319 introduced this
+    narrower, entity-only check without wiring in that existing logic, so a
+    governor typing "@sophia" (her actual name, not the literal Telegram
+    @bot_username) got silently swallowed as "not directed at you" with zero
+    acknowledgment. Observed live: Gary's own "@sophia" mid-turn nudge never
+    got a reply of any kind.
+    """
     username = _resolve_own_username()
+    text = msg.get("text") or msg.get("caption") or ""
     if username:
-        text = msg.get("text") or msg.get("caption") or ""
         entities = msg.get("entities") or msg.get("caption_entities") or []
         needle = f"@{username}".lower()
         for ent in entities:
@@ -591,6 +602,10 @@ def _bot_was_mentioned(msg: dict[str, Any]) -> bool:
     reply_to = msg.get("reply_to_message") or {}
     reply_from = (reply_to.get("from") or {}).get("username")
     if username and reply_from and reply_from.lower() == username.lower():
+        return True
+    from .engagement import is_addressed
+
+    if is_addressed(text, username):
         return True
     return False
 
@@ -1804,12 +1819,22 @@ def handle_message(
     # deliberate enough actions that they always get full processing — this
     # gate only applies to plain unmentioned chatter. Log it as context
     # (no LLM call, no reply) rather than dropping it silently.
+    #
+    # Exception (2026-08-29 fix): a thread with an actively-running turn skips
+    # the gate entirely, mention or not. A bystander coincidentally posting
+    # into a topic that's mid-flight on someone else's specific request is not
+    # a realistic scenario here (topics are per-task, not general chit-chat) —
+    # the realistic case is a governor sending a quick follow-up/interrupt to
+    # their own in-flight turn, which was getting silently swallowed with NO
+    # acknowledgment at all (found live 2026-08-29: "thoughts?" and a plain
+    # follow-up question both vanished mid-turn, not even the queued-ack).
     if (
         not attachment_file_id
         and not voice_file_id
         and text
         and not _should_always_respond(chat_type, chat_id)
         and not _bot_was_mentioned(msg)
+        and not _thread_dispatch_lock(chat_id, thread_id).locked()
     ):
         if public_key is not None:
             session_id = build_session_id(chat_id, thread_id)
