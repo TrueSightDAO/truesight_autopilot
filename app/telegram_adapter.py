@@ -712,7 +712,10 @@ def send_message(
                 if resp.status_code == 200:
                     result = resp.json().get("result", {})
                     chunk_id = result.get("message_id")
-                    if chunk_id and resume_awaiting:
+                    if chunk_id and (
+                        resume_awaiting
+                        or resume_registry.looks_resume_awaiting(text)
+                    ):
                         resume_registry.mark_resume_awaiting(chunk_id, thread_id, text)
                     if i == 0:
                         msg_id = chunk_id
@@ -744,7 +747,10 @@ def send_message(
                     resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                     if resp2.status_code == 200:
                         chunk_id = resp2.json().get("result", {}).get("message_id")
-                        if chunk_id and resume_awaiting:
+                        if chunk_id and (
+                            resume_awaiting
+                            or resume_registry.looks_resume_awaiting(text)
+                        ):
                             resume_registry.mark_resume_awaiting(
                                 chunk_id, thread_id, text
                             )

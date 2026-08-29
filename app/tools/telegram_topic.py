@@ -123,7 +123,10 @@ def create_telegram_topic(
                 timeout=_TIMEOUT,
             )
             posted = bool(pr.json().get("ok"))
-            if posted and resume_awaiting:
+            if posted and (
+                resume_awaiting
+                or resume_registry.looks_resume_awaiting(kickoff_message)
+            ):
                 mid = (pr.json().get("result") or {}).get("message_id")
                 if mid:
                     resume_registry.mark_resume_awaiting(
