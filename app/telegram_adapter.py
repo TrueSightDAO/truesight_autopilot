@@ -753,10 +753,12 @@ def send_message(
                 if resp.status_code == 200:
                     result = resp.json().get("result", {})
                     chunk_id = result.get("message_id")
-                    if chunk_id and (
-                        resume_awaiting
-                        or resume_registry.looks_resume_awaiting(text)
-                    ):
+                    # Flag every posted message as resume-awaiting (dropped the
+                    # resume_awaiting/looks_resume_awaiting regex gate, 2026-08-29):
+                    # the governor should be able to react with any positive
+                    # emoji on ANY of her messages to mean "continue", not just
+                    # specially-flagged ones.
+                    if chunk_id:
                         resume_registry.mark_resume_awaiting(chunk_id, thread_id, text)
                     if i == 0:
                         msg_id = chunk_id
@@ -788,10 +790,7 @@ def send_message(
                     resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                     if resp2.status_code == 200:
                         chunk_id = resp2.json().get("result", {}).get("message_id")
-                        if chunk_id and (
-                            resume_awaiting
-                            or resume_registry.looks_resume_awaiting(text)
-                        ):
+                        if chunk_id:
                             resume_registry.mark_resume_awaiting(
                                 chunk_id, thread_id, text
                             )
@@ -870,11 +869,12 @@ def edit_message_text(
         resp = httpx.post(_api("editMessageText"), json=payload, timeout=10.0)
         if resp.status_code == 200:
             # An edited message KEEPS its message_id (it is the same message) —
-            # so when the final response (which often carries "📌 RESUME HERE")
-            # is delivered by editing the "Thinking…" status message, flag that
-            # message_id so the emoji go-signal works on turn-reports too (the
-            # send_message auto-flag alone missed the edit path; PR #336).
-            if thread_id and resume_registry.looks_resume_awaiting(text):
+            # so when the final response is delivered by editing the
+            # "Thinking…" status message, flag that message_id too (the
+            # send_message auto-flag alone misses the edit path; PR #336).
+            # Unconditional (dropped the "RESUME HERE" regex gate, 2026-08-29):
+            # any positive-emoji reaction on any of her messages means "continue".
+            if thread_id:
                 resume_registry.mark_resume_awaiting(message_id, thread_id, text)
             return True
         return False

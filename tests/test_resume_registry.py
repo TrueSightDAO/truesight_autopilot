@@ -20,24 +20,6 @@ def _clean_registry(tmp_path, monkeypatch):
     # ensure no cross-test leakage
 
 
-def test_looks_resume_awaiting_text():
-    assert rr.looks_resume_awaiting("RESUME HERE") is True
-    assert rr.looks_resume_awaiting("resume here") is True  # case-insensitive
-    assert rr.looks_resume_awaiting("📌 RESUME HERE = PR1") is True
-    assert rr.looks_resume_awaiting("plain turn report") is False
-    assert rr.looks_resume_awaiting("") is False
-    assert rr.looks_resume_awaiting(None) is False
-
-
-def test_looks_resume_awaiting_pin_marker_alone():
-    # 📌 ALONE does NOT flag — only the literal "RESUME HERE" text does
-    # (Gary correction 2026-09-03: drop the 📌-alone alternation).
-    assert rr.looks_resume_awaiting("📌 RESUME HERE") is True  # has the text
-    assert rr.looks_resume_awaiting("📌") is False  # pin alone: no flag
-    assert rr.looks_resume_awaiting("Here is a 📌 reminder") is False
-    assert rr.looks_resume_awaiting("Pinned: RESUME HERE next turn") is True
-
-
 def test_mark_then_lookup_roundtrip():
     rr.mark_resume_awaiting(1001, 15728, "ready — reply go for it")
     assert rr.is_resume_awaiting(1001) is True
