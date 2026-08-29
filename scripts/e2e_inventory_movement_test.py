@@ -15,6 +15,7 @@ Exit code 0 = PASS (col N == PROCESSED), 1 = FAIL.
 """
 
 import datetime
+import json
 import os
 import sys
 import time
@@ -24,21 +25,29 @@ import gspread
 from google.oauth2 import service_account
 from truesight_dao_client.edgar_client import EdgarClient
 
-INVENTORY_SPREADSHEET_ID = "1qbZZhf-_7xzmDTriaJVWj6OZshyQsFkdsAV8-pyzASQ"
-INVENTORY_SHEET_NAME = "Inventory Movement"
-TELEGRAM_SHEET_NAME = "Telegram Chat Logs"
-WEBHOOK_BASE = (
-    "https://script.google.com/macros/s/"
-    "AKfycbzECOd1Y3mH7L0zU8hOC4AxQctYICX0Ws8j2-Md1dWg0k3GFGQx_4Cf7n-CM0usmSJ1/exec"
+OPS_SPREADSHEET_ID = "1qbZZhf-_7xzmDTriaJVWj6OZshyQsFkdsAV8-pyzASQ"
+MAIN_SPREADSHEET_ID = "1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU"
+PROCESSED_URL = (
+    "https://script.google.com/macros/s/AKfycbzWcTj3kH93i2Zj-5VlRYVpY-VD8vh0l9fDgG"
+    "-Qm3bC4nWkJ7S1w4fQmBk/exec"
 )
-PHASE_1_URL = WEBHOOK_BASE + "?action=processTelegramChatLogs"
-PHASE_2_URL = WEBHOOK_BASE + "?action=processInventoryMovementToLedgers"
 CREDS_PATH = os.environ.get(
     "GOOGLE_APPLICATION_CREDENTIALS",
     "/opt/truesight_autopilot/config/google/cypher_defense_gdrive_key.json",
 )
 POLL_SECONDS = 15
 POLL_ATTEMPTS = 12
+
+
+def _client() -> gspread.Client:
+    creds = service_account.Credentials.from_service_account_file(
+        CREDS_PATH,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ],
+    )
+    return gspread.authorize(creds)
 
 
 def fire_webhook(url: str) -> str:
@@ -48,73 +57,66 @@ def fire_webhook(url: str) -> str:
         return resp.read().decode("utf-8", "replace")
 
 
-def find_row_by_marker(sheet_name: str, marker: str):
-    creds = service_account.Credentials.from_service_account_file(
-        CREDS_PATH,
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ],
-    )
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(INVENTORY_SPREADSHEET_ID)
-    ws = sh.worksheet(sheet_name)
+def find_movement_row(marker: str):
+    """Find the Inventory Movement row for this marker and its STATUS (col N)."""
+    ws = _client().open_by_key(OPS_SPREADSHEET_ID).worksheet("Inventory Movement")
     for row in ws.get_all_values():
-        if marker in " | ".join(str(c) for c in row[:8]):
+        if marker in " | ".join(str(c) for c in row[:6]):
             return row
     return None
 
 
 def main() -> int:
-    marker = "e2e-self-to-self-" + datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    marker = "E2E INV MOVE (Test " + datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S") + ")"
     attrs = {
         "Manager Name": "Sophia Truesight",
         "Recipient Name": "Sophia Truesight",
-        "Inventory Item": "E2E TEST ITEM - Cacao Tea 50g QR label (self-to-self, no real inventory)",
+        "QR Code": "E2E-TEST-QR",
         "Quantity": "1",
-        "Destination Inventory File Location": (
-            "Agroverse QR codes sheet (Cacao Tea 50g batch, manager column)"
-        ),
-        "Approved By": "Gary Teh",
-        "Submission Source": marker,
+        "Inventory Item": "E2E test item - self-to-self",
+        "Destination Inventory File Location": "inventory-movement (E2E test)",
     }
     print(f"[1/5] Submitting self-to-self movement marker={marker}")
     client = EdgarClient.from_env()
     resp = client.submit("INVENTORY MOVEMENT", attrs)
     body = getattr(resp, "text", "")
     print(f"      HTTP {getattr(resp, 'status_code', resp)} {body[:200]}")
-    if "signature_verification": "success" not in body:
-        print("FAIL: signature verification did not succeed")
+    try:
+        resp_json = json.loads(body)
+    except Exception:
+        resp_json = {}
+    if resp_json.get("status") != "ok" or resp_json.get("signature_verification") != "success":
+        print(f"FAIL: signature verification did not succeed (body: {body[:200]})")
         return 1
     print("[2/5] Firing Phase 1 webhook (Telegram -> Inventory Movement)")
     try:
-        print(fire_webhook(PHASE_1_URL)[:200])
+        print(fire_webhook(PROCESSED_URL)[:200])
     except Exception as exc:  # GAS may exceed the client read window; row still lands
         print(f"      (webhook read timed out: {exc})")
-    time.sleep(10)
-    print("[3/5] Firing Phase 2 webhook (Inventory Movement -> Ledgers)")
-    try:
-        print(fire_webhook(PHASE_2_URL)[:200])
-    except Exception as exc:
-        print(f"      (webhook read timed out: {exc})")
-    print("[4/5] Polling Inventory Movement for marker row")
+
+    print("[3/5] Polling Inventory Movement tab for marker row")
     row = None
     for attempt in range(1, POLL_ATTEMPTS + 1):
         time.sleep(POLL_SECONDS)
-        row = find_row_by_marker(INVENTORY_SHEET_NAME, marker)
+        row = find_movement_row(marker)
         if row:
             break
         print(f"      attempt {attempt}/{POLL_ATTEMPTS} ...")
     if not row:
-        print("FAIL: marker row never appeared in Inventory Movement")
+        print("FAIL: marker row never appeared in Inventory Movement tab")
         return 1
     status = row[13] if len(row) > 13 else ""
-    print(f"[5/5] updateId={row[0]} status(col N)={status!r}")
-    if status.strip().upper() == "PROCESSED":
-        print("PASS: E2E inventory movement reached PROCESSED")
-        return 0
-    print(f"FAIL: expected PROCESSED, got {status!r}")
-    return 1
+    print(f"      row status (col N)={status!r}")
+    if status.strip().upper() != "PROCESSED":
+        print(f"FAIL: expected status PROCESSED, got {status!r}")
+        return 1
+
+    print("[4/5] Verifying row reached PROCESSED")
+    print("      PASS: self-to-self inventory movement reached PROCESSED")
+
+    print("[5/5] Post-test state")
+    print("NOTE: inventory-movement test rows are kept (they carry QR-code movement semantics)")
+    return 0
 
 
 if __name__ == "__main__":
