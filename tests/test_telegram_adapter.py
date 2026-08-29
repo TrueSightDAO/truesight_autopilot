@@ -716,3 +716,117 @@ def test_handle_message_large_group_attachment_always_processed(monkeypatch, sen
     }
     ta.handle_message(msg, allowed={111}, public_key="PK")
     assert captured.get("hit") is True
+
+
+# -- Emoji-reaction go-signal (PR1: parser + handler) --
+
+import logging as _logging
+
+
+def test_reaction_emoji_verdict_go_for_standard_emoji():
+    v = ta.reaction_emoji_verdict
+    assert v([{"type": "emoji", "emoji": "👍"}]) == "go"  # thumbs up
+    assert v([{"type": "emoji", "emoji": "🔥"}]) == "go"  # fire
+    assert v([{"type": "emoji", "emoji": "❤️"}]) == "go"  # heart
+
+
+def test_reaction_emoji_verdict_blocked_thumbs_down():
+    assert ta.reaction_emoji_verdict([{"type": "emoji", "emoji": "👎"}]) == "blocked"
+
+
+def test_reaction_emoji_verdict_custom_emoji_ignored():
+    # Custom (paid) emoji carry custom_emoji_id, not emoji -- never a go.
+    assert (
+        ta.reaction_emoji_verdict([{"type": "custom_emoji", "custom_emoji_id": "x"}])
+        == "custom"
+    )
+    # A custom emoji alongside a standard go emoji still counts as go.
+    assert (
+        ta.reaction_emoji_verdict(
+            [
+                {"type": "custom_emoji", "custom_emoji_id": "x"},
+                {"type": "emoji", "emoji": "👍"},
+            ]
+        )
+        == "go"
+    )
+
+
+def test_reaction_emoji_verdict_none_on_empty():
+    assert ta.reaction_emoji_verdict([]) == "none"
+    assert ta.reaction_emoji_verdict(None) == "none"
+    assert ta.reaction_emoji_verdict("junk") == "none"
+
+
+def test_reaction_emoji_verdict_honors_blocked_override():
+    assert (
+        ta.reaction_emoji_verdict([{"type": "emoji", "emoji": "😀"}], blocked=["😀"])
+        == "blocked"
+    )
+
+
+def test_get_updates_sends_allowed_updates(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, timeout=None):
+        captured["params"] = params
+        return httpx.Response(
+            200, json={"result": []}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    ta.get_updates(None)
+    import json as _json
+
+    assert _json.loads(captured["params"]["allowed_updates"]) == [
+        "message",
+        "edited_message",
+        "callback_query",
+        "message_reaction",
+    ]
+
+
+def test_handle_message_reaction_logs_go_verdict(monkeypatch, caplog):
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: True)
+    with caplog.at_level(_logging.INFO, logger="autopilot.telegram"):
+        ta.handle_message_reaction(
+            {
+                "chat": {"id": -1003919341801, "type": "supergroup"},
+                "message_id": 1234,
+                "user": {"id": 2102593402, "username": "garyjob"},
+                "new_reaction": [{"type": "emoji", "emoji": "👍"}],
+            },
+            allowed={2102593402},
+        )
+    text = caplog.text
+    assert "verdict=go" in text
+    assert "authorized=True" in text
+    assert "chat=-1003919341801" in text
+    assert "msg=1234" in text
+
+
+def test_handle_message_reaction_unauthorized_reactor(monkeypatch, caplog):
+    monkeypatch.setattr(ta, "_reaction_reactor_authorized", lambda uid, allowed: False)
+    with caplog.at_level(_logging.INFO, logger="autopilot.telegram"):
+        ta.handle_message_reaction(
+            {
+                "chat": {"id": -1003919341801},
+                "message_id": 1234,
+                "user": {"id": 999},
+                "new_reaction": [{"type": "emoji", "emoji": "👍"}],
+            },
+            allowed={2102593402},
+        )
+    assert "verdict=go" in caplog.text
+    assert "authorized=False" in caplog.text
+
+
+def test_handle_message_reaction_incomplete_ignored(caplog):
+    with caplog.at_level(_logging.INFO, logger="autopilot.telegram"):
+        ta.handle_message_reaction({"user": {"id": 999}}, allowed={999})
+    assert "incomplete update" in caplog.text
+
+
+def test_reaction_reactor_authorized_allowlist():
+    assert ta._reaction_reactor_authorized(111, {111}) is True
+    assert ta._reaction_reactor_authorized(999, {111}) is False

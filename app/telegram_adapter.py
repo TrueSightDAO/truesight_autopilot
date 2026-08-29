@@ -502,7 +502,15 @@ def _api(method: str) -> str:
 
 
 def get_updates(offset: int | None) -> list[dict[str, Any]]:
-    params: dict[str, Any] = {"timeout": _POLL_TIMEOUT}
+    params: dict[str, Any] = {
+        "timeout": _POLL_TIMEOUT,
+        # Without allowed_updates, Telegram's getUpdates default EXCLUDES
+        # message_reaction updates entirely -- reactions would never arrive
+        # (emoji-reaction go-signal plan, section 1.2).
+        "allowed_updates": json.dumps(
+            ["message", "edited_message", "callback_query", "message_reaction"]
+        ),
+    }
     if offset is not None:
         params["offset"] = offset
     resp = httpx.get(_api("getUpdates"), params=params, timeout=_POLL_TIMEOUT + 10)
@@ -2204,6 +2212,111 @@ def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
         send_message(chat_id, result["message"], thread_id)
 
 
+# -- Emoji-reaction go-signal (PR1: receive + verdict; resume lands in PR3) --
+# A reaction (message_reaction update) on a resume-awaiting message can act as
+# a go-signal. PR1 wires reception, parsing and logging; the resume trigger
+# itself is PR3. Design (plan decision 0.1): deny-list -- any standard emoji
+# counts as a go EXCEPT settings.emoji_go_blocked (default ["👎"]).
+# Custom (paid) emoji are ignored entirely (they carry custom_emoji_id).
+
+
+def reaction_emoji_verdict(
+    new_reaction: list[dict[str, Any]] | None,
+    blocked: list[str] | None = None,
+) -> str:
+    """Classify a Telegram message_reaction.new_reaction list.
+
+    Returns one of:
+      "go"      -- at least one standard emoji present and none of them blocked
+      "blocked" -- a blocked emoji (default: thumbs-down) is present
+      "custom"  -- only ReactionTypeCustomEmoji entries (ignored, never a go)
+      "none"    -- empty / missing / unparseable new_reaction
+
+    Standard emoji are ReactionTypeEmoji -> {"type": "emoji", "emoji": "..."};
+    custom emoji carry {"type": "custom_emoji", "custom_emoji_id": "..."} and
+    are ignored (decision 0.1).
+    """
+    if not isinstance(new_reaction, list) or not new_reaction:
+        return "none"
+    if blocked is None:
+        blocked = settings.emoji_go_blocked
+    emojis: list[str] = []
+    has_custom = False
+    for entry in new_reaction:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "emoji" and isinstance(entry.get("emoji"), str):
+            emojis.append(entry["emoji"])
+        elif entry.get("type") == "custom_emoji":
+            has_custom = True
+    if any(e in blocked for e in emojis):
+        return "blocked"
+    if emojis:
+        return "go"
+    if has_custom:
+        return "custom"
+    return "none"
+
+
+def _reaction_reactor_authorized(user_id: int, allowed: set[int]) -> bool:
+    """The same security gate a text go-signal sender must pass (decision 0.3):
+    allowlist membership, or a verified governor via resolve_identity."""
+    if is_allowed(user_id, allowed):
+        return True
+    try:
+        from .policy import Role, resolve_identity
+
+        ident = resolve_identity(telegram_id=user_id)
+        return ident.role == Role.GOVERNOR
+    except Exception:  # noqa: BLE001 -- never let policy errors open the gate
+        return False
+
+
+def handle_message_reaction(reaction: dict[str, Any], allowed: set[int]) -> None:
+    """Process a Telegram message_reaction update (PR1: log + verdict only).
+
+    Parses chat_id, message_id, the reacting user and the new_reaction emoji
+    set, then logs the reaction plus the authorized/go verdict. PR3 turns a
+    "go" verdict by an authorized user on a resume-awaiting message into a
+    synthesized go-signal; nothing is resumed here yet.
+    """
+    chat = reaction.get("chat") or {}
+    chat_id = chat.get("id")
+    message_id = reaction.get("message_id")
+    user = reaction.get("user") or {}
+    user_id = user.get("id")
+    new_reaction = reaction.get("new_reaction")
+    verdict = reaction_emoji_verdict(new_reaction)
+    emoji = ""
+    if verdict in ("go", "blocked"):
+        emoji = ",".join(
+            e.get("emoji", "")
+            for e in (new_reaction or [])
+            if isinstance(e, dict) and e.get("type") == "emoji"
+        )
+    if chat_id is None or message_id is None or user_id is None:
+        logger.info("message_reaction ignored: incomplete update %s", reaction)
+        return
+    authorized = _reaction_reactor_authorized(user_id, allowed)
+    logger.info(
+        "message_reaction chat=%s msg=%s user=%s emoji=%r verdict=%s authorized=%s",
+        chat_id,
+        message_id,
+        user_id,
+        emoji,
+        verdict,
+        authorized,
+    )
+
+
+def _handle_reaction_safe(reaction: dict[str, Any], allowed: set[int]) -> None:
+    """Wrap handle_message_reaction for background-thread dispatch."""
+    try:
+        handle_message_reaction(reaction, allowed)
+    except Exception:  # noqa: BLE001
+        logger.exception("handle_message_reaction crashed")
+
+
 def _handle_callback_safe(cb: dict[str, Any], allowed: set[int]) -> None:
     try:
         handle_callback_query(cb, allowed)
@@ -2268,6 +2381,9 @@ def run() -> None:
                 cb = upd.get("callback_query")
                 if cb:
                     executor.submit(_handle_callback_safe, cb, allowed)
+                reaction = upd.get("message_reaction")
+                if reaction:
+                    executor.submit(_handle_reaction_safe, reaction, allowed)
 
 
 def main() -> None:
