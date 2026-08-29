@@ -240,32 +240,59 @@ def _capture_forensic_evidence() -> dict:
     }
 
 
-def _is_process_stale(remote_dir: str) -> bool:
-    """Check if the running process is stale relative to source files on disk.
+# Systemd services that run this repo's code. A merge PR's auto-pull may
+# restart only SOME of them (e.g. truesight-autopilot but not
+# truesight-autopilot-telegram), so the staleness check must look at ALL of
+# them — checking just our own process lets a sibling service keep running
+# pre-merge code forever.
+_SERVICES = [
+    "truesight-autopilot",
+    "truesight-autopilot-telegram",
+    "truesight-autopilot-watchdog",
+    "truesight-vault",
+]
 
-    Reads the process start time from /proc/self/stat (field 22, start time in
-    clock ticks since boot) and compares it to the mtime of a key source file
-    (app/tools/deploy.py). If the process started BEFORE the file was last
-    modified, the process is running old code and needs a restart — even if
-    HEAD matches origin/main.
 
-    Returns True if the process is stale (should proceed with deploy),
-    False if the process is fresh enough (no restart needed).
+def _service_pids() -> list[int]:
+    """Return the MainPID of each managed systemd service ([] on any failure).
+
+    Uses `systemctl show <svc> -p MainPID --value`. PIDs <= 1 mean the
+    service is not running and are skipped. Any exception (missing systemctl,
+    unknown service, timeout, ...) is swallowed and yields [] so callers can
+    fall back to the caller's own pid.
+    """
+    pids: list[int] = []
+    try:
+        for svc in _SERVICES:
+            out = subprocess.run(
+                ["systemctl", "show", svc, "-p", "MainPID", "--value"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            pid = int(out.stdout.strip())
+            if pid > 1:
+                pids.append(pid)
+    except Exception:
+        return []
+    return pids
+
+
+def _proc_start_epoch(pid: int) -> float | None:
+    """Return a process's start time as a unix epoch timestamp (or None).
+
+    Reads field 22 (starttime, in clock ticks since boot) from
+    /proc/<pid>/stat, adds the boot time (btime) from /proc/stat, and
+    converts jiffies to seconds with os.sysconf(SC_CLK_TCK).
     """
     try:
-        # ── Get process start time (jiffies since boot) from /proc/self/stat ──
-        # Field 22 (1-indexed) is starttime in clock ticks. /proc/self/stat
-        # format: pid (comm) state ppid ... (field 22 = starttime)
-        with open("/proc/self/stat") as f:
+        with open(f"/proc/{pid}/stat") as f:
             stat_parts = f.read().split()
         if len(stat_parts) < 22:
-            logger.debug(
-                "Cannot determine process start time — /proc/self/stat has <22 fields"
-            )
-            return False
+            logger.debug("Cannot determine start time — /proc/%s/stat has <22 fields", pid)
+            return None
         proc_start_jiffies = int(stat_parts[21])  # field 22, 0-indexed = 21
 
-        # ── Get boot time (seconds since epoch) ──────────────────────────────
         # /proc/stat has "btime <unix_timestamp>" line
         with open("/proc/stat") as f:
             for line in f:
@@ -274,45 +301,94 @@ def _is_process_stale(remote_dir: str) -> bool:
                     break
             else:
                 logger.debug("Cannot determine boot time — no btime in /proc/stat")
-                return False
+                return None
 
-        # ── Get CLK_TCK (clock ticks per second) ────────────────────────────
         clk_tck = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+        return boot_time + (proc_start_jiffies / clk_tck)
+    except Exception:
+        return None
 
-        # ── Compute process start time as unix timestamp ─────────────────────
-        proc_start_epoch = boot_time + (proc_start_jiffies / clk_tck)
 
-        # ── Get mtime of a key source file ───────────────────────────────────
-        # Use app/tools/deploy.py as the reference — if this file changed,
-        # the running process is definitely stale.
-        ref_file = os.path.join(remote_dir, "app", "tools", "deploy.py")
-        if not os.path.isfile(ref_file):
+def _newest_source_mtime(remote_dir: str) -> float:
+    """Return the newest mtime of any *.py file under app/ and scripts/.
+
+    Directories whose name contains '.venv' or '__pycache__' are excluded.
+    Returns 0.0 if no source files are found.
+    """
+    newest = 0.0
+    for sub in ("app", "scripts"):
+        base = os.path.join(remote_dir, sub)
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [
+                d for d in dirs if ".venv" not in d and "__pycache__" not in d
+            ]
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                try:
+                    mtime = os.path.getmtime(os.path.join(root, name))
+                except OSError:
+                    continue
+                if mtime > newest:
+                    newest = mtime
+    return newest
+
+
+def _is_process_stale(remote_dir: str) -> bool:
+    """Check whether any process running this repo's code is stale on disk.
+
+    Compares each managed systemd service's start time (via _service_pids +
+    _proc_start_epoch) against the newest mtime of any source file under
+    app/ and scripts/ (_newest_source_mtime). If a service started more than
+    2 seconds BEFORE the newest source mtime, it is running old code and
+    needs a restart — even if HEAD matches origin/main.
+
+    If no service PIDs are available (non-systemd host, CI, unit tests), the
+    caller's own pid is used as a fallback.
+
+    Returns True if any relevant process is stale (should proceed with
+    deploy), False if everything is fresh enough (no restart needed).
+    """
+    try:
+        newest_mtime = _newest_source_mtime(remote_dir)
+        if newest_mtime <= 0:
             logger.debug(
-                "Reference file %s not found — cannot check staleness", ref_file
+                "No source files found under %s — cannot check staleness", remote_dir
             )
             return False
-        file_mtime = os.path.getmtime(ref_file)
 
-        # ── Compare ──────────────────────────────────────────────────────────
-        # If the process started more than 2 seconds before the file was
-        # modified, it's stale. The 2s margin accounts for sub-second timing
-        # jitter between the two measurements.
-        stale = proc_start_epoch < (file_mtime - 2.0)
-        if stale:
-            logger.info(
-                "Process stale: started at %.1f, file mtime %.1f (diff=%.1fs)",
-                proc_start_epoch,
-                file_mtime,
-                file_mtime - proc_start_epoch,
-            )
-        else:
+        pids = _service_pids()
+        if not pids:
+            logger.debug("No systemd service PIDs found — falling back to own pid")
+            pids = [os.getpid()]
+
+        for pid in pids:
+            start = _proc_start_epoch(pid)
+            if start is None:
+                logger.debug("Could not read start time for pid %s — skipping", pid)
+                continue
+            stale = start < (newest_mtime - 2.0)
+            if stale:
+                logger.info(
+                    "Process stale: pid %s started at %.1f, newest source mtime %.1f "
+                    "(diff=%.1fs)",
+                    pid,
+                    start,
+                    newest_mtime,
+                    newest_mtime - start,
+                )
+                return True
             logger.debug(
-                "Process fresh: started at %.1f, file mtime %.1f (diff=%.1fs)",
-                proc_start_epoch,
-                file_mtime,
-                file_mtime - proc_start_epoch,
+                "Process fresh: pid %s started at %.1f, newest source mtime %.1f "
+                "(diff=%.1fs)",
+                pid,
+                start,
+                newest_mtime,
+                newest_mtime - start,
             )
-        return stale
+        return False
 
     except Exception as e:
         logger.warning("Process-staleness check failed (%s) — assuming fresh", e)
