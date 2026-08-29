@@ -157,21 +157,21 @@ def _draw_legend(ax) -> None:
     ax.set_ylim(0, 1)
     ax.text(
         0.005,
-        0.96,
-        "Network legend — pin = location · constraints below · plotted from real coordinates (OSM Nominatim)",
-        fontsize=10.5,
+        0.97,
+        "Network legend \u2014 pin = location \u00b7 constraints below \u00b7 plotted from real coordinates (OSM Nominatim)",
+        fontsize=11,
         fontweight="bold",
         color="#3e5d3a",
         va="top",
     )
     n = len(SITES)
-    col_w = 0.92 / n
+    row_h = 0.78 / n
     for i, (num, name, _lat, _lng, role, constraint) in enumerate(SITES):
-        x0 = 0.02 + i * col_w
+        y_top = 0.94 - i * row_h
         color = PIN_COLORS[num]
         ax.text(
-            x0,
-            0.72,
+            0.005,
+            y_top,
             str(num),
             fontsize=10,
             fontweight="bold",
@@ -179,22 +179,29 @@ def _draw_legend(ax) -> None:
             bbox=dict(boxstyle="circle,pad=0.30", fc=color, ec="white", lw=1.2),
             va="center",
         )
+        ccol = "#c0392b" if "BLOCKER" in constraint else "#555555"
         ax.text(
-            x0 + 0.05,
-            0.88,
-            f"{name} — {role}",
-            fontsize=9,
+            0.055,
+            y_top,
+            f"{name} \u2014 {role}",
+            fontsize=9.5,
             fontweight="bold",
             color="#4a2a10",
             va="top",
         )
-        ccol = "#c0392b" if "BLOCKER" in constraint else "#555555"
-        ax.text(x0 + 0.05, 0.62, constraint, fontsize=8.4, color=ccol, va="top")
+        ax.text(
+            0.055,
+            y_top - row_h * 0.42,
+            constraint,
+            fontsize=9,
+            color=ccol,
+            va="top",
+        )
     ax.text(
         0.005,
         0.10,
-        "⚠ = export blocker (Ilhéus: Black King CNPJ INAPTA)   ·   red = Brazil network   ·   orange = destination (China)   ·   purple arrow = Brazil → China export lane",
-        fontsize=8.5,
+        "\u26a0 = export blocker (Ilh\u00e9us: Black King CNPJ INAPTA)   \u00b7   red = Brazil network   \u00b7   orange = destination (China)   \u00b7   purple arrow = Brazil \u2192 China export lane",
+        fontsize=9,
         color="#555555",
         va="top",
     )
@@ -218,9 +225,9 @@ def main() -> int:
     gs = GridSpec(
         2,
         2,
-        height_ratios=[3.3, 1.0],
+        height_ratios=[3.3, 1.6],
         width_ratios=[1.0, 1.0],
-        hspace=0.32,
+        hspace=0.22,
         wspace=0.20,
     )
 
