@@ -130,3 +130,61 @@ def test_missing_token_errors(monkeypatch):
     monkeypatch.setattr(tt.settings, "telegram_bot_api_key", "", raising=False)
     out = tt.create_telegram_topic(name="Exec: X", chat_id="-1001234567890")
     assert out["status"] == "error" and "TELEGRAM_BOT_API_KEY" in out["reason"]
+
+
+# ── resume_awaiting flag hooks (PR2) ──
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def test_post_flag_registers_message(monkeypatch):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "dummy", raising=False)
+    monkeypatch.setattr(
+        tp.httpx,
+        "post",
+        lambda *a, **k: _FakeResp({"ok": True, "result": {"message_id": 555}}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr,
+        "mark_resume_awaiting",
+        lambda mid, tid, text: marked.append((mid, tid, text)),
+    )
+    out = tp.post_to_telegram_topic(
+        message="ready go",
+        thread_id=15728,
+        chat_id="-1003919341801",
+        resume_awaiting=True,
+    )
+    assert out["status"] == "ok" and out["message_id"] == 555
+    assert marked == [(555, 15728, "ready go")]
+
+
+def test_post_no_flag_does_not_register(monkeypatch):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "dummy", raising=False)
+    monkeypatch.setattr(
+        tp.httpx,
+        "post",
+        lambda *a, **k: _FakeResp({"ok": True, "result": {"message_id": 556}}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
+    )
+    tp.post_to_telegram_topic(
+        message="plain update",
+        thread_id=15728,
+        chat_id="-1003919341801",
+        resume_awaiting=False,
+    )
+    assert marked == []

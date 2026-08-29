@@ -28,6 +28,7 @@ import logging
 import httpx
 
 from ..config import settings
+from .. import resume_registry
 from ..tool_registry import ToolSpec
 
 logger = logging.getLogger("autopilot.tools.telegram_topic")
@@ -60,6 +61,7 @@ def create_telegram_topic(
     kickoff_message: str = "",
     chat_id: str | None = None,
     session_id: str | None = None,
+    resume_awaiting: bool = False,
 ) -> dict:
     name = (name or "").strip()
     if not name:
@@ -121,6 +123,12 @@ def create_telegram_topic(
                 timeout=_TIMEOUT,
             )
             posted = bool(pr.json().get("ok"))
+            if posted and resume_awaiting:
+                mid = (pr.json().get("result") or {}).get("message_id")
+                if mid:
+                    resume_registry.mark_resume_awaiting(
+                        mid, thread_id, kickoff_message
+                    )
         except Exception as e:  # noqa: BLE001
             logger.warning("kickoff sendMessage failed: %s", e)
 
@@ -169,6 +177,10 @@ TOOL_SPEC = ToolSpec(
                 "type": "string",
                 "description": "Optional explicit group chat id; defaults to current group / configured working group.",
             },
+            "resume_awaiting": {
+                "type": "boolean",
+                "description": "If true, flag the kickoff message as resume-awaiting so a governor's emoji reaction on it can act as a go-signal.",
+            },
         },
         "required": ["name"],
     },
@@ -178,6 +190,7 @@ TOOL_SPEC = ToolSpec(
             kickoff_message=args.get("kickoff_message", ""),
             chat_id=args.get("chat_id"),
             session_id=ctx.get("session_id"),
+            resume_awaiting=bool(args.get("resume_awaiting", False)),
         ),
         indent=2,
     ),
