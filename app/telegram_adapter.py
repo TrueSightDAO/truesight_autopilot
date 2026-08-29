@@ -41,6 +41,7 @@ import httpx
 
 from .auth import create_jwt
 from .config import settings
+from . import resume_registry
 from .governor_registry import load_governors
 from .voice import transcribe_voice
 from .voice_output import detect_language, synthesize_voice
@@ -683,7 +684,12 @@ def download_telegram_file(file_id: str) -> str | None:
         return None
 
 
-def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int | None:
+def send_message(
+    chat_id: int,
+    text: str,
+    thread_id: int | None = None,
+    resume_awaiting: bool = False,
+) -> int | None:
     """Send a message; return the Telegram message_id of the first chunk, or None.
 
     Retries up to 3 times on 429 (rate limited) with exponential backoff,
@@ -705,8 +711,11 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                 resp = httpx.post(_api("sendMessage"), json=payload, timeout=20.0)
                 if resp.status_code == 200:
                     result = resp.json().get("result", {})
+                    chunk_id = result.get("message_id")
+                    if chunk_id and resume_awaiting:
+                        resume_registry.mark_resume_awaiting(chunk_id, thread_id, text)
                     if i == 0:
-                        msg_id = result.get("message_id")
+                        msg_id = chunk_id
                     break
                 elif resp.status_code == 429:
                     retry_after = (
@@ -733,6 +742,12 @@ def send_message(chat_id: int, text: str, thread_id: int | None = None) -> int |
                         "disable_web_page_preview": True,
                     }
                     resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
+                    if resp2.status_code == 200:
+                        chunk_id = resp2.json().get("result", {}).get("message_id")
+                        if chunk_id and resume_awaiting:
+                            resume_registry.mark_resume_awaiting(
+                                chunk_id, thread_id, text
+                            )
                     if i == 0 and resp2.status_code == 200:
                         msg_id = resp2.json().get("result", {}).get("message_id")
                     break

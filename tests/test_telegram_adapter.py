@@ -830,3 +830,63 @@ def test_handle_message_reaction_incomplete_ignored(caplog):
 def test_reaction_reactor_authorized_allowlist():
     assert ta._reaction_reactor_authorized(111, {111}) is True
     assert ta._reaction_reactor_authorized(999, {111}) is False
+
+
+# ── send_message: resume_awaiting flag captures EVERY chunk's message_id (PR2 §1.4) ──
+
+
+class _FakeResp:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+def _send_ok(result):
+    return _FakeResp(200, {"ok": True, "result": result})
+
+
+def test_send_message_resume_awaiting_registers_all_chunks(monkeypatch):
+    import app.resume_registry as rr
+
+    calls = []
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: (
+            calls.append(json) or _send_ok({"message_id": 1000 + len(calls)})
+        ),
+    )
+    # spy on the registry
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append((mid, tid))
+    )
+    # long text -> 2 chunks
+    long_text = ("line\n" * 100) + "\n✅ Ready. Reply go for it." + ("y" * 300)
+    mid = ta.send_message(-1001, long_text, thread_id=15728, resume_awaiting=True)
+    assert mid == 1001  # first chunk id (backward compat)
+    assert len(marked) == len(calls)  # EVERY chunk registered
+    assert all(tid == 15728 for _, tid in marked)
+    # the registry captures each distinct chunk message_id
+    assert len({m for m, _ in marked}) == len(marked)
+
+
+def test_send_message_no_flag_does_not_register(monkeypatch):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: _send_ok({"message_id": 777}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
+    )
+    ta.send_message(-1001, "plain message", thread_id=15728, resume_awaiting=False)
+    assert marked == []  # not flagged -> nothing registered

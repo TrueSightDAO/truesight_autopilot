@@ -21,6 +21,7 @@ import logging
 import httpx
 
 from ..config import settings
+from .. import resume_registry
 from ..tool_registry import ToolSpec
 from .telegram_topic import _API, _TIMEOUT, _chat_id_from_session, _deep_link
 
@@ -32,6 +33,7 @@ def post_to_telegram_topic(
     thread_id: int | str,
     chat_id: str | None = None,
     session_id: str | None = None,
+    resume_awaiting: bool = False,
 ) -> dict:
     message = (message or "").strip()
     if not message:
@@ -91,6 +93,11 @@ def post_to_telegram_topic(
             "message_thread_id": thread,
         }
 
+    if data.get("ok") and resume_awaiting:
+        mid = (data.get("result") or {}).get("message_id")
+        if mid:
+            resume_registry.mark_resume_awaiting(mid, thread, message)
+
     logger.info("posted to existing topic (thread=%s) in chat %s", thread, target)
     return {
         "status": "ok",
@@ -126,6 +133,10 @@ TOOL_SPEC = ToolSpec(
                 "type": "string",
                 "description": "Optional explicit group chat id; defaults to current/working group.",
             },
+            "resume_awaiting": {
+                "type": "boolean",
+                "description": "If true, flag the posted message as resume-awaiting so a governor's emoji reaction on it can act as a go-signal.",
+            },
         },
         "required": ["message", "thread_id"],
     },
@@ -135,6 +146,7 @@ TOOL_SPEC = ToolSpec(
             thread_id=args.get("thread_id"),
             chat_id=args.get("chat_id"),
             session_id=ctx.get("session_id"),
+            resume_awaiting=bool(args.get("resume_awaiting", False)),
         ),
         indent=2,
     ),
