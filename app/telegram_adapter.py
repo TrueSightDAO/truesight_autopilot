@@ -827,7 +827,16 @@ def edit_message_text(
         payload["message_thread_id"] = thread_id
     try:
         resp = httpx.post(_api("editMessageText"), json=payload, timeout=10.0)
-        return resp.status_code == 200
+        if resp.status_code == 200:
+            # An edited message KEEPS its message_id (it is the same message) —
+            # so when the final response (which often carries "📌 RESUME HERE")
+            # is delivered by editing the "Thinking…" status message, flag that
+            # message_id so the emoji go-signal works on turn-reports too (the
+            # send_message auto-flag alone missed the edit path; PR #336).
+            if thread_id and resume_registry.looks_resume_awaiting(text):
+                resume_registry.mark_resume_awaiting(message_id, thread_id, text)
+            return True
+        return False
     except Exception as e:  # noqa: BLE001
         logger.warning("editMessageText failed: %s", e)
         return False
