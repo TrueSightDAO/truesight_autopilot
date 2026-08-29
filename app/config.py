@@ -326,8 +326,14 @@ class Settings(BaseSettings):
     # /chat handoff trigger. Numeric supergroup id, e.g. -1001234567890. Requires
     # Sophia's bot to be a group admin with 'Manage Topics'.
     telegram_home_group_id: str = Field(
-        default="", validation_alias="TELEGRAM_HOME_GROUP_ID"
+        default="",
+        validation_alias="TELEGRAM_HOME_GROUP_ID",
     )
+    # Emoji-reaction go-signal (see plans/SOPHIA_EMOJI_REACTION_GO_PLAN.md):
+    # a standard-emoji reaction from an authorized user on a resume-awaiting
+    # message acts as a go-signal. Deny-list of emoji that are NOT a go
+    # (decision 0.1) -- default: thumbs-down.
+    emoji_go_blocked: list[str] = ["👎"]
 
     # Telegram attention watchdog — MTProto USER-session (not the bot), so it
     # can see DMs + all groups. Read-only; nudges go to Saved Messages only.
