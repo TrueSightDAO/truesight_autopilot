@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Plot the TrueSight DAO cacao sourcing network map from REAL coordinates,
-numbered pins + legend panel (no on-map text boxes -> zero label overlap).
+"""Plot the TrueSight DAO cacao sourcing network map from REAL coordinates.
 
-Replaces the old Gemini-generated AI map and the earlier on-map annotation
-layout (whose Bahia labels overlapped). Pin numbers 1-5 reference the legend.
+Two adjacent panels (Brazil | China) with a purple export arrow bridging them,
+so the two countries sit side by side instead of on opposite ends of a world
+map. Numbered pins 1-5; all site detail lives in the bottom legend panel
+(no on-map text boxes -> zero label overlap).
 
-Dependencies: matplotlib, a Natural Earth 50m GeoJSON (auto-downloaded once
-if missing). Output: cacao_sourcing_network_map.png.
+Replaces the old Gemini-generated AI map and the single-panel world view whose
+wide Brazil/China gap Gary flagged on 2026-08-29.
+
+Dependencies: matplotlib, Natural Earth 50m GeoJSON (auto-downloaded once).
+Output: cacao_sourcing_network_map.png
 
 Usage: python3 plot_cacao_sourcing_network_map.py [output.png]
 """
