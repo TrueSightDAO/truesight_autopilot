@@ -4061,8 +4061,24 @@ async def chat_observe(request: Request):
 
 def _append_observed_message(session_id: str, message: str, sender_name: str) -> None:
     """Core logic for /chat/observe, split out so it's unit-testable without
-    a FastAPI Request — mirrors the _run_tool extraction pattern elsewhere."""
+    a FastAPI Request — mirrors the _run_tool extraction pattern elsewhere.
+
+    Bootstraps the default role first (2026-08-29 fix): a brand-new topic
+    whose first message(s) are unmentioned chatter goes through THIS endpoint,
+    never through /chat's "len(history)==0 -> silently default to role 7"
+    check. Without this, history stops being empty before a role is ever set,
+    so the first @-mentioned message that finally reaches /chat falls through
+    to "try to parse this message as a role choice" and fails, showing the
+    confusing "I couldn't parse a role" prompt instead of just working under
+    the default role (observed live 2026-08-29: a real instruction, and even
+    a direct "7" reply to the resulting prompt, both got swallowed here and
+    never resolved a role).
+    """
     history = _load_or_create_session(session_id)
+    if find_role_in_history(history) is None:
+        default = get_default_role()
+        if default is not None:
+            set_role_in_history(history, default)
     history.append(
         {
             "role": "user",
