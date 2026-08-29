@@ -93,7 +93,9 @@ def post_to_telegram_topic(
             "message_thread_id": thread,
         }
 
-    if data.get("ok") and resume_awaiting:
+    if data.get("ok") and (
+        resume_awaiting or resume_registry.looks_resume_awaiting(message)
+    ):
         mid = (data.get("result") or {}).get("message_id")
         if mid:
             resume_registry.mark_resume_awaiting(mid, thread, message)

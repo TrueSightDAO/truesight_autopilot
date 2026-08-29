@@ -875,6 +875,42 @@ def test_send_message_resume_awaiting_registers_all_chunks(monkeypatch):
     assert len({m for m, _ in marked}) == len(marked)
 
 
+def test_send_message_auto_flags_resume_here_text(monkeypatch):
+    """A post containing 'RESUME HERE' self-flags even without resume_awaiting=True."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: _send_ok({"message_id": 888}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append((mid, tid))
+    )
+    ta.send_message(-1001, "Turn report. 📌 RESUME HERE = next unit.", thread_id=15991)
+    assert marked == [(888, 15991)]  # auto-flagged from text
+
+
+def test_send_message_plain_text_not_auto_flagged(monkeypatch):
+    """Ordinary turn report without the marker stays unflagged."""
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(ta, "_api", lambda m: f"https://api.telegram.org/botX/{m}")
+    monkeypatch.setattr(
+        ta.httpx,
+        "post",
+        lambda url, json=None, timeout=None: _send_ok({"message_id": 999}),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rr, "mark_resume_awaiting", lambda mid, tid, text: marked.append(mid)
+    )
+    ta.send_message(-1001, "All done, nothing to resume.", thread_id=15991)
+    assert marked == []  # no marker -> not flagged
+
+
 def test_send_message_no_flag_does_not_register(monkeypatch):
     import app.resume_registry as rr
 

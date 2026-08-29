@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 
@@ -61,6 +62,27 @@ def _prune(data: dict, now: float | None = None) -> None:
     ]
     for mid in expired:
         data.pop(mid, None)
+
+
+_RESUME_HERE_RE = re.compile(r"RESUME HERE|\U0001F4CC", re.IGNORECASE)
+
+
+def looks_resume_awaiting(text: str | None) -> bool:
+    """True when *text* itself declares a resume point — contains "RESUME HERE"
+    or the 📌 pin marker — so a posted message carrying it is auto-flagged
+    resume-awaiting even when the caller didn't pass resume_awaiting=True.
+
+    Closes the 👍-on-RESUME-HERE gap (2026-09-02): the text go-signal regex
+    (_GO_SIGNAL_RE) already matches "RESUME HERE" case-insensitively, so typing
+    "go" resumed from such a message but a reaction on it did nothing — the
+    registry only flagged messages at post-time when the caller passed
+    resume_awaiting=True. Turn-reports carrying "📌 RESUME HERE" were ordinary
+    posts, never flagged, so the registry lookup returned nothing and the
+    reaction was ignored. Now any post containing the marker self-flags.
+    """
+    if not text:
+        return False
+    return bool(_RESUME_HERE_RE.search(text))
 
 
 def mark_resume_awaiting(
