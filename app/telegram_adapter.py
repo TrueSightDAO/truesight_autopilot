@@ -2450,17 +2450,24 @@ def _maybe_resume_from_reaction(
         emoji,
     )
     try:
-        lock = _thread_dispatch_lock(chat_id, thread_id)
-        with lock:
-            _run_turn_with_auto_advance(
-                chat_id,
-                thread_id,
-                dispatch,
-                session_id,
-                public_key,
-                is_voice=False,
-                transcribed_text=None,
-            )
+        # Do NOT acquire the per-thread lock here (2026-08-29 fix): it self-
+        # deadlocked, forever, on every single successful resume since this
+        # feature shipped. _run_turn_with_auto_advance() already acquires
+        # _thread_dispatch_lock(chat_id, thread_id) itself on each loop
+        # iteration -- wrapping this call in the SAME lock double-acquires a
+        # plain (non-reentrant) threading.Lock from this same thread, which
+        # blocks forever with no exception and no further log output. The
+        # normal text go-signal path calls _run_turn_with_auto_advance()
+        # directly with no outer lock, for the same reason.
+        _run_turn_with_auto_advance(
+            chat_id,
+            thread_id,
+            dispatch,
+            session_id,
+            public_key,
+            is_voice=False,
+            transcribed_text=None,
+        )
     except Exception:  # noqa: BLE001 — never let a reaction crash the poll loop
         logger.exception("emoji go-signal dispatch failed")
         send_message(
