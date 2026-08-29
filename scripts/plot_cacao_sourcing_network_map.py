@@ -31,15 +31,15 @@ NE_CACHE = Path("/tmp/ne50_countries.geojson")
 # Geocoded via OSM Nominatim 2026-08-29; constraints per CACAO_SOURCING_NETWORK_OVERVIEW.md
 SITES = [
     ("Manicoré (AM)", -5.804618, -61.289483, "exploratory source",
-     "no logistics / fermentation / freight infra known", 0.9, 1.6),
+     "no logistics /\nfermentation /\nfreight infra known", 1.3, 2.4),
     ("Altamira (PA)", -3.204065, -52.209961, "beans supplier (CEPOTX)",
-     "beans only · NO conversion · needs CN-side warehouse", 0.9, 1.6),
+     "beans only · NO conversion\n· needs CN-side warehouse", 1.3, 2.4),
     ("Itabuna (BA)", -14.793173, -39.275034, "conversion + export (Coopercabruca)",
-     "members-only · NO warehousing · exact spec upfront", -2.2, 2.2),
+     "members-only ·\nNO warehousing ·\nexact spec upfront", -4.6, 3.8),
     ("Ilhéus (BA)", -14.792599, -39.045384, "exporter / warehouse (Black King)",
-     "⚠ CNPJ INAPTA · NO export NF-e — BLOCKER", 0.9, -2.6),
+     "⚠ CNPJ INAPTA ·\nNO export NF-e\n— BLOCKER", 2.2, -3.4),
     ("Dongguan (CN)", 23.018357, 113.745233, "destination market (Elizabeth Wong)",
-     "SKU spec pending", -10.5, -3.2),
+     "SKU spec pending", -11.5, -3.6),
 ]
 
 
@@ -85,7 +85,7 @@ def _annotate(ax, site, pin_color, is_blocker=False) -> None:
         label,
         xy=(lng, lat),
         xytext=(lng + dx, lat + dy),
-        fontsize=8.2,
+        fontsize=7.6,
         color="#4a2a10",
         zorder=7,
         ha="left",
