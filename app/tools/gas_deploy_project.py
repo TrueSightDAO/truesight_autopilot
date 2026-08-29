@@ -116,8 +116,13 @@ def gas_deploy_project(
     push: bool = False,
     with_hooks: bool = False,
     timeout_secs: int = _DEFAULT_TIMEOUT_SECS,
+    deployment_id: str = "",
 ) -> str:
-    """Run `scripts/deploy_gas_project.py <script_id> [--push] [--with-hooks]`.
+    """Run `scripts/deploy_gas_project.py <script_id> [--push] [--with-hooks]` [--deployment-id <id>].
+
+    When deployment_id is given (and push=True), the deploy bumps a version and
+    repoints that pinned GAS deployment at the new code — so the URL Edgar/webhooks
+    actually call serves the new code. Prevents the stale-pinned-deployment gap.
 
     Returns a JSON-string tool result:
     {
@@ -131,6 +136,7 @@ def gas_deploy_project(
       "stderr_truncated": bool,
       "push": bool,
       "with_hooks": bool,
+      "deployment_id": str,
     }
     """
     if not script_id or not isinstance(script_id, str):
@@ -162,6 +168,9 @@ def gas_deploy_project(
             cmd.append("--with-hooks")
         else:
             cmd.append("--no-hooks")
+    if deployment_id:
+        cmd.append("--deployment-id")
+        cmd.append(deployment_id)
     # else: dry-run (no flags)
 
     # DEPLOY_PUSH_SOP Phase 2: soft-lock lease before any real push.
@@ -227,6 +236,7 @@ def gas_deploy_project(
         "stderr_truncated": stderr_truncated,
         "push": bool(push),
         "with_hooks": bool(push and with_hooks),
+        "deployment_id": deployment_id,
     }
     logger.info(
         "gas_deploy_project: script_id=%s push=%s with_hooks=%s exit=%d",
