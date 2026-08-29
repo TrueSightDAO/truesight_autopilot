@@ -370,7 +370,9 @@ class GitHubClient:
             repo = self.g.get_repo(self._full_name(repo_name))
             pulls = repo.get_pulls(state=state, sort="updated", direction="desc")
             result = []
-            for pr in pulls[:limit]:
+            for i, pr in enumerate(pulls):
+                if i >= limit:
+                    break
                 result.append(
                     {
                         "number": pr.number,
