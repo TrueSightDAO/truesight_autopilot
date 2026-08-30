@@ -155,8 +155,9 @@ TOOL_SPEC = ToolSpec(
         "from its beta base (GitHub merge-upstream — no clone, never force). "
         "ONLY call this after the governor has reviewed the beta deploy and "
         "EXPLICITLY approved promotion in this conversation. Prod repos: "
-        "agroverse_shop_prod, truesight_me_prod, dapp_prod, sunmint_prod. On conflict, stop "
-        "and report — never force-sync (CNAME divergence is intentional)."
+        + ", ".join(sorted(settings.prod_repos))
+        + ". On conflict, stop and report — never force-sync (CNAME "
+        "divergence is intentional)."
     ),
     parameters={
         "type": "object",
@@ -164,7 +165,7 @@ TOOL_SPEC = ToolSpec(
             "prod_repo": {
                 "type": "string",
                 "description": "Production repo to sync from its beta base.",
-                "enum": ["agroverse_shop_prod", "truesight_me_prod", "dapp_prod", "sunmint_prod"],
+                "enum": sorted(settings.prod_repos),
             },
         },
         "required": ["prod_repo"],
