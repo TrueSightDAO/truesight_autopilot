@@ -24,6 +24,12 @@ import httpx
 from ..config import settings
 
 logger = logging.getLogger("autopilot.tools.sync_beta_to_prod")
+
+# Single source of truth: derive the schema enum (and the human-facing
+# description) from settings.prod_repos so a prod repo added to config is
+# callable through this tool with zero tool edits. Regression-guarded by
+# tests/test_sync_beta_to_prod_tool.py.
+_PROD_REPOS = sorted(settings.prod_repos)
 from ..deploy_ledger import (
     acquire_lease,
     append_deploy_record,
@@ -155,7 +161,7 @@ TOOL_SPEC = ToolSpec(
         "from its beta base (GitHub merge-upstream — no clone, never force). "
         "ONLY call this after the governor has reviewed the beta deploy and "
         "EXPLICITLY approved promotion in this conversation. Prod repos: "
-        "agroverse_shop_prod, truesight_me_prod, dapp_prod, sunmint_prod. On conflict, stop "
+        f"{', '.join(_PROD_REPOS)}. On conflict, stop "
         "and report — never force-sync (CNAME divergence is intentional)."
     ),
     parameters={
@@ -164,7 +170,7 @@ TOOL_SPEC = ToolSpec(
             "prod_repo": {
                 "type": "string",
                 "description": "Production repo to sync from its beta base.",
-                "enum": ["agroverse_shop_prod", "truesight_me_prod", "dapp_prod", "sunmint_prod"],
+                "enum": _PROD_REPOS,
             },
         },
         "required": ["prod_repo"],
