@@ -208,11 +208,6 @@ class Settings(BaseSettings):
         "tribomirimbahia",
         "lineage-engine",
         "lineage-assets",
-        # sunmint: builder script (scripts/build_tree_geojson.py) + the
-        # rebuild workflow are CODE and must be PR-able; only the generated
-        # trees/index.geojson is machine-pushed (by that same workflow) and
-        # must not be hand-edited.
-        "sunmint",
         "sunmint_farmer",
         "sunmint_mobile",
         "sunmint_beta",
@@ -239,6 +234,7 @@ class Settings(BaseSettings):
         # blob / asset stores (Contents-API uploads)
         ".github",
         "qr_codes",
+        "sunmint",
         "store_interaction_attachments",
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
