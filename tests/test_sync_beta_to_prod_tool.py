@@ -8,8 +8,8 @@ through the tool with zero extra edits.
 
 from __future__ import annotations
 
-from ..app.config import settings
-from ..app.tools.sync_beta_to_prod import TOOL_SPEC
+from app.config import settings
+from app.tools.sync_beta_to_prod import TOOL_SPEC
 
 
 def test_enum_matches_settings_prod_repos():
