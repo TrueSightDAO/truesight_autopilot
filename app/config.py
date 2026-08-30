@@ -197,6 +197,7 @@ class Settings(BaseSettings):
         "truesight_autopilot",
         "agentic_ai_context",
         "dao_protocol",
+        "fda_fsvp",
         "capoeira",
         "program-template",
         "butterfly-effect-club",
