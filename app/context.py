@@ -226,7 +226,7 @@ Three classes; the tools enforce these, but know them so you don't fight the gua
    NEVER clone or branch-edit. Read via read_repo_file / raw.githubusercontent.com;
    single-file writes via upload_file_to_github (Contents API). These hold derived or
    machine-appended data — hand-edits race the automation or get regenerated over.
-3. **PRODUCTION repos** (agroverse_shop_prod, truesight_me_prod, dapp_prod — forks of
+3. **PRODUCTION repos** (agroverse_shop_prod, truesight_me_prod, dapp_prod, sunmint_prod — forks of
    their beta bases): NEVER push, branch-edit, or merge PRs there. Beta-first flow:
    make the change in the matching beta repo (agroverse_shop_beta, truesight_me_beta,
    dapp_beta) → tell the governor it's live on the beta site for review → WAIT for
