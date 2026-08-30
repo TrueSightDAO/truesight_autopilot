@@ -26,7 +26,6 @@ import base64
 import json
 import os
 import sys
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -46,6 +45,7 @@ def load_keys(path: str) -> tuple[str, bytes]:
         pub = data.get("PUBLIC_KEY") or data.get("public_key") or ""
         priv = data.get("PRIVATE_KEY") or data.get("private_key") or ""
     else:
+
         def _get(k: str) -> str:
             for line in raw.splitlines():
                 if line.startswith(k + "="):
@@ -61,7 +61,9 @@ def load_keys(path: str) -> tuple[str, bytes]:
         # Validate it parses as a PKCS8/DER key before we sign with it.
         serialization.load_der_private_key(priv_der, password=None)
     except Exception as exc:  # noqa: BLE001 - surface any key-parse failure clearly
-        raise SystemExit(f"ERROR: cannot decode PRIVATE_KEY from {path}: {exc}") from exc
+        raise SystemExit(
+            f"ERROR: cannot decode PRIVATE_KEY from {path}: {exc}"
+        ) from exc
     return pub, priv_der
 
 
@@ -102,34 +104,57 @@ def submit(share_text: str, url: str) -> tuple[int, str]:
     boundary = "----SunMintSubmit" + os.urandom(8).hex()
     body = (
         f"--{boundary}\r\n"
-        f"Content-Disposition: form-data; name=\"text\"\r\n\r\n"
+        f'Content-Disposition: form-data; name="text"\r\n\r\n'
         f"{share_text}\r\n"
         f"--{boundary}--\r\n"
     ).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST", headers={
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "User-Agent": "truesight-autopilot/sunmint-submit",
-    })
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "truesight-autopilot/sunmint-submit",
+        },
+    )
     with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - explicit DAO endpoint
         return resp.status, resp.read().decode("utf-8", "replace")
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Submit a SunMint reject event to Edgar (site-exact format)")
-    ap.add_argument("--tree-id", required=True, help="SunMint tree id (col A of SunMint Tree Planting tab)")
+    ap = argparse.ArgumentParser(
+        description="Submit a SunMint reject event to Edgar (site-exact format)"
+    )
+    ap.add_argument(
+        "--tree-id",
+        required=True,
+        help="SunMint tree id (col A of SunMint Tree Planting tab)",
+    )
     ap.add_argument("--reason", default="Not a valid tree")
-    ap.add_argument("--qr-code", default="(unlinked)", help="QR code if the tree is linked, else (unlinked)")
+    ap.add_argument(
+        "--qr-code",
+        default="(unlinked)",
+        help="QR code if the tree is linked, else (unlinked)",
+    )
     ap.add_argument("--submitter", default="Sophia Truesight", help="Updated by: value")
     ap.add_argument("--keys", default=DEFAULT_KEYS, help="Path to keypair env file")
-    ap.add_argument("--url", default=EDGAR_SUBMIT_URL, help="Edgar submit endpoint (override for tests)")
-    ap.add_argument("--source-url", default="https://sunmint.truesight.me/monitor-tree-growth/",
-                    help="URL in the 'generated using' line")
-    ap.add_argument("--dry-run", action="store_true", help="Print the exact text; do NOT submit")
+    ap.add_argument(
+        "--url",
+        default=EDGAR_SUBMIT_URL,
+        help="Edgar submit endpoint (override for tests)",
+    )
+    ap.add_argument(
+        "--source-url",
+        default="https://sunmint.truesight.me/monitor-tree-growth/",
+        help="URL in the 'generated using' line",
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="Print the exact text; do NOT submit"
+    )
     args = ap.parse_args()
 
     pub, priv_der = load_keys(args.keys)
-    signature = sign_request_text(priv_der, "")  # placeholder, replaced below with real text
-    # Build requestText via the same formatter used for the share text:
+    # Build requestText (the block the signature covers — same as the site's signText()):
     request_text_only = (
         f"[TREE PLANTING REJECT EVENT]\n"
         f"- QR Code: {args.qr_code}\n"
@@ -140,13 +165,18 @@ def main() -> int:
     )
     signature = sign_request_text(priv_der, request_text_only)
     share_text = build_share_text(
-        args.tree_id, args.reason, args.qr_code, args.submitter,
-        pub, signature, args.source_url,
+        args.tree_id,
+        args.reason,
+        args.qr_code,
+        args.submitter,
+        pub,
+        signature,
+        args.source_url,
     )
 
     print(f"=== requestText ===\n{request_text_only}\n")
     print(f"=== shareText (first 200 chars) ===\n{share_text[:200]}...\n")
-    print(f"=== signature_verification: pending ===")
+    print("=== signature_verification: pending ===")
     if args.dry_run:
         print("DRY-RUN: not submitting")
         return 0
@@ -159,9 +189,13 @@ def main() -> int:
         if parsed.get("signature_verification") == "success":
             print("\n✅ SIGNATURE VERIFIED — submission ingested.")
             print("Next: fire the @37 webhook:")
-            print("  https://script.google.com/a/macros/agroverse.shop/s/AKfycbyoFCTzIdC1g69ZX3AK894h2siQOKoNSEiuyLDtZJTtarQPHHa5Zl8rjot0vPFUquV2/exec?action=processTreePlantingLinksFromTelegramChatLogs")
+            print(
+                "  https://script.google.com/a/macros/agroverse.shop/s/AKfycbyoFCTzIdC1g69ZX3AK894h2siQOKoNSEiuyLDtZJTtarQPHHa5Zl8rjot0vPFUquV2/exec?action=processTreePlantingLinksFromTelegramChatLogs"
+            )
         else:
-            print("\n⚠️ signature_verification != success — check field order / key registration.")
+            print(
+                "\n⚠️ signature_verification != success — check field order / key registration."
+            )
     except (json.JSONDecodeError, TypeError):
         pass
     return 0 if status == 200 else 1
