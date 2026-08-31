@@ -66,9 +66,7 @@ class Settings(BaseSettings):
     # to canonical labels via exact/case-insensitive/space-underscore-hyphen matching,
     # falling back to _FIELD_ALIASES for backward compat. OFF by default — existing
     # _FIELD_ALIASES behavior is unchanged.
-    catalog_normalize: bool = Field(
-        default=False, validation_alias="CATALOG_NORMALIZE"
-    )
+    catalog_normalize: bool = Field(default=False, validation_alias="CATALOG_NORMALIZE")
 
     # Approval gate for submit_contribution. OFF by default (Gary 2026-06-18):
     # signed submissions execute directly — the RSA signature is the
@@ -213,6 +211,7 @@ class Settings(BaseSettings):
         "sunmint_mobile",
         "sunmint_beta",
         "sunmint_prod",
+        "farm-media-raw",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
@@ -237,6 +236,7 @@ class Settings(BaseSettings):
         "qr_codes",
         "sunmint",
         "store_interaction_attachments",
+        "farm-media-raw",
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
         # shared agent-to-agent handoff mailbox (app/tools/agent_handoff.py) —
