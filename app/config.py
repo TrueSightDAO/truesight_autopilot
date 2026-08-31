@@ -235,6 +235,7 @@ class Settings(BaseSettings):
         ".github",
         "qr_codes",
         "sunmint",
+        "verify_public_signatures",
         "store_interaction_attachments",
         "farm-media-raw",
         # workflow-pushed JSON snapshots
