@@ -237,6 +237,51 @@ def append_to_transcript(
         }
 
 
+def _log_usage(session_id: str) -> None:
+    """Best-effort usage audit row after a successful transcript append.
+
+    Never raises: usage logging is auxiliary to the append itself.
+    Invokes the installed append_usage.py CLI (local write only; the
+    transcript repo owns the durable copy). Wrapped in try/except so a
+    missing tool or bad record can never fail the transcript append.
+    """
+    import json as _json
+    import shutil
+    import subprocess
+    import sys
+
+    try:
+        tool = shutil.which("append_usage.py") or str(
+            Path(__file__).resolve().parent / "append_usage.py"
+        )
+        if not Path(tool).exists():
+            return
+        record = {
+            "provider": "harness",
+            "model": "append_to_transcript",
+            "caller": "attachment_tools.append_to_transcript",
+            "session_id": session_id,
+            "est_usd": 0,
+            "had_tool_calls": True,
+        }
+        subprocess.run(
+            [
+                sys.executable,
+                tool,
+                "--session",
+                session_id,
+                "--json",
+                _json.dumps(record),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(Path(__file__).resolve().parent),
+        )
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Append attachment content to session transcript"
@@ -253,12 +298,8 @@ def main():
     parser.add_argument(
         "--grok-description", default="", help="Grok vision description (for images)"
     )
-    parser.add_argument(
-        "--chat-id", default="", help="Telegram chat ID"
-    )
-    parser.add_argument(
-        "--thread-id", default="", help="Telegram thread/topic ID"
-    )
+    parser.add_argument("--chat-id", default="", help="Telegram chat ID")
+    parser.add_argument("--thread-id", default="", help="Telegram thread/topic ID")
 
     args = parser.parse_args()
     result = append_to_transcript(
@@ -271,6 +312,8 @@ def main():
         chat_id=args.chat_id,
         thread_id=args.thread_id,
     )
+    if result.get("status") == "success":
+        _log_usage(args.session_id)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
