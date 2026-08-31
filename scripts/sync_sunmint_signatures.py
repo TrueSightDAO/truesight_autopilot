@@ -145,6 +145,36 @@ def _signed_payload(text: str) -> str:
     return "\n".join(lines[0 : sep + 1]).strip()
 
 
+_SPKI_PREFIX = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"  # RSA-2048 SPKI DER base64 head
+
+
+def _is_test_event(text: str, msg_id: str) -> bool:
+    """Test/synthetic events carry placeholder keys or localhost provenance —
+    they must never mix with real farmer attestations in the public cache."""
+    if msg_id.startswith(("E2ETEST_", "TEST-")):
+        return True
+    if "Submission Source: SYNTH" in text:
+        return True
+    if "generated using http://localhost" in text:
+        return True
+    return False
+
+
+_SPKI_PREFIX = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"  # RSA-2048 SPKI DER base64 head
+
+
+def _is_test_event(text: str, msg_id: str) -> bool:
+    """Test/synthetic events carry placeholder keys or localhost provenance —
+    they must never mix with real farmer attestations in the public cache."""
+    if msg_id.startswith(("E2ETEST_", "TEST-")):
+        return True
+    if "Submission Source: SYNTH" in text:
+        return True
+    if "generated using http://localhost" in text:
+        return True
+    return False
+
+
 def parse_event(text: str):
     """Return {marker, public_key, signature, payload} if text is an in-scope SunMint event."""
     m = re.match(r"\s*(\[[^\]]+\])", text)
@@ -167,6 +197,7 @@ def build_signatures(
     chat_rows: list, planting_by_msg: dict, growth_by_msg: dict
 ) -> dict:
     events = {}
+    test_events = {}
     dupes = []
     for row in chat_rows:
         msg_id = _cell(row, "msg_id", CHAT)
@@ -196,6 +227,22 @@ def build_signatures(
             contributor = planting_by_msg[msg_id].get("submitted_name", "")
         if not contributor:
             contributor = _cell(row, "contributor", CHAT)
+        if _is_test_event(text, msg_id) or not parsed["public_key"].startswith(
+            _SPKI_PREFIX
+        ):
+            test_events[msg_id] = {
+                "event_type": parsed["marker"],
+                "telegram_message_id": msg_id,
+                "reason": (
+                    "test/synthetic (SYNTH source, E2ETEST id, localhost provenance)"
+                    if _is_test_event(text, msg_id)
+                    else "malformed/unverifiable (public key is not an RSA-2048 SPKI key)"
+                ),
+                "public_key": parsed["public_key"],
+                "signature": parsed["signature"],
+                "signed_payload": parsed["payload"],
+            }
+            continue
         events[msg_id] = {
             "event_type": parsed["marker"],
             "telegram_message_id": msg_id,
@@ -207,6 +254,10 @@ def build_signatures(
             "signed_payload": parsed["payload"],
             "signed_text": text,
             "source_tab": ", ".join(source_tabs),
+            "verifiable": (
+                parsed["public_key"].startswith(_SPKI_PREFIX)
+                and len(parsed["signature"]) >= 300
+            ),
             "linked_tree_id": linked_tree_id,
         }
     return {
@@ -214,6 +265,8 @@ def build_signatures(
         "generated_at": _now_iso(),
         "schema_version": 1,
         "count": len(events),
+        "test_events_count": len(test_events),
+        "test_events": test_events,
         "events": events,
         "warnings": {
             "excluded_email_events": "EMAIL VERIFICATION/REGISTERED excluded (PII)",
