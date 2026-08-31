@@ -129,8 +129,24 @@ def _load_rows(ws) -> list:
     return rows[start + 1 :]
 
 
+def _signed_payload(text: str) -> str:
+    """Extract the EXACT bytes that were signed (mirrors signature_verifier.rb):
+    everything up to and including the -------- separator, normalized to \n, stripped.
+    This is the string `openssl dgst -sha256 -verify` must succeed against."""
+    normalized = text.replace("\r\n", "\n")
+    lines = normalized.split("\n")
+    sep = -1
+    for i, line in enumerate(lines):
+        if line.strip() == "--------":
+            sep = i
+            break
+    if sep == -1:
+        return ""
+    return "\n".join(lines[0 : sep + 1]).strip()
+
+
 def parse_event(text: str):
-    """Return {marker, public_key, signature} if text is an in-scope SunMint event."""
+    """Return {marker, public_key, signature, payload} if text is an in-scope SunMint event."""
     m = re.match(r"\s*(\[[^\]]+\])", text)
     if not m:
         return None
@@ -143,6 +159,7 @@ def parse_event(text: str):
         "marker": marker,
         "public_key": pub.group(1).strip() if pub else "",
         "signature": sig.group(1).strip() if sig else "",
+        "payload": _signed_payload(text),
     }
 
 
@@ -187,6 +204,7 @@ def build_signatures(
             "contributor_name": contributor,
             "public_key": parsed["public_key"],
             "signature": parsed["signature"],
+            "signed_payload": parsed["payload"],
             "signed_text": text,
             "source_tab": ", ".join(source_tabs),
             "linked_tree_id": linked_tree_id,
@@ -228,6 +246,7 @@ def build_measurements(growth_rows: list, chat_by_msg: dict) -> dict:
                 "analysis_sha256": _cell(row, "analysis_sha", GROW),
                 "farmer_public_key": _cell(row, "farmer_sig", GROW),
                 "signature": chat.get("signature", ""),
+                "signed_payload": chat.get("payload", ""),
                 "signed_text": chat.get("signed_text", ""),
                 "contributor_name": _cell(row, "contributor", GROW),
                 "status": _cell(row, "status", GROW),
@@ -331,6 +350,7 @@ def main() -> None:
             parsed = parse_event(_cell(r, "contribution", CHAT))
             chat_by_msg[m] = {
                 "signature": parsed["signature"] if parsed else "",
+                "payload": parsed["payload"] if parsed else "",
                 "signed_text": _cell(r, "contribution", CHAT),
             }
 
