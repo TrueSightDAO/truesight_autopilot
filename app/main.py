@@ -1151,7 +1151,7 @@ async def auth_challenge(request: Request) -> JSONResponse:
     return response
 
 
-@app.post("/auth/challenge-dashboard")
+@app.post("/media-archive-pipeline/auth/challenge")
 async def auth_challenge_dashboard(request: Request) -> JSONResponse:
     """Step 1 (dashboard variant): same as /auth/challenge but also allows
     registered sentinels (monitor access). Issuing a JWT here does NOT widen
