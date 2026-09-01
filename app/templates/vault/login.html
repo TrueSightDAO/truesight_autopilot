@@ -133,7 +133,10 @@ async function signIn() {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ challenge, signature, public_key: pub })
         });
-        if (resp.ok) { window.location.href = '/vault'; return; }
+        if (resp.ok) {
+            try { const j = await resp.clone().json(); if (j && j.token) localStorage.setItem('sophia_token', j.token); } catch (e) {}
+            window.location.href = '/vault'; return;
+        }
         throw new Error((await resp.json()).detail || 'Verification failed');
     } catch (e) {
         setError(e.message); setStatus('');

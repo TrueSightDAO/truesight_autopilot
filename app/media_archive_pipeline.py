@@ -17,6 +17,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from .auth import verify_jwt
+from .vault_routes import _optional_identity
+from fastapi.templating import Jinja2Templates
+
+_templates_dir = Path(__file__).resolve().parent / "templates" / "vault"
+_templates = Jinja2Templates(directory=str(_templates_dir))
 
 router = APIRouter()
 
@@ -207,13 +212,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="footer">MAP &middot; Media Archives Pipeline &middot; TrueSight DAO</div>
 </div>
 <script>
-let TOKEN = localStorage.getItem('map_token') || '';
+const SOPHIA_TOKEN_KEY = 'sophia_token'; // shared across governor-gated pages
+let TOKEN = localStorage.getItem(SOPHIA_TOKEN_KEY) || '';
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function setToken(){
   TOKEN = document.getElementById('tok').value.trim();
-  localStorage.setItem('map_token', TOKEN);
+  localStorage.setItem(SOPHIA_TOKEN_KEY, TOKEN);
   load();
 }
 
@@ -223,12 +229,16 @@ async function load(){
   const content = document.getElementById('content');
   const login = document.getElementById('login');
   err.style.display = 'none';
-  if(!TOKEN){ login.style.display='block'; meta.textContent='Signed out — log in to view.'; return; }
   login.style.display = 'none';
   meta.textContent = 'Loading…';
   try{
-    const r = await fetch('/media-archive-pipeline/data', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem('map_token'); return; }
+    // 1. cookie-first (vault session carries over; verify_jwt falls back to governor_chat_session)
+    let r = await fetch('/media-archive-pipeline/data', { credentials: 'same-origin' });
+    if(r.status === 401){
+      // 2. shared token as Bearer
+      if(TOKEN){ r = await fetch('/media-archive-pipeline/data', { credentials: 'same-origin', headers: { 'Authorization': 'Bearer ' + TOKEN } }); }
+      if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem(SOPHIA_TOKEN_KEY); return; }
+    }
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     meta.textContent = 'Generated ' + new Date(d.generated_at).toLocaleString();
@@ -291,6 +301,11 @@ load();
 
 
 @router.get("/media-archive-pipeline", response_class=HTMLResponse)
-def media_archive_pipeline_page() -> HTMLResponse:
-    """The MAP dashboard page (login prompt; data is auth-gated)."""
-    return HTMLResponse(DASHBOARD_HTML)
+def media_archive_pipeline_page(request: Request) -> HTMLResponse:
+    """The MAP dashboard page — vault-style, cookie session (governor_chat_session)."""
+    identity = _optional_identity(request)
+    return _templates.TemplateResponse(
+        request,
+        "media_archive_pipeline.html",
+        {"request": request, "identity": identity},
+    )
