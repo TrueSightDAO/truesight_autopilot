@@ -30,6 +30,7 @@ import httpx
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .media_archive_pipeline import router as media_archive_pipeline_router
+from .signature_ledger_pipeline import router as signature_ledger_pipeline_router
 from .auto_advance import next_action
 from .config import settings
 from .turn_convergence import convergence_message, should_converge
@@ -514,6 +515,7 @@ app.add_middleware(
 # Mount vault routes
 app.include_router(vault_router)
 app.include_router(media_archive_pipeline_router)
+app.include_router(signature_ledger_pipeline_router)
 
 
 # ── In-memory rate limiter: max 1 req per 10s per IP ──
@@ -719,9 +721,12 @@ async def root():
   <h1>Sophia</h1>
   <p class="tagline">The Oracle of TrueSight DAO —<br>wisdom from the I Ching, grounded in DAO state.</p>
 
-  <a class="btn" href="https://oracle.truesight.me" target="_blank">Cast the I Ching</a>
-  <a class="btn" href="/vault/" style="margin-top: 0.75rem;">Credential Vault</a>
-  <a class="btn" href="/media-archive-pipeline" style="margin-top: 0.75rem;">Media Archives Pipeline</a>
+  <div style="display: grid; grid-template-columns: 1fr; gap: 0.75rem; max-width: 480px; margin: 0 auto;">
+    <a class="btn" href="https://oracle.truesight.me" target="_blank">Cast the I Ching</a>
+    <a class="btn" href="/vault/">Credential Vault</a>
+    <a class="btn" href="/media-archive-pipeline">Media Archives Pipeline</a>
+    <a class="btn" href="/signature-ledger-pipeline">Signature Ledger Pipeline</a>
+  </div>
 
   <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(185,137,76,0.25); max-width: 480px; margin-left: auto; margin-right: auto;">
     <p style="font-size: 0.85rem; color: #b9894c; margin-bottom: 0.5rem; font-style: italic;">
