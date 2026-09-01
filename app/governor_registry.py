@@ -20,7 +20,9 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MEMBERS_URL = "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/dao_members.json"
-_RAW_KEY_BASE = "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/public_keys"
+_RAW_KEY_BASE = (
+    "https://raw.githubusercontent.com/TrueSightDAO/treasury-cache/main/public_keys"
+)
 _CACHE_TTL_SECONDS = int(os.getenv("GOVERNORS_CACHE_TTL", "300"))
 
 # Per-key cache: sha256 -> (fetched_at, data_or_None)
@@ -188,6 +190,23 @@ def load_governors(force_refresh: bool = False) -> dict:
         "source": "deny-all",
         "governors": [],
     }
+
+
+def is_sentinel(public_key_b64: str) -> bool:
+    """Check if a public key belongs to a registered sentinel (monitor access)."""
+    identity = _resolve_key_safe(public_key_b64)
+    if identity is not None and "sentinel" in identity.get("roles", []):
+        return True
+    # fallback: re-resolve fresh (same retry pattern as is_governor)
+    identity = resolve_key(public_key_b64)
+    return identity is not None and "sentinel" in identity.get("roles", [])
+
+
+def _resolve_key_safe(public_key_b64: str) -> dict | None:
+    try:
+        return resolve_key(public_key_b64)
+    except Exception:
+        return None
 
 
 def is_governor(public_key_b64: str) -> bool:

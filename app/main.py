@@ -1145,6 +1145,38 @@ async def auth_challenge(request: Request) -> JSONResponse:
         key="governor_chat_session",
         value=token,
         httponly=True,
+        samesite="lax",
+        max_age=settings.jwt_expiry_minutes * 60,
+    )
+    return response
+
+
+@app.post("/auth/challenge-dashboard")
+async def auth_challenge_dashboard(request: Request) -> JSONResponse:
+    """Step 1 (dashboard variant): same as /auth/challenge but also allows
+    registered sentinels (monitor access). Issuing a JWT here does NOT widen
+    chat/vault auth — those endpoints still use verify_payload() with the
+    default governor-only gate."""
+    body = await request.json()
+    payload = body.get("payload")
+    signature = body.get("signature")
+    public_key = request.headers.get("X-Public-Key", "")
+
+    if not payload or not signature or not public_key:
+        raise HTTPException(
+            status_code=400, detail="payload, signature, and X-Public-Key required."
+        )
+
+    verify_payload(payload, signature, public_key, allow_sentinel=True)
+    token = create_jwt(public_key)
+
+    response = JSONResponse(
+        {"token": token, "expires_in": settings.jwt_expiry_minutes * 60}
+    )
+    response.set_cookie(
+        key="governor_chat_session",
+        value=token,
+        httponly=True,
         secure=not settings.debug,
         samesite="lax",
         max_age=settings.jwt_expiry_minutes * 60,
