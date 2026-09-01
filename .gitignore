@@ -43,3 +43,4 @@ worktrees/
 # from nuking the master key and every stored credential. It was NOT listed and
 # a deploy wiped all 31 credentials on 2026-06-15 — do not remove this line.
 vault/
+media_archive_daemon_config.yaml
