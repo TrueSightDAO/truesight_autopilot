@@ -145,32 +145,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Signature Ledger Pipeline — TrueSight DAO</title>
 <style>
+  :root {
+    --saffron: #e8a317; --saffron-light: #f5d78e; --saffron-dark: #c4890a;
+    --bg: #faf8f5; --card-bg: #ffffff; --text: #2c2c2c; --text-muted: #6b6b6b;
+    --border: #e0d8cc; --danger: #c0392b; --success: #27ae60;
+    --font: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #f9f4ee; color: #24160b; font-family: 'Georgia', 'Times New Roman', serif; padding: 2rem 1rem; }
-  .wrap { max-width: 1100px; margin: 0 auto; }
-  h1 { font-size: 1.6rem; letter-spacing: 0.03em; color: #24160b; margin-bottom: 0.2rem; }
-  .sub { color: #b9894c; font-style: italic; margin-bottom: 1.5rem; font-size: 0.95rem; }
-  .meta { font-size: 0.8rem; color: #8a6a45; margin-bottom: 1.5rem; }
-  .card { background: #fff; border: 1px solid #e4d5bf; border-radius: 10px; padding: 1rem 1.2rem; margin-bottom: 1.2rem; }
-  .card h2 { font-size: 1.1rem; color: #b9894c; margin-bottom: 0.6rem; border-bottom: 1px solid #efe4d2; padding-bottom: 0.4rem; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+  .header { background: linear-gradient(135deg, var(--saffron-dark), var(--saffron)); color: white; padding: 1.2rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 1.4rem; font-weight: 600; }
+  .header .identity { font-size: 0.85rem; opacity: 0.9; }
+  .header a { color: white; text-decoration: none; }
+  .header a:hover { text-decoration: underline; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
+  .sub { color: var(--text-muted); margin-bottom: 1.2rem; font-size: 0.9rem; }
+  .meta { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.2rem; }
+  .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.4rem; margin-bottom: 1.2rem; overflow-x: auto; }
+  .card h2 { font-size: 1.1rem; color: var(--saffron-dark); margin-bottom: 0.6rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #f0e8da; vertical-align: top; }
-  th { color: #8a6a45; font-weight: 600; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 600; }
   .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
-  .b-done { background: #e4f3e4; color: #2d6a2d; }
-  .b-running { background: #fdf3d7; color: #8a6a1e; }
+  .b-done, .b-uploaded { background: #e8f5e9; color: #2e7d32; }
+  .b-running, .b-pending { background: #fff8e1; color: #8a6a1e; }
   .b-pending { background: #f0e8da; color: #6a5a3a; }
+  .b-needs_metadata { background: #f0e8da; color: #6a5a3a; }
+  .b-error { background: #fde8e8; color: var(--danger); }
   .events { max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; }
-  .err { color: #a32d2d; padding: 1rem; background: #fdf0f0; border-radius: 8px; margin-bottom: 1rem; }
+  .err { color: var(--danger); padding: 1rem; background: #fde8e8; border-radius: 8px; margin-bottom: 1rem; }
   .login { text-align: center; padding: 3rem 1rem; }
-  .login p { margin-bottom: 1rem; color: #8a6a45; }
+  .login p { margin-bottom: 1rem; color: var(--text-muted); }
   a { color: #9e7340; }
-  .footer { margin-top: 2rem; font-size: 0.8rem; color: #b9894c; text-align: center; }
+  .footer { margin-top: 2rem; font-size: 0.8rem; color: var(--saffron-dark); text-align: center; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Signature Ledger Pipeline</h1>
+<div class="header"><h1>Signature Ledger Pipeline</h1><div class="identity"><a href="/">TrueSight DAO</a> &middot; Governors</div></div><div class="wrap">
   <div class="sub">Live queue state for the public RSA attestation ledger &mdash; signed-in governors only</div>
   <div class="meta" id="meta">Loading&hellip;</div>
   <div id="login" class="card login" style="display:none">
@@ -181,7 +192,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
   <div id="err" class="err" style="display:none"></div>
   <div id="content"></div>
-  <div class="footer">SLP &middot; Signature Ledger Pipeline &middot; TrueSight DAO</div>
+  </div>
+<div class="footer">SLP &middot; Signature Ledger Pipeline &middot; TrueSight DAO</div>
 </div>
 <script>
 let TOKEN = localStorage.getItem('slp_token') || '';
