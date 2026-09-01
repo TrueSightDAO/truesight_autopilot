@@ -2,4 +2,4 @@
 # image lean). CI (smoke.yml) installs these to run the unit suite; install
 # locally with `pip install -r requirements-dev.txt` to run `pytest`.
 pytest>=8,<9
-ruff>=0.4,<1
+ruff==0.15.16  # pinned: codebase clean under 0.15.16; newer ruff adds rules (535 errors)
