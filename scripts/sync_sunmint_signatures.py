@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish a public, auditable JSON cache of ALL SunMint RSA-signed events.
+"""Publish a public, auditable JSON cache of ALL RSA-signed DAO events.
 
 Writes one immutable JSON file per event to TrueSightDAO/verify_public_signatures
 (api_only data repo, Contents-API PUTs), bucketed by event type:
@@ -15,13 +15,11 @@ Writes one immutable JSON file per event to TrueSightDAO/verify_public_signature
 Each event file carries a self-verifying triple: public_key, signature, signed_payload
 (the EXACT bytes signed), so anyone can re-verify offline with openssl.
 
-NO PII: [EMAIL VERIFICATION EVENT] / [EMAIL REGISTERED EVENT] bodies CONTAIN the farmer's
-email address inside signed_text, and redacting signed_text would break signature
-verification -- so those events are deliberately EXCLUDED from the public cache (decision
-0.2/0.3 update, flagged to Gary 2026-09-01). Everything else in scope carries only public
-keys (already public via Contributors Digital Signatures), signatures, display names
-(already public on the impact map) and tree/geo data (already public in sunmint geojson).
-A fail-closed email scan runs on every build before anything is written or pushed.
+PII policy (governor decision 2026-09-02, Gary): option 3 -- publish signed_text AS-IS,
+emails INCLUDED, so every signature verifies over the exact bytes Edgar checked. Emails are
+already public in the Telegram Chat Logs that back the DAO's public dapp. The build defaults
+to FAIL-CLOSED (email scan blocks publication); pass --allow-pii to publish as-is. The cron
+runs with --allow-pii per this decision.
 
 Usage:
     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json python3 scripts/sync_sunmint_signatures.py --dry-run
@@ -48,16 +46,9 @@ PLANTING_TAB = "SunMint Tree Planting"
 GROWTH_TAB = "Tree Growth Measurements"
 GH_API = "https://api.github.com/repos/TrueSightDAO/verify_public_signatures/contents/"
 
-# SunMint-associated event markers in scope (all RSA-signed).
-# NOTE: EMAIL VERIFICATION/REGISTERED events are intentionally EXCLUDED -- their
-# signed_text contains the farmer's email address (PII); redacting it would break
-# signature verification, so the events are simply not published.
-SUNMINT_MARKERS = (
-    "[TREE PLANTING EVENT]",
-    "[TREE GROWTH MONITORING EVENT]",
-    "[TREE PLANTING REJECT EVENT]",
-    "[TREE PLANTING LINK EVENT]",
-)
+# Every RSA-signed event marker is in scope (any text carrying both
+# "My Digital Signature:" and "Request Transaction ID:" lines). Events are
+# auto-bucketed to folders by marker (see _folder_for).
 
 # Telegram Chat Logs column indices (0-based). Header row is detected at runtime --
 # row 1 of this tab is a junk cell, the real header is row 2.
@@ -163,15 +154,15 @@ def _is_test_event(text: str, msg_id: str) -> bool:
 
 
 def parse_event(text: str):
-    """Return {marker, public_key, signature, payload} if text is an in-scope SunMint event."""
+    """Return {marker, public_key, signature, payload} if text is an RSA-signed event."""
     m = re.match(r"\s*(\[[^\]]+\])", text)
     if not m:
         return None
     marker = m.group(1)
-    if marker not in SUNMINT_MARKERS:
-        return None
     pub = re.search(r"My Digital Signature:\s*([^\n]+)", text)
     sig = re.search(r"Request Transaction ID:\s*([^\n]+)", text)
+    if not pub or not sig:
+        return None  # not an RSA-signed event
     return {
         "marker": marker,
         "public_key": pub.group(1).strip() if pub else "",
@@ -181,10 +172,15 @@ def parse_event(text: str):
 
 
 def build_signatures(
-    chat_rows: list, planting_by_msg: dict, growth_by_msg: dict
+    chat_rows: list,
+    planting_by_msg: dict,
+    growth_by_msg: dict,
+    allow_pii: bool = False,
 ) -> dict:
     events = {}
     test_events = {}
+    other_signed = {}
+    excluded_pii = {}
     dupes = []
     for row in chat_rows:
         msg_id = _cell(row, "msg_id", CHAT)
@@ -214,20 +210,39 @@ def build_signatures(
             contributor = planting_by_msg[msg_id].get("submitted_name", "")
         if not contributor:
             contributor = _cell(row, "contributor", CHAT)
-        if _is_test_event(text, msg_id) or not parsed["public_key"].startswith(
-            _SPKI_PREFIX
-        ):
+        if _is_test_event(text, msg_id):
             test_events[msg_id] = {
                 "event_type": parsed["marker"],
                 "telegram_message_id": msg_id,
-                "reason": (
-                    "test/synthetic (SYNTH source, E2ETEST id, localhost provenance)"
-                    if _is_test_event(text, msg_id)
-                    else "malformed/unverifiable (public key is not an RSA-2048 SPKI key)"
-                ),
+                "reason": "test/synthetic (SYNTH source, E2ETEST id, localhost provenance)",
                 "public_key": parsed["public_key"],
                 "signature": parsed["signature"],
                 "signed_payload": parsed["payload"],
+            }
+            continue
+        if not parsed["public_key"].startswith(_SPKI_PREFIX):
+            # Real attestation but NOT RSA-2048 (e.g. reviewer sha256 signing keys
+            # on CONTRIBUTION REVIEW EVENT). Keep out of the RSA ledger but do NOT
+            # label it test/malformed.
+            other_signed[msg_id] = {
+                "event_type": parsed["marker"],
+                "telegram_message_id": msg_id,
+                "reason": "non-RSA key type (not an RSA-2048 SPKI public key)",
+                "public_key": parsed["public_key"],
+                "signature": parsed["signature"],
+                "signed_payload": parsed["payload"],
+            }
+            continue
+        if not allow_pii and EMAIL_RE.search(text):
+            excluded_pii[msg_id] = {
+                "event_type": parsed["marker"],
+                "telegram_message_id": msg_id,
+                "reason": (
+                    "email address embedded in signed_text -- excluded per"
+                    " governor decision 2026-09-02 (option 2: exclude PII events)"
+                ),
+                "public_key": parsed["public_key"],
+                "signature": parsed["signature"],
             }
             continue
         events[msg_id] = {
@@ -254,9 +269,12 @@ def build_signatures(
         "count": len(events),
         "test_events_count": len(test_events),
         "test_events": test_events,
+        "excluded_pii_count": len(excluded_pii),
+        "excluded_pii_events": excluded_pii,
+        "other_signed_count": len(other_signed),
+        "other_signed": other_signed,
         "events": events,
         "warnings": {
-            "excluded_email_events": "EMAIL VERIFICATION/REGISTERED excluded (PII)",
             "duplicate_msg_ids": dupes,
         },
     }
@@ -320,6 +338,20 @@ def _scan(obj, path: str = "") -> None:
         _assert_no_email(obj, path)
 
 
+def _count_emails(obj) -> int:
+    """Count email-like pattern hits (used for --allow-pii reporting)."""
+    n = 0
+    if isinstance(obj, dict):
+        for v in obj.values():
+            n += _count_emails(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            n += _count_emails(v)
+    elif isinstance(obj, str):
+        n += len(EMAIL_RE.findall(obj))
+    return n
+
+
 def _upload(path: str, payload: dict) -> None:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
@@ -367,7 +399,12 @@ RAW_BASE = (
 
 
 def _folder_for(marker: str) -> str:
-    return EVENT_FOLDER.get(marker, "other")
+    """Map an event marker to its ledger folder (snake_case slug)."""
+    if marker in EVENT_FOLDER:
+        return EVENT_FOLDER[marker]
+    slug = marker.strip("[]").lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")
+    return slug or "other"
 
 
 def _ledger_files(signatures: dict, measurements: dict) -> dict:
@@ -418,12 +455,17 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
             "events": entries,
         }
 
+    # Non-RSA attestations (e.g. reviewer sha256 keys) get their own honest folder.
+    for mid, ev in signatures.get("other_signed", {}).items():
+        folders.setdefault("other_signed_events", {})[mid] = ev
+
     files["index.json"] = {
         "status": "success",
         "schema_version": 1,
         "generated_at": _now_iso(),
         "total_count": sum(len(evs) for evs in folders.values()),
         "test_events_count": signatures.get("test_events_count", 0),
+        "other_signed_count": signatures.get("other_signed_count", 0),
         "event_types": {
             folder: {
                 "count": len(evs),
@@ -454,6 +496,13 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--push", action="store_true")
+    p.add_argument(
+        "--allow-pii",
+        action="store_true",
+        help="Governor decision 2026-09-02 (Gary): publish signed_text as-is, "
+        "emails included, preserving signature verification. Without this flag "
+        "the build fails closed on any email-like pattern.",
+    )
     args = p.parse_args()
 
     creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -490,22 +539,35 @@ def main() -> None:
                 "signed_text": _cell(r, "contribution", CHAT),
             }
 
-    signatures = build_signatures(chat_rows, planting_by_msg, growth_by_msg)
+    signatures = build_signatures(
+        chat_rows, planting_by_msg, growth_by_msg, allow_pii=args.allow_pii
+    )
     measurements = build_measurements(grow_rows, chat_by_msg)
     print(
         f"[info] signatures: {signatures['count']}  measurements: {measurements['count']}"
     )
-
-    _scan(signatures)
-    _scan(measurements)
-    print("[info] PII scan passed (no email-like patterns)")
+    if signatures["excluded_pii_count"]:
+        print(
+            f"[info] excluded {signatures['excluded_pii_count']} PII-bearing events"
+            f" (email embedded -- governor decision 2026-09-02)"
+        )
 
     files = _ledger_files(signatures, measurements)
-    for path in files:
-        _scan(files[path])
-    print(
-        f"[info] ledger files: {len(files)}  PII scan passed (no email-like patterns)"
-    )
+    if args.allow_pii:
+        n = _count_emails(files)
+        print(
+            f"[info] --allow-pii (governor decision 2026-09-02): publishing as-is; "
+            f"{n} email-like hits across {len(files)} ledger files"
+        )
+    else:
+        _scan(signatures)
+        _scan(measurements)
+        for path in files:
+            _scan(files[path])
+        print(
+            f"[info] PII scan passed across {len(files)} ledger files "
+            f"(no email-like patterns)"
+        )
 
     if args.push:
         _push_ledger(files)
