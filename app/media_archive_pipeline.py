@@ -31,7 +31,7 @@ INBOX_ROOT = Path(
 UPLOAD_LOG = Path(
     os.environ.get("FARM_MEDIA_UPLOAD_LOG", "/tmp/farm_media_uploads.log")
 )
-MANIFEST_INDEX_URL = "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/FARM_MEDIA_MANIFESTS/index.json"
+MANIFEST_INDEX_URL = "https://raw.githubusercontent.com/TrueSightDAO/farm_media_manifests/main/index.json"
 
 VALID_SOURCES = {"farm-media", "event-media", "partner-media"}
 
