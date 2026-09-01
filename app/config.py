@@ -213,6 +213,7 @@ class Settings(BaseSettings):
         "sunmint_prod",
         "farm-media-raw",
         "farm-media-daemon",
+        "farm_media_manifests",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
@@ -239,6 +240,7 @@ class Settings(BaseSettings):
         "verify_public_signatures",
         "store_interaction_attachments",
         "farm-media-raw",
+        "farm_media_manifests",
         # workflow-pushed JSON snapshots
         "agroverse-inventory",
         # shared agent-to-agent handoff mailbox (app/tools/agent_handoff.py) —
