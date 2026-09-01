@@ -221,6 +221,18 @@ def build_signatures(
                 "signed_payload": parsed["payload"],
             }
             continue
+        if not allow_pii and EMAIL_RE.search(text):
+            excluded_pii[msg_id] = {
+                "event_type": parsed["marker"],
+                "telegram_message_id": msg_id,
+                "reason": (
+                    "email address embedded in signed_text -- excluded per"
+                    " governor decision 2026-09-02 (option 2: exclude PII events)"
+                ),
+                "public_key": parsed["public_key"],
+                "signature": parsed["signature"],
+            }
+            continue
         if not parsed["public_key"].startswith(_SPKI_PREFIX):
             # Real attestation but NOT RSA-2048 (e.g. reviewer sha256 signing keys
             # on CONTRIBUTION REVIEW EVENT). Keep out of the RSA ledger but do NOT
@@ -232,18 +244,6 @@ def build_signatures(
                 "public_key": parsed["public_key"],
                 "signature": parsed["signature"],
                 "signed_payload": parsed["payload"],
-            }
-            continue
-        if not allow_pii and EMAIL_RE.search(text):
-            excluded_pii[msg_id] = {
-                "event_type": parsed["marker"],
-                "telegram_message_id": msg_id,
-                "reason": (
-                    "email address embedded in signed_text -- excluded per"
-                    " governor decision 2026-09-02 (option 2: exclude PII events)"
-                ),
-                "public_key": parsed["public_key"],
-                "signature": parsed["signature"],
             }
             continue
         events[msg_id] = {
@@ -586,8 +586,6 @@ def main() -> None:
             f"{n} email-like hits across {len(files)} ledger files"
         )
     else:
-        _scan(signatures)
-        _scan(measurements)
         for path in files:
             _scan(files[path])
         print(
