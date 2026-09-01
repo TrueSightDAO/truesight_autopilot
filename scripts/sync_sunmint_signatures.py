@@ -488,6 +488,7 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
         "generated_at": _now_iso(),
         "total_count": sum(len(evs) for evs in folders.values()),
         "test_events_count": signatures.get("test_events_count", 0),
+        "excluded_pii_count": signatures.get("excluded_pii_count", 0),
         "other_signed_count": signatures.get("other_signed_count", 0),
         "event_types": {
             folder: {
