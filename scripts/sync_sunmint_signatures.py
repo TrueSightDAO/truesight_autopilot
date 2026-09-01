@@ -42,8 +42,6 @@ import sys
 import time
 import urllib.request
 
-import gspread
-
 SOURCE_SHEET_ID = "1qbZZhf-_7xzmDTriaJVWj6OZshyQsFkdsAV8-pyzASQ"
 CHAT_LOGS_TAB = "Telegram Chat Logs"
 PLANTING_TAB = "SunMint Tree Planting"
@@ -608,6 +606,8 @@ def main() -> None:
     creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if not creds or not os.path.isfile(creds):
         sys.exit("GOOGLE_APPLICATION_CREDENTIALS must point at a service account JSON")
+
+    import gspread  # lazy: keeps test imports (CI has no gspread) working
 
     gc = gspread.service_account(filename=creds)
     sh = gc.open_by_key(SOURCE_SHEET_ID)
