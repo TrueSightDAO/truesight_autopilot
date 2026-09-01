@@ -20,6 +20,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from .auth import verify_jwt
+from .vault_routes import _optional_identity
+from fastapi.templating import Jinja2Templates
+
+_templates_dir = Path(__file__).resolve().parent / "templates" / "vault"
+_templates = Jinja2Templates(directory=str(_templates_dir))
 
 router = APIRouter()
 
@@ -212,12 +217,16 @@ async function load(){
   const content = document.getElementById('content');
   const login = document.getElementById('login');
   err.style.display = 'none';
-  if(!TOKEN){ login.style.display='block'; meta.textContent='Signed out — log in to view.'; return; }
   login.style.display = 'none';
   meta.textContent = 'Loading…';
   try{
-    const r = await fetch('/signature-ledger-pipeline/data', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem('slp_token'); return; }
+    // 1. cookie-first (vault session carries over; verify_jwt falls back to governor_chat_session)
+    let r = await fetch('/signature-ledger-pipeline/data', { credentials: 'same-origin' });
+    if(r.status === 401){
+      // 2. shared token as Bearer
+      if(TOKEN){ r = await fetch('/signature-ledger-pipeline/data', { credentials: 'same-origin', headers: { 'Authorization': 'Bearer ' + TOKEN } }); }
+      if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem(SOPHIA_TOKEN_KEY); return; }
+    }
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     meta.textContent = 'Generated ' + new Date(d.generated_at).toLocaleString() + ' · ' + d.total_published + ' attestations published across ' + d.folders.length + ' event types';
@@ -265,6 +274,11 @@ load();
 
 
 @router.get("/signature-ledger-pipeline", response_class=HTMLResponse)
-def signature_ledger_pipeline_page() -> HTMLResponse:
-    """Serve the dashboard page (auth enforced client-side + data endpoint)."""
-    return HTMLResponse(DASHBOARD_HTML)
+def signature_ledger_pipeline_page(request: Request) -> HTMLResponse:
+    """The Signature Ledger Pipeline page — vault-style, cookie session."""
+    identity = _optional_identity(request)
+    return _templates.TemplateResponse(
+        request,
+        "signature_ledger_pipeline.html",
+        {"request": request, "identity": identity},
+    )
