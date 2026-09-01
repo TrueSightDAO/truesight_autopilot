@@ -722,6 +722,7 @@ async def root():
   <a class="btn" href="https://oracle.truesight.me" target="_blank">Cast the I Ching</a>
   <a class="btn" href="/vault/" style="margin-top: 0.75rem;">Credential Vault</a>
   <a class="btn" href="/media-archive-pipeline" style="margin-top: 0.75rem;">Media Archives Pipeline</a>
+  <a class="btn" href="/signature-ledger-pipeline" style="margin-top: 0.75rem;">Signature Ledger Pipeline</a>
 
   <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(185,137,76,0.25); max-width: 480px; margin-left: auto; margin-right: auto;">
     <p style="font-size: 0.85rem; color: #b9894c; margin-bottom: 0.5rem; font-style: italic;">
