@@ -11,7 +11,10 @@ from fastapi import HTTPException, Request, status
 from jose import JWTError, jwt
 
 from .config import settings
-from .governor_registry import is_governor as _is_governor_from_registry
+from .governor_registry import (
+    is_governor as _is_governor_from_registry,
+    is_sentinel as _is_sentinel_from_registry,
+)
 
 # In-memory nonce cache (replace with Redis in production)
 _seen_nonces: set[str] = set()
@@ -56,7 +59,9 @@ def verify_rsa_signature(
         return False
 
 
-def verify_payload(payload: dict, signature: str, public_key_b64: str) -> None:
+def verify_payload(
+    payload: dict, signature: str, public_key_b64: str, allow_sentinel: bool = False
+) -> None:
     """Full verification: signature + timestamp + nonce + governor status."""
     # 1. Signature
     payload_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
@@ -97,12 +102,16 @@ def verify_payload(payload: dict, signature: str, public_key_b64: str) -> None:
         )
     _seen_nonces.add(nonce)
 
-    # 4. Governor check
-    if not settings.disable_governor_check and not is_governor(public_key_b64):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access restricted to authorized governors.",
-        )
+    # 4. Role check (governor by default; sentinel only when allow_sentinel=True)
+    if not settings.disable_governor_check:
+        ok = is_governor(public_key_b64)
+        if not ok and allow_sentinel:
+            ok = _is_sentinel_from_registry(public_key_b64)
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access restricted to authorized governors.",
+            )
 
 
 def is_governor(public_key_b64: str) -> bool:
