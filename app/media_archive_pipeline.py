@@ -212,13 +212,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="footer">MAP &middot; Media Archives Pipeline &middot; TrueSight DAO</div>
 </div>
 <script>
-let TOKEN = localStorage.getItem('map_token') || '';
+const SOPHIA_TOKEN_KEY = 'sophia_token'; // shared across governor-gated pages
+let TOKEN = localStorage.getItem(SOPHIA_TOKEN_KEY) || '';
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function setToken(){
   TOKEN = document.getElementById('tok').value.trim();
-  localStorage.setItem('map_token', TOKEN);
+  localStorage.setItem(SOPHIA_TOKEN_KEY, TOKEN);
   load();
 }
 

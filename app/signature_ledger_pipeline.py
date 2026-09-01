@@ -201,13 +201,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="footer">SLP &middot; Signature Ledger Pipeline &middot; TrueSight DAO</div>
 </div>
 <script>
-let TOKEN = localStorage.getItem('slp_token') || '';
+const SOPHIA_TOKEN_KEY = 'sophia_token'; // shared across governor-gated pages
+let TOKEN = localStorage.getItem(SOPHIA_TOKEN_KEY) || '';
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function setToken(){
   TOKEN = document.getElementById('tok').value.trim();
-  localStorage.setItem('slp_token', TOKEN);
+  localStorage.setItem(SOPHIA_TOKEN_KEY, TOKEN);
   load();
 }
 
