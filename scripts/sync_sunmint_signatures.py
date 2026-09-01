@@ -36,6 +36,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 
 import gspread
@@ -487,15 +488,40 @@ def _write_ledger_local(files: dict) -> None:
         print(f"[local] wrote ./_ledger/{path}")
 
 
-def _push_ledger(files: dict) -> None:
-    for path in sorted(files):
+def _push_ledger(files: dict, max_uploads: int = 250) -> None:
+    """Push ledger files, capped per run to stay well under GitHub rate limits.
+
+    The 30-min cron trickles the backfill over successive passes: each run
+    uploads at most max_uploads files (default 250) with a small delay, then
+    stops. Already-written files are skipped next pass via the sha-aware GET,
+    so the loop is idempotent and self-healing. ~3,900 files -> ~16 passes.
+    """
+    paths = sorted(files)
+    done = 0
+    for path in paths:
+        if done >= max_uploads:
+            remain = len(paths) - done
+            print(
+                f"[info] rate-limit guard: hit {max_uploads}/run cap; "
+                f"{remain} files remain for next cron pass(es)"
+            )
+            break
         _upload(path, files[path])
+        done += 1
+        time.sleep(0.3)
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--push", action="store_true")
+    p.add_argument(
+        "--max-uploads",
+        type=int,
+        default=250,
+        help="Cap PUTs per run (default 250) to avoid GitHub rate limits; "
+        "the 30-min cron trickles the rest on later passes.",
+    )
     p.add_argument(
         "--allow-pii",
         action="store_true",
@@ -570,7 +596,7 @@ def main() -> None:
         )
 
     if args.push:
-        _push_ledger(files)
+        _push_ledger(files, max_uploads=args.max_uploads)
     else:
         _write_ledger_local(files)
 
