@@ -33,6 +33,8 @@ import argparse
 import base64
 import datetime
 import hashlib
+
+_PUSHED_THIS_RUN: list = []
 import json
 import os
 import re
@@ -400,6 +402,7 @@ def _upload(path: str, payload: dict) -> bool:
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             print(f"[push] {path} -> {json.load(r).get('commit', {}).get('sha', '?')}")
+            _PUSHED_THIS_RUN.append(path)
             return True
     except urllib.error.HTTPError as e:
         if e.code == 422:
@@ -509,27 +512,77 @@ def _write_ledger_local(files: dict) -> None:
         print(f"[local] wrote ./_ledger/{path}")
 
 
-def _push_ledger(files: dict, max_uploads: int = 250) -> None:
+def _load_cursor(cursor_path: str) -> str:
+    if not cursor_path:
+        return ""
+    try:
+        with open(cursor_path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _save_cursor(cursor_path: str, path: str) -> None:
+    if not cursor_path:
+        return
+    try:
+        with open(cursor_path, "w") as fh:
+            fh.write(path)
+    except OSError as e:
+        print(f"[warn] could not write cursor {cursor_path}: {e}")
+
+
+def _push_ledger(
+    files: dict,
+    max_uploads: int = 250,
+    cursor_path: str = "",
+) -> None:
     """Push ledger files, capped per run to stay well under GitHub rate limits.
 
-    The 30-min cron trickles the backfill over successive passes: each run
-    uploads at most max_uploads files (default 250) with a small delay, then
-    stops. Already-written files are skipped next pass via the sha-aware GET,
-    so the loop is idempotent and self-healing. ~3,900 files -> ~16 passes.
+    Trickle backfill: each 30-min cron pass uploads at most max_uploads NEW
+    files (default 250), then stops. Progress is persisted in a cursor file so
+    the NEXT pass resumes where this one left off -- the loop never restarts
+    from the top (which would re-skip the same already-pushed files forever
+    and never advance, the original stuck-backfill bug).
+
+    Idempotent and self-healing: every file is GET-checked (sha-aware skip)
+    before PUT; an interrupted pass just resumes from the cursor next run.
     """
+    _PUSHED_THIS_RUN.clear()
     paths = sorted(files)
-    done = 0
-    for path in paths:
-        if done >= max_uploads:
-            remain = len(paths) - done
+    cursor = _load_cursor(cursor_path)
+    start = 0
+    if cursor:
+        for i, p in enumerate(paths):
+            if p > cursor:
+                start = i
+                break
+        else:
+            start = len(paths)  # cursor past the end -> nothing to do
+    pushed = 0
+    examined = 0
+    for i in range(start, len(paths)):
+        path = paths[i]
+        if pushed >= max_uploads:
+            remain = len(paths) - i
+            _save_cursor(cursor_path, paths[i - 1] if i > 0 else "")
             print(
                 f"[info] rate-limit guard: hit {max_uploads}/run cap; "
                 f"{remain} files remain for next cron pass(es)"
             )
             break
         _upload(path, files[path])
-        done += 1
+        examined += 1
+        pushed = len(_PUSHED_THIS_RUN)
+        _save_cursor(cursor_path, path)
         time.sleep(0.3)
+    else:
+        # finished the whole set
+        _save_cursor(cursor_path, "")
+        print(
+            f"[info] backfill complete: pushed {pushed}, examined {examined}, "
+            f"cursor cleared"
+        )
 
 
 def main() -> None:
@@ -615,7 +668,13 @@ def main() -> None:
         )
 
     if args.push:
-        _push_ledger(files, max_uploads=args.max_uploads)
+        _push_ledger(
+            files,
+            max_uploads=args.max_uploads,
+            cursor_path=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), ".ledger_cursor"
+            ),
+        )
     else:
         _write_ledger_local(files)
 
