@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -353,25 +354,44 @@ def _count_emails(obj) -> int:
     return n
 
 
-def _upload(path: str, payload: dict) -> None:
+def _git_blob_sha(content: str) -> str:
+    """git blob sha1 of the exact bytes we would upload."""
+    raw = content.encode("utf-8")
+    return hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+
+
+def _upload(path: str, payload: dict) -> bool:
+    """PUT one ledger file; returns True if a new commit was written.
+
+    Content-addressed skip: compute the git blob sha of the exact bytes we
+    would upload and compare with the remote file's sha. If equal, the file
+    is already current -- skip the PUT entirely (GitHub's Contents API does
+    NOT reliably no-op identical-content PUTs; it often creates a new commit
+    with a fresh sha every time, which made the trickle backfill re-push the
+    same first N files on every cron pass).
+    """
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         sys.exit("--push needs GITHUB_TOKEN or GH_TOKEN")
     body = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-    sha = None
+    local_sha = _git_blob_sha(body)
+    remote_sha = None
     try:
         req0 = urllib.request.Request(GH_API + path, method="GET")
         req0.add_header("Authorization", f"Bearer {token}")
         req0.add_header("Accept", "application/vnd.github+json")
         with urllib.request.urlopen(req0, timeout=30) as r0:
-            sha = json.load(r0).get("sha")
+            remote_sha = json.load(r0).get("sha")
     except urllib.error.HTTPError:
         pass  # file may not exist yet -- PUT without sha creates it
+    if remote_sha == local_sha:
+        print(f"[skip] {path} -> already current (blob sha match)")
+        return False
     data = json.dumps(
         {
             "message": f"cache(scripts): refresh {path} (sync_sunmint_signatures.py)",
             "content": base64.b64encode(body.encode()).decode(),
-            "sha": sha,
+            "sha": remote_sha,
         }
     ).encode()
     req = urllib.request.Request(GH_API + path, data=data, method="PUT")
@@ -380,11 +400,12 @@ def _upload(path: str, payload: dict) -> None:
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             print(f"[push] {path} -> {json.load(r).get('commit', {}).get('sha', '?')}")
+            return True
     except urllib.error.HTTPError as e:
         if e.code == 422:
-            print(f"[push] {path} -> unchanged (already current)")
-        else:
-            raise
+            print(f"[skip] {path} -> already current (422 unchanged)")
+            return False
+        raise
 
 
 EVENT_FOLDER = {
