@@ -2,6 +2,10 @@
 
 import sys
 
+import pytest
+
+pytest.importorskip("gspread", reason="gspread not installed in CI deps; quarantine until requirements include it")
+
 sys.path.insert(0, "scripts")
 
 from scripts.sync_sunmint_signatures import (  # noqa: E402
