@@ -30,7 +30,6 @@ import httpx
 
 from .auth import create_jwt, verify_jwt, verify_payload
 from .media_archive_pipeline import router as media_archive_pipeline_router
-from .media_archive_dashboard import router as media_archive_dashboard_router
 from .auto_advance import next_action
 from .config import settings
 from .turn_convergence import convergence_message, should_converge
@@ -515,7 +514,6 @@ app.add_middleware(
 # Mount vault routes
 app.include_router(vault_router)
 app.include_router(media_archive_pipeline_router)
-app.include_router(media_archive_dashboard_router)
 
 
 # ── In-memory rate limiter: max 1 req per 10s per IP ──
