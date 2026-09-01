@@ -212,6 +212,7 @@ class Settings(BaseSettings):
         "sunmint_beta",
         "sunmint_prod",
         "farm-media-raw",
+        "farm-media-daemon",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
