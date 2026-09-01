@@ -19,9 +19,7 @@ def test_status_of_needs_metadata():
 
 
 def test_status_of_pending():
-    assert (
-        _status_of({"sha256": "x", "gps": "y", "title": "z"}) == "pending"
-    )
+    assert _status_of({"sha256": "x", "gps": "y", "title": "z"}) == "pending"
 
 
 def test_parse_sidecar_bad_json(tmp_path: Path):
