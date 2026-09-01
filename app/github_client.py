@@ -293,6 +293,67 @@ class GitHubClient:
                 "message": f"Failed to mark PR #{pr_number} ready: {e}",
             }
 
+    def _ci_status(self, pr) -> dict:
+        """Check the PR's CI status via the Checks API + combined commit status.
+
+        Returns {"green": bool, "checks": [...], "reason": str}. ``green`` is
+        True when there are no failing/pending required checks AND no failed
+        statuses. If the repo has no CI configured at all (no check runs and no
+        statuses), returns green=False with reason 'no-ci' so the caller can
+        decide (warn vs refuse).
+        """
+        try:
+            head = pr.head.sha
+            commit = pr.base.repo.get_commit(head)
+            checks = list(commit.get_check_runs())
+            combined = commit.get_combined_status()
+            statuses = combined.statuses
+        except Exception as e:  # pragma: no cover - API edge cases
+            return {
+                "green": False,
+                "checks": [],
+                "reason": f"ci-unavailable: {e}",
+            }
+
+        rows = []
+        for c in checks:
+            rows.append(
+                {
+                    "name": c.name or "",
+                    "status": c.status,
+                    "conclusion": c.conclusion,
+                    "details_url": c.details_url or "",
+                }
+            )
+        for s in statuses:
+            rows.append(
+                {
+                    "name": s.context or "",
+                    "status": "completed",
+                    "conclusion": s.state,
+                    "details_url": s.target_url or "",
+                }
+            )
+
+        if not rows:
+            return {"green": False, "checks": [], "reason": "no-ci"}
+
+        bad = [
+            r
+            for r in rows
+            if r["conclusion"]
+            in ("failure", "error", "cancelled", "timed_out", "action_required")
+            or (r["status"] != "completed")
+        ]
+        if bad:
+            return {
+                "green": False,
+                "checks": rows,
+                "reason": "failing-or-pending: "
+                + ", ".join(r["name"] for r in bad[:5]),
+            }
+        return {"green": True, "checks": rows, "reason": "green"}
+
     def merge_pr(
         self,
         repo_name: str,
@@ -311,6 +372,26 @@ class GitHubClient:
         try:
             repo = self.g.get_repo(self._full_name(repo_name))
             pr = repo.get_pull(pr_number)
+            # CI gate: refuse to merge when checks are failing/pending; warn
+            # (and still merge) only when the repo has no CI configured at all.
+            ci = self._ci_status(pr)
+            if ci["reason"] == "no-ci":
+                logger.warning(
+                    "PR #%d on %s has no CI configured (no checks/statuses); merging without gate",
+                    pr_number,
+                    repo_name,
+                )
+            elif not ci["green"]:
+                names = ", ".join(r["name"] for r in ci["checks"][:8] if r["name"])
+                return {
+                    "sha": "",
+                    "merged": False,
+                    "message": (
+                        f"Refusing to merge PR #{pr_number} on {repo_name}: "
+                        f"CI not green ({ci['reason']}). "
+                        f"Failing/pending checks: {names or '(unnamed)'}"
+                    ),
+                }
             if pr.merged:
                 return {
                     "sha": pr.merge_commit_sha or "",
