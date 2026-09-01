@@ -184,13 +184,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="footer">SLP &middot; Signature Ledger Pipeline &middot; TrueSight DAO</div>
 </div>
 <script>
-let TOKEN = localStorage.getItem('slp_token') || '';
+const SOPHIA_TOKEN_KEY = 'sophia_token';
+let TOKEN = localStorage.getItem(SOPHIA_TOKEN_KEY) || '';
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function setToken(){
   TOKEN = document.getElementById('tok').value.trim();
-  localStorage.setItem('slp_token', TOKEN);
+  localStorage.setItem(SOPHIA_TOKEN_KEY, TOKEN);
   load();
 }
 
@@ -200,12 +201,16 @@ async function load(){
   const content = document.getElementById('content');
   const login = document.getElementById('login');
   err.style.display = 'none';
-  if(!TOKEN){ login.style.display='block'; meta.textContent='Signed out — log in to view.'; return; }
   login.style.display = 'none';
   meta.textContent = 'Loading…';
   try{
-    const r = await fetch('/signature-ledger-pipeline/data', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem('slp_token'); return; }
+    // 1. cookie-first (vault session carries over; verify_jwt falls back to governor_chat_session)
+    let r = await fetch('/signature-ledger-pipeline/data', { credentials: 'same-origin' });
+    if(r.status === 401){
+      // 2. shared token as Bearer
+      if(TOKEN){ r = await fetch('/signature-ledger-pipeline/data', { credentials: 'same-origin', headers: { 'Authorization': 'Bearer ' + TOKEN } }); }
+      if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem(SOPHIA_TOKEN_KEY); return; }
+    }
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     meta.textContent = 'Generated ' + new Date(d.generated_at).toLocaleString() + ' · ' + d.total_published + ' attestations published across ' + d.folders.length + ' event types';

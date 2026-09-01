@@ -196,13 +196,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="footer">MAP &middot; Media Archives Pipeline &middot; TrueSight DAO</div>
 </div>
 <script>
-let TOKEN = localStorage.getItem('map_token') || '';
+const SOPHIA_TOKEN_KEY = 'sophia_token';
+let TOKEN = localStorage.getItem(SOPHIA_TOKEN_KEY) || '';
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function setToken(){
   TOKEN = document.getElementById('tok').value.trim();
-  localStorage.setItem('map_token', TOKEN);
+  localStorage.setItem(SOPHIA_TOKEN_KEY, TOKEN);
   load();
 }
 
@@ -212,12 +213,16 @@ async function load(){
   const content = document.getElementById('content');
   const login = document.getElementById('login');
   err.style.display = 'none';
-  if(!TOKEN){ login.style.display='block'; meta.textContent='Signed out — log in to view.'; return; }
   login.style.display = 'none';
   meta.textContent = 'Loading…';
   try{
-    const r = await fetch('/media-archive-pipeline/data', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem('map_token'); return; }
+    // 1. cookie-first (vault session carries over; verify_jwt falls back to governor_chat_session)
+    let r = await fetch('/media-archive-pipeline/data', { credentials: 'same-origin' });
+    if(r.status === 401){
+      // 2. shared token as Bearer
+      if(TOKEN){ r = await fetch('/media-archive-pipeline/data', { credentials: 'same-origin', headers: { 'Authorization': 'Bearer ' + TOKEN } }); }
+      if(r.status === 401){ login.style.display='block'; meta.textContent='Session expired or invalid — log in again.'; TOKEN=''; localStorage.removeItem(SOPHIA_TOKEN_KEY); return; }
+    }
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     meta.textContent = 'Generated ' + new Date(d.generated_at).toLocaleString();
