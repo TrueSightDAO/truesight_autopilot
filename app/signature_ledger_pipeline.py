@@ -93,10 +93,10 @@ def _backfill_progress() -> dict[str, Any]:
             lines = []
         for line in reversed(lines):
             if "files remain for next cron pass" in line:
-                try:
-                    remain = int(line.split(";")[0].split(" ")[-1])
-                except (ValueError, IndexError):
-                    remain = None
+                import re as _re
+
+                m = _re.search(r"(\d+) files remain", line)
+                remain = int(m.group(1)) if m else None
                 break
             if "backfill complete" in line:
                 complete = True
