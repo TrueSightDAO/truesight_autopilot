@@ -7,8 +7,6 @@ from app.auth import verify_payload
 
 from datetime import datetime, timezone
 
-import pytest
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

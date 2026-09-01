@@ -3,8 +3,6 @@
 import json
 from pathlib import Path
 
-from fastapi import HTTPException
-
 from app.media_archive_pipeline import _status_of, _parse_sidecar
 
 
