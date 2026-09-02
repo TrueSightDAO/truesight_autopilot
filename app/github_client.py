@@ -24,8 +24,20 @@ class GitHubClient:
             raise RuntimeError("TRUESIGHT_DAO_AUTOPILOT not set")
         auth = Auth.Token(settings.github_pat)
         self.g = Github(auth=auth)
-        self._user = self.g.get_user()
-        logger.info("GitHub client authenticated as %s", self._user.login)
+        # NOTE: do NOT call get_user() here. It is a synchronous network call
+        # that blocks on GitHub's rate-limit Retry-After backoff (observed up to
+        # ~10 min) and hangs app startup whenever the PAT is rate-limited.
+        # Resolve the authenticated user lazily instead.
+        self._user = None
+        logger.info("GitHub client initialized (PAT present; user resolved lazily)")
+
+    @property
+    def user(self):
+        """Authenticated user, resolved lazily. get_user() is a network call that
+        can block on rate-limit backoff, so it is never called in __init__."""
+        if self._user is None:
+            self._user = self.g.get_user()
+        return self._user
 
     def _full_name(self, repo_name: str) -> str:
         """Prepend ORG if repo_name doesn't already include a slash."""
