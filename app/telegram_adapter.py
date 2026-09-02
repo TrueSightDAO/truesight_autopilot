@@ -998,6 +998,14 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
 
 _DEPLOY_MARKER = "/tmp/.autopilot_deployed"
 
+# Last failed brain /health probe, set by _wait_for_brain() on EVERY failure
+# (exception type + message, or "HTTP <code>", or "timed out after 5.0s") and
+# cleared on success. Read by _brain_unavailable_message() so a brain that is
+# genuinely DOWN (connection refused) is not mislabeled as a brief restart —
+# the evidence trail that was missing when session [589386] (2026-09-02) served
+# a generic "restarting" message for a systemd-killed brain with no log line.
+_LAST_BRAIN_PROBE_ERROR: str = ""
+
 
 def _deploy_in_progress() -> bool:
     """The deploy marker exists between deploy.py writing it (just before the
@@ -1011,23 +1019,78 @@ def _deploy_in_progress() -> bool:
 def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
     """Wait for the brain to be reachable (it may be mid deploy-restart), so a brief
     restart is invisible instead of surfacing a Connection-refused error. Returns fast
-    when the brain is already up."""
+    when the brain is already up.
+
+    Every failed probe attempt is LOGGED (attempt number, exception type, URL) and
+    recorded in ``_LAST_BRAIN_PROBE_ERROR`` so a post-mortem can tell DOWN (connection
+    refused) from BUSY (timeout / HTTP ≥ 500) from redeploy (deploy marker) instead of
+    only knowing a probe eventually failed."""
+    global _LAST_BRAIN_PROBE_ERROR
     url = f"{settings.autopilot_chat_url.rstrip('/')}/health"
     for attempt in range(max_attempts):
         try:
-            if httpx.get(url, timeout=5.0).status_code == 200:
+            resp = httpx.get(url, timeout=5.0)
+            if resp.status_code == 200:
+                _LAST_BRAIN_PROBE_ERROR = ""
                 return True
-        except Exception:
-            pass
+            _LAST_BRAIN_PROBE_ERROR = f"HTTP {resp.status_code}"
+            logger.warning(
+                "brain /health probe failed (attempt %d/%d): HTTP %d on %s",
+                attempt + 1,
+                max_attempts,
+                resp.status_code,
+                url,
+            )
+        except httpx.ReadTimeout:
+            _LAST_BRAIN_PROBE_ERROR = "timed out after 5.0s"
+            logger.warning(
+                "brain /health probe timed out (attempt %d/%d): httpx.ReadTimeout on %s",
+                attempt + 1,
+                max_attempts,
+                url,
+            )
+        except Exception as e:  # noqa: BLE001 — record + log each failure type for the evidence trail
+            _LAST_BRAIN_PROBE_ERROR = f"{type(e).__name__}: {e}"
+            logger.warning(
+                "brain /health probe failed (attempt %d/%d): %s on %s",
+                attempt + 1,
+                max_attempts,
+                _LAST_BRAIN_PROBE_ERROR,
+                url,
+            )
         if attempt < max_attempts - 1:
             time.sleep(backoff)
     return False
 
 
 def _brain_unavailable_message() -> str:
-    """A clear indicator instead of a raw Errno — names a redeploy when one is underway."""
+    """A clear indicator instead of a raw Errno — names a redeploy when one is underway,
+    otherwise classifies the last probe failure so a brain that is genuinely DOWN is not
+    mislabeled as a brief restart (2026-09-02 session [589386] post-mortem)."""
     if _deploy_in_progress():
         return "🚀 Sophia is redeploying — back in a few seconds. Please resend your message shortly."
+    err = (_LAST_BRAIN_PROBE_ERROR or "").strip()
+    if not err:
+        return "⏳ Sophia is briefly restarting — please resend in a few seconds."
+    lower = err.lower()
+    if (
+        "connection refused" in lower
+        or "[errno 111]" in lower
+        or "[errno 8]" in lower
+        or "connecterror" in lower
+        or "name resolution" in lower
+        or "name or service not known" in lower
+        or "gaierror" in lower
+        or "getaddrinfo" in lower
+    ):
+        return "⚠️ Sophia's brain is DOWN (connection refused on :8001) — not just restarting. I'll keep retrying; a deploy or service start should bring it back."
+    m = re.search(r"\bhttp\s+(\d{3})\b", lower)
+    if (
+        "timeout" in lower
+        or "timed out" in lower
+        or (m is not None and int(m.group(1)) >= 500)
+    ):
+        return "⏳ Sophia's brain is up but BUSY/unresponsive (probe timed out) — a long tool call may be running; please wait and resend."
     return "⏳ Sophia is briefly restarting — please resend in a few seconds."
 
 
