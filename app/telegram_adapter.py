@@ -1018,6 +1018,7 @@ def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
     """Wait for the brain to be reachable (it may be mid deploy-restart), so a brief
     restart is invisible instead of surfacing a Connection-refused error. Returns fast
     when the brain is already up."""
+    global _LAST_BRAIN_PROBE_ERROR
     url = f"{settings.autopilot_chat_url.rstrip('/')}/health"
     for attempt in range(max_attempts):
         try:
