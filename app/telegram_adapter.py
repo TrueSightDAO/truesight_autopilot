@@ -1079,6 +1079,9 @@ def _brain_unavailable_message() -> str:
         or "[errno 8]" in lower
         or "connecterror" in lower
         or "name resolution" in lower
+        or "name or service not known" in lower
+        or "gaierror" in lower
+        or "getaddrinfo" in lower
     ):
         return "⚠️ Sophia's brain is DOWN (connection refused on :8001) — not just restarting. I'll keep retrying; a deploy or service start should bring it back."
     m = re.search(r"\bhttp\s+(\d{3})\b", lower)
