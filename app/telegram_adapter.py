@@ -998,6 +998,12 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
 
 _DEPLOY_MARKER = "/tmp/.autopilot_deployed"
 
+# Last brain health-probe failure, set by _wait_for_brain() on every failed probe
+# (and cleared on success) so _brain_unavailable_message() can tell the governor WHY
+# the brain was unreachable — down vs busy vs redeploy — instead of the blanket
+# "briefly restarting" text. Doubles as the evidence trail when a turn dies mid-probe.
+_LAST_BRAIN_PROBE_ERROR: str = ""
+
 
 def _deploy_in_progress() -> bool:
     """The deploy marker exists between deploy.py writing it (just before the
@@ -1012,22 +1018,65 @@ def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
     """Wait for the brain to be reachable (it may be mid deploy-restart), so a brief
     restart is invisible instead of surfacing a Connection-refused error. Returns fast
     when the brain is already up."""
+    global _LAST_BRAIN_PROBE_ERROR
     url = f"{settings.autopilot_chat_url.rstrip('/')}/health"
     for attempt in range(max_attempts):
         try:
-            if httpx.get(url, timeout=5.0).status_code == 200:
+            resp = httpx.get(url, timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            _LAST_BRAIN_PROBE_ERROR = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "brain health probe attempt %d/%d failed: %s against %s",
+                attempt + 1,
+                max_attempts,
+                _LAST_BRAIN_PROBE_ERROR,
+                url,
+            )
+        else:
+            if resp.status_code == 200:
+                _LAST_BRAIN_PROBE_ERROR = ""
                 return True
-        except Exception:
-            pass
+            _LAST_BRAIN_PROBE_ERROR = f"HTTP {resp.status_code} from /health"
+            logger.warning(
+                "brain health probe attempt %d/%d returned HTTP %d against %s",
+                attempt + 1,
+                max_attempts,
+                resp.status_code,
+                url,
+            )
         if attempt < max_attempts - 1:
             time.sleep(backoff)
     return False
 
 
 def _brain_unavailable_message() -> str:
-    """A clear indicator instead of a raw Errno — names a redeploy when one is underway."""
+    """A clear indicator instead of a raw Errno — names a redeploy when one is underway.
+    Since 2026-09-02 (thread-19615), also names the real cause when known: a DOWN brain
+    (connection refused) or a BUSY brain (probe timeout), instead of the blanket
+    "briefly restarting" text."""
     if _deploy_in_progress():
         return "🚀 Sophia is redeploying — back in a few seconds. Please resend your message shortly."
+    err = _LAST_BRAIN_PROBE_ERROR.lower()
+    if any(
+        k in err
+        for k in (
+            "connection refused",
+            "errno 111",
+            "errno 8",
+            "connecterror",
+            "name resolution",
+            "nodename nor servname",
+        )
+    ):
+        logger.warning(
+            "brain unavailable: classified DOWN (%s)", _LAST_BRAIN_PROBE_ERROR
+        )
+        return "⚠️ Sophia's brain is DOWN (connection refused on the health probe) — not just restarting. A deploy or service start should bring it back; please resend shortly."
+    if "timeout" in err or "timed out" in err or err.startswith("http 5"):
+        logger.warning(
+            "brain unavailable: classified BUSY (%s)", _LAST_BRAIN_PROBE_ERROR
+        )
+        return "⏳ Sophia's brain is up but BUSY/unresponsive (health probe timed out or unhealthy) — a long tool call may be running. Please wait a moment and resend."
     return "⏳ Sophia is briefly restarting — please resend in a few seconds."
 
 
