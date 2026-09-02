@@ -43,8 +43,11 @@ def _github_headers() -> dict[str, str]:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if settings.github_pat:
-        headers["Authorization"] = f"Bearer {settings.github_pat}"
+    # Read paths prefer the read-only token so read traffic doesn't consume the
+    # write PAT's rate limit; fall back to the write PAT when no read PAT is set.
+    pat = settings.github_read_pat or settings.github_pat
+    if pat:
+        headers["Authorization"] = f"Bearer {pat}"
     return headers
 
 
