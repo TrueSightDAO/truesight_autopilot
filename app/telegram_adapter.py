@@ -998,6 +998,17 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
 
 _DEPLOY_MARKER = "/tmp/.autopilot_deployed"
 
+# Evidence trail for brain-outage probes: every failed /health attempt inside
+# _wait_for_brain() records the LAST exception/reason here ("" until one
+# actually fails), and _brain_unavailable_message() reads it to tell a DOWN
+# brain (connection refused) apart from an up-but-BUSY one (timeout / HTTP 5xx)
+# apart from the generic restart fallback. Without this, every outage was
+# reported as a generic "briefly restarting" with NO log line saying why
+# (2026-09-02 live reproduction: session [589386] was mid-LLM-turn when
+# systemd SIGTERM'd the brain pid 252230; the probe hit the restart window and
+# served the generic message with no probe-failure trace).
+_LAST_BRAIN_PROBE_ERROR: str = ""
+
 
 def _deploy_in_progress() -> bool:
     """The deploy marker exists between deploy.py writing it (just before the
@@ -1011,23 +1022,83 @@ def _deploy_in_progress() -> bool:
 def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
     """Wait for the brain to be reachable (it may be mid deploy-restart), so a brief
     restart is invisible instead of surfacing a Connection-refused error. Returns fast
-    when the brain is already up."""
+    when the brain is already up.
+
+    Boolean contract is unchanged (tests monkeypatch this to return a plain
+    bool). Every failed probe attempt is now LOGGED with the attempt number +
+    exception type + reason (the missing evidence trail), and the last failure
+    is recorded in the module-level _LAST_BRAIN_PROBE_ERROR so
+    _brain_unavailable_message() can classify WHY the brain was unavailable
+    (connection refused = down; timeout / HTTP 5xx = up but busy; deploy marker
+    = real redeploy)."""
+    global _LAST_BRAIN_PROBE_ERROR
+    _LAST_BRAIN_PROBE_ERROR = ""
     url = f"{settings.autopilot_chat_url.rstrip('/')}/health"
     for attempt in range(max_attempts):
         try:
-            if httpx.get(url, timeout=5.0).status_code == 200:
+            resp = httpx.get(url, timeout=5.0)
+            if resp.status_code == 200:
                 return True
-        except Exception:
-            pass
+            # Non-200 means the server IS reachable (up but not healthy —
+            # e.g. mid-restart or busy) — record it for the classifier.
+            _LAST_BRAIN_PROBE_ERROR = f"HTTP {resp.status_code}"
+            logger.warning(
+                "brain /health probe attempt %d/%d failed: HTTP %s on %s",
+                attempt + 1,
+                max_attempts,
+                resp.status_code,
+                url,
+            )
+        except Exception as e:  # noqa: BLE001 — record + log every probe failure
+            _LAST_BRAIN_PROBE_ERROR = str(e) or type(e).__name__
+            logger.warning(
+                "brain /health probe attempt %d/%d failed: %s: %s on %s",
+                attempt + 1,
+                max_attempts,
+                type(e).__name__,
+                e,
+                url,
+            )
         if attempt < max_attempts - 1:
             time.sleep(backoff)
     return False
 
 
+_HTTP_5XX_RE = re.compile(r"http [5-9]\d\d")
+
+
 def _brain_unavailable_message() -> str:
-    """A clear indicator instead of a raw Errno — names a redeploy when one is underway."""
+    """A clear indicator instead of a raw Errno — names a redeploy when one is
+    underway; otherwise classifies the last recorded probe failure so the
+    governor is not told "briefly restarting" when the brain is actually DOWN
+    or up-but-BUSY (which would mislead them into resending into a dead
+    process or a long tool call respectively)."""
     if _deploy_in_progress():
         return "🚀 Sophia is redeploying — back in a few seconds. Please resend your message shortly."
+    err = _LAST_BRAIN_PROBE_ERROR.lower()
+    if (
+        "connection refused" in err
+        or "[errno 111]" in err
+        or "[errno 8]" in err
+        or "connecterror" in err
+        or "name or service not known" in err
+        or "name resolution" in err
+        or "failed to resolve" in err
+    ):
+        # Connection-level failure = the brain process is DOWN, not restarting —
+        # surface the real error so the governor doesn't resend into a dead process.
+        return (
+            "⚠️ Sophia's brain is DOWN (connection refused on :8001) — not just "
+            "restarting. I'll keep retrying; a deploy or service start should "
+            "bring it back."
+        )
+    if "timed out" in err or "timeout" in err or _HTTP_5XX_RE.search(err):
+        # The probe reached the server but got no healthy answer — the brain is
+        # up but BUSY/unresponsive (a long tool call may be running).
+        return (
+            "⏳ Sophia's brain is up but BUSY/unresponsive (probe timed out) — a "
+            "long tool call may be running; please wait and resend."
+        )
     return "⏳ Sophia is briefly restarting — please resend in a few seconds."
 
 
