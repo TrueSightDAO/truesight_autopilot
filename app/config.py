@@ -387,6 +387,14 @@ class Settings(BaseSettings):
     aws_secret_access_key: str | None = os.getenv("AWS_SECRET_ACCESS_KEY")
     aws_region: str = os.getenv("AWS_REGION", "us-east-1")
 
+    # Tencent Cloud (TENCENT_SECRET_ID / TENCENT_SECRET_KEY) — optional; tools
+    # degrade to a clean 'not configured' response when either is missing
+    # (mirrors AWS/Gmail handling of unset credentials). Docs:
+    # agentic_ai_context/credentials/API_CREDENTIALS_DOCUMENTATION.md §10.7
+    tencent_secret_id: str | None = os.getenv("TENCENT_SECRET_ID")
+    tencent_secret_key: str | None = os.getenv("TENCENT_SECRET_KEY")
+    tencent_region: str = os.getenv("TENCENT_REGION", "ap-guangzhou")
+
     # Bugsnag — autopilot self-reports crashes + ERROR-level logs to Bugsnag.
     # The same Bugsnag project then emits 'New error in autopilot' emails which
     # email_poller's bugsnag_error classifier picks up, closing the

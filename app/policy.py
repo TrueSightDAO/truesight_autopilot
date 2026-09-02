@@ -299,6 +299,7 @@ def classify_action(tool_name: str) -> ActionClass:
     # Write/admin tools that modify state
     write_tools = {
         "aws_query",
+        "tencent_query",
         "submit_contribution",
         "open_fix_pr",
         "git_push_changes",
