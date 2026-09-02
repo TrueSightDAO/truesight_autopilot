@@ -1050,7 +1050,7 @@ def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
                 url,
             )
         except Exception as e:  # noqa: BLE001 — record + log every probe failure
-            _LAST_BRAIN_PROBE_ERROR = str(e) or type(e).__name__
+            _LAST_BRAIN_PROBE_ERROR = f"{type(e).__name__}: {e}".strip(": ")
             logger.warning(
                 "brain /health probe attempt %d/%d failed: %s: %s on %s",
                 attempt + 1,
