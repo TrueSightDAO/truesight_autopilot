@@ -9,7 +9,8 @@ Model naming follows litellm's convention:
                                     the deprecated deepseek-chat, 2026-07-24)
     deepseek/deepseek-v4-pro    →  DeepSeek V4 Pro (flagship; replaces the
                                     deprecated deepseek-reasoner)
-    anthropic/claude-sonnet-4-20250514  →  Claude
+    anthropic/claude-sonnet-4-20250514  →  Claude (RETIRED on live API 2026-09;
+                                    use claude-haiku-4-5 / claude-sonnet-4-6 below)
     openai/gpt-4o            →  OpenAI
 """
 
@@ -38,8 +39,11 @@ PRICING: dict[str, tuple[float, float]] = {
     "deepseek/deepseek-v4-pro": (0.435, 0.87),
     "openai/gpt-4o": (2.50, 10.00),
     "openai/gpt-4o-mini": (0.15, 0.60),
-    "anthropic/claude-sonnet-4-20250514": (3.00, 15.00),
-    "anthropic/claude-3-5-haiku-20241022": (0.80, 4.00),
+    # 2025-era IDs (claude-sonnet-4-20250514, claude-3-5-haiku-20241022) return
+    # NotFoundError on the live API (verified 2026-09-02 via direct probe).
+    # Current-gen per anthropic.com/pricing: Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15.
+    "anthropic/claude-haiku-4-5": (1.00, 5.00),
+    "anthropic/claude-sonnet-4-6": (3.00, 15.00),
 }
 
 
