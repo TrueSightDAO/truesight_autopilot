@@ -126,3 +126,38 @@ def test_dispatch_list_buckets_action():
     with patch("qcloud_cos.CosS3Client", return_value=fake_client):
         out = json.loads(tencent_tools._dispatch({"action": "list_buckets"}, {}))
     assert out["status"] == "ok"
+
+
+def test_pascalcase_client_method_fallback():
+    """Real SDK (>=3.1.x) exposes PascalCase methods (DescribeZones); snake_case
+    aliases were removed. Dispatch must fall back to the operation name."""
+    import types
+
+    _configure()
+    fake_client = MagicMock()
+    # NOTE: no describe_zones attribute — only the PascalCase method exists,
+    # mirroring tencentcloud-sdk-python 3.1.166 where snake aliases are gone.
+    del fake_client.describe_zones
+    fake_client.DescribeZones.return_value.to_json_string.return_value = (
+        '{"ZoneSet": [], "RequestId": "req-1"}'
+    )
+    fake_req_mod = types.ModuleType("tencentcloud.cvm.v20170312.models")
+    fake_req_cls = type(
+        "DescribeZonesRequest",
+        (),
+        {"from_json_string": lambda self, payload: None},
+    )
+    fake_req_mod.DescribeZonesRequest = fake_req_cls
+
+    with (
+        patch.object(tencent_tools, "_client", return_value=fake_client),
+        patch.dict(
+            __import__("sys").modules,
+            {"tencentcloud.cvm.v20170312.models": fake_req_mod},
+        ),
+    ):
+        out = json.loads(
+            tencent_tools.tencent_query(service="cvm", operation="DescribeZones")
+        )
+    assert out["status"] == "ok", out
+    fake_client.DescribeZones.assert_called_once()

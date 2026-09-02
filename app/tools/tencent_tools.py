@@ -204,18 +204,33 @@ def tencent_query(
 
     try:
         client = _client(service, region or settings.tencent_region)
+        # tencentcloud-sdk-python exposes client methods in BOTH conventions
+        # depending on version: snake_case aliases (e.g. describe_zones) in
+        # older releases, PascalCase (DescribeZones) in >=3.1.x. Try snake
+        # first, fall back to the operation name as-is.
         method_name = _camel_to_snake(operation)
-        method = getattr(client, method_name)
+        method = getattr(client, method_name, None)
+        if method is None and operation != method_name:
+            method = getattr(client, operation, None)
+        if method is None:
+            return _err(
+                f"operation {operation!r} not found on {type(client).__name__} "
+                f"(tried {method_name!r} and {operation!r})",
+                service=service,
+                operation=operation,
+            )
         req_class_name = operation + "Request"
-        # Request classes live in tencentcloud.<service>.v20170312.models — derive
-        # from the service name (deterministic), not the client instance, so tests
-        # can stub the module cleanly.
+        # Request classes live in tencentcloud.<service>.<version>.models. The
+        # SDK version varies per service (cvm/vpc = v20170312, region =
+        # v20220627), so derive the models module from the client's own module
+        # path (always correct) instead of hardcoding v20170312.
+        req_module = type(client).__module__.rsplit(".", 1)[0] + ".models"
         try:
-            mod = __import__(f"tencentcloud.{service}.v20170312.models", fromlist=["*"])
+            mod = __import__(req_module, fromlist=["*"])
             req_cls = getattr(mod, req_class_name)
         except (ImportError, AttributeError):
-            req_module = type(client).__module__.rsplit(".", 1)[0]
-            mod = __import__(req_module, fromlist=["*"])
+            # Fallback for tests that stub tencentcloud.<service>.v20170312.models
+            mod = __import__(f"tencentcloud.{service}.v20170312.models", fromlist=["*"])
             req_cls = getattr(mod, req_class_name)
         request = req_cls()
         if parameters:
