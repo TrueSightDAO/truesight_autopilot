@@ -3,11 +3,39 @@
 from __future__ import annotations
 
 import base64
+import os
+import time
 from typing import Any
 
 import httpx
 
 from ..config import settings
+
+# In-memory TTL cache for GitHub API reads. Sophia re-reads the same plan/context/
+# config files across tool rounds (and across parallel threads), and each read is
+# a distinct call against the PAT's 5000 req/h core limit. Deduping within a short
+# window cuts burst volume without meaningful staleness (60s on a repo that changes
+# on human timescales is negligible).
+_GITHUB_READ_CACHE_TTL = int(os.getenv("GITHUB_READ_CACHE_TTL", "60"))
+_GITHUB_READ_CACHE_MAX = 1000
+_read_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+
+
+def _cache_get(key: tuple[Any, ...]) -> dict[str, Any] | None:
+    hit = _read_cache.get(key)
+    if hit is None:
+        return None
+    ts, val = hit
+    if time.time() - ts >= _GITHUB_READ_CACHE_TTL:
+        _read_cache.pop(key, None)
+        return None
+    return val
+
+
+def _cache_set(key: tuple[Any, ...], val: dict[str, Any]) -> None:
+    if len(_read_cache) >= _GITHUB_READ_CACHE_MAX:
+        _read_cache.clear()
+    _read_cache[key] = (time.time(), val)
 
 
 def _github_headers() -> dict[str, str]:
@@ -21,6 +49,11 @@ def _github_headers() -> dict[str, str]:
 
 
 def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
+    cache_key = ("read", repo, path, ref)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     url = f"https://api.github.com/repos/TrueSightDAO/{repo}/contents/{path}"
     params = {"ref": ref}
 
@@ -30,7 +63,7 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
         data = resp.json()
 
         if isinstance(data, list):
-            return {
+            result = {
                 "type": "directory",
                 "entries": [
                     {
@@ -42,36 +75,44 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
                 ],
                 "url": str(resp.url),
             }
-
-        content = data.get("content", "")
-        encoding = data.get("encoding", "")
-        if encoding == "base64" and content:
-            decoded = base64.b64decode(content).decode("utf-8", errors="replace")
         else:
-            decoded = content
+            content = data.get("content", "")
+            encoding = data.get("encoding", "")
+            if encoding == "base64" and content:
+                decoded = base64.b64decode(content).decode("utf-8", errors="replace")
+            else:
+                decoded = content
 
-        return {
-            "type": "file",
-            "content": decoded,
-            "size": data.get("size", 0),
-            "url": data.get("html_url", ""),
-            "encoding": encoding,
-        }
+            result = {
+                "type": "file",
+                "content": decoded,
+                "size": data.get("size", 0),
+                "url": data.get("html_url", ""),
+                "encoding": encoding,
+            }
     except httpx.HTTPStatusError as exc:
-        return {
+        result = {
             "type": "error",
             "error": f"GitHub API error {exc.response.status_code}: {exc.response.text[:200]}",
         }
     except httpx.RequestError as exc:
-        return {
+        result = {
             "type": "error",
             "error": f"Request failed: {exc}",
         }
+
+    _cache_set(cache_key, result)
+    return result
 
 
 def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
     """GitHub code search. With a repo, scoped to TrueSightDAO/<repo>;
     without one, searches the whole TrueSightDAO org."""
+    cache_key = ("search", repo, query)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     url = "https://api.github.com/search/code"
     scope = f"repo:TrueSightDAO/{repo}" if repo else "org:TrueSightDAO"
     params = {"q": f"{scope} {query}"}
@@ -80,7 +121,7 @@ def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
         resp = httpx.get(url, headers=_github_headers(), params=params, timeout=15.0)
         resp.raise_for_status()
         data = resp.json()
-        return {
+        result = {
             "type": "search_results",
             "total_count": data.get("total_count", 0),
             "items": [
@@ -93,15 +134,18 @@ def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
             ],
         }
     except httpx.HTTPStatusError as exc:
-        return {
+        result = {
             "type": "error",
             "error": f"GitHub API error {exc.response.status_code}: {exc.response.text[:200]}",
         }
     except httpx.RequestError as exc:
-        return {
+        result = {
             "type": "error",
             "error": f"Request failed: {exc}",
         }
+
+    _cache_set(cache_key, result)
+    return result
 
 
 # ── capability manifest entries ───────────────────────────────────────────
