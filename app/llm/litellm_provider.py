@@ -52,6 +52,9 @@ class LiteLLMProvider(LLMProvider):
         api_key = _settings.deepseek_api_key
         if api_key:
             os.environ.setdefault("DEEPSEEK_API_KEY", api_key)
+        anthropic_key = _settings.anthropic_api_key
+        if anthropic_key:
+            os.environ.setdefault("ANTHROPIC_API_KEY", anthropic_key)
 
     def supports_tools(self) -> bool:
         return True

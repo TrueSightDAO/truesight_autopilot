@@ -279,11 +279,14 @@ class Settings(BaseSettings):
     # Gmail
     gmail_token_json: str = os.getenv("GMAIL_TOKEN_JSON", "")
 
-    # LLM — DeepSeek only (dropped Kimi + Claude for cost)
+    # LLM — DeepSeek default; Claude/others selectable via LLM_PROVIDER=litellm
+    # + LITELLM_MODEL. Claude was dropped for cost (2025) but the litellm path
+    # is provider-agnostic; set ANTHROPIC_API_KEY to re-enable it as an option.
     llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv(
         "DEEPSEEK_SDK", ""
     )
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     # "deepseek-chat"/"deepseek-reasoner" were deprecated 2026-07-24 in favor of
     # deepseek-v4-pro / deepseek-v4-flash. deepseek-chat was an ALIAS for
