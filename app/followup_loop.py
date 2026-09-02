@@ -263,10 +263,16 @@ async def _post_to_thread(chat_id: str | None, thread_id: str, message: str):
 
 
 async def _post_to_thread_direct(chat_id: str | None, thread_id: str, message: str):
-    """Direct HTTP fallback for posting to Telegram thread."""
+    """Direct HTTP fallback for posting to Telegram thread.
+
+    Renders Markdown → Telegram HTML (same as the adapter path) and sends with
+    parse_mode=HTML. Legacy "Markdown" parse mode doesn't support the ``**bold**``
+    syntax these messages use, which caused Telegram 400 "can't parse entities".
+    """
     import httpx
 
     from app.config import settings
+    from app.telegram_adapter import markdown_to_telegram_html
 
     bot_token = settings.telegram_bot_api_key
     if not bot_token:
@@ -276,9 +282,9 @@ async def _post_to_thread_direct(chat_id: str | None, thread_id: str, message: s
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id or "-1003919341801",
-        "text": message,
+        "text": markdown_to_telegram_html(message),
         "message_thread_id": int(thread_id) if thread_id.isdigit() else None,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
     }
 
     async with httpx.AsyncClient() as client:
