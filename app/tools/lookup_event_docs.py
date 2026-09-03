@@ -51,6 +51,16 @@ _INTENT_GUIDANCE: dict[str, str] = {
     "onboard contributor": "CONTRIBUTOR ADD EVENT",
     "capital injection": "CAPITAL INJECTION EVENT",
     "record payment": "PAYMENT EVENT",
+    "register boundary": "FARM BOUNDARY EVIDENCE EVENT",
+    "register plot": "FARM BOUNDARY EVIDENCE EVENT",
+    "farm boundary": "FARM BOUNDARY EVIDENCE EVENT",
+    "plot boundary evidence": "FARM BOUNDARY EVIDENCE EVENT",
+    "tree planting": "TREE PLANTING EVENT",
+    "plant a tree": "TREE PLANTING EVENT",
+    "register tree": "TREE PLANTING EVENT",
+    "invalidate plot": "PLOT INVALIDATION EVENT",
+    "plot invalidation": "PLOT INVALIDATION EVENT",
+    "remove plot": "PLOT INVALIDATION EVENT",
 }
 
 # ── Important fields per event type ───────────────────────────────────────
@@ -110,6 +120,31 @@ _IMPORTANT_FIELDS: dict[str, list[str]] = {
         "Composition URL",
         "Holder Name",
     ],
+    "FARM BOUNDARY EVIDENCE EVENT": [
+        "Farm Name",
+        "Is New Farm",
+        "Media URLs",
+        "Media Count",
+        "Captured At",
+        "Device GPS",
+        "Extracted GPS",
+        "Area Hectares",
+    ],
+    "TREE PLANTING EVENT": [
+        "Tree Count",
+        "Location",
+        "Latitude",
+        "Longitude",
+        "Species",
+        "Planter",
+        "Planting Time",
+        "Photo URL",
+    ],
+    "PLOT INVALIDATION EVENT": [
+        "Plot ID",
+        "Reason",
+        "Retractor Email",
+    ],
 }
 
 # Minimal fallback for when Edgar is unreachable
@@ -134,6 +169,21 @@ _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
         "description": "Use after a repackaging batch to deplete consumed inputs from offchain asset location, add output rows, and set Currencies metadata. CLI-only — no DApp equivalent.",
         "required_fields": ["Composition URL", "Holder Name"],
         "dapp_page": "post_repackaging_cleanup.html",
+    },
+    "FARM BOUNDARY EVIDENCE EVENT": {
+        "description": "Use when a farm sends geotagged boundary photos (plot corners). Omit Plot ID when unknown - backend auto-assigns PL-###; NEVER send an empty '- Plot ID:' line (parser line-bleed). Join Media URLs with '; '. See SUNMINT_TREE_PHOTO_PROCESSING.md section 6.",
+        "required_fields": ["Farm Name", "Media URLs"],
+        "dapp_page": "limites-da-fazenda (sunmint)",
+    },
+    "TREE PLANTING EVENT": {
+        "description": "Use to record a tree planting. Send BOTH canonical Location (decimal, S/W negative) AND Latitude/Longitude decimal fields - validator needs Location, GAS parser needs Latitude/Longitude lines. Species string must match what farm lead specifies (e.g. 'Cacau - Hybrid'). See SUNMINT_TREE_PHOTO_PROCESSING.md section 7.",
+        "required_fields": ["Tree Count", "Location", "Latitude", "Longitude"],
+        "dapp_page": "report_tree_planting.html",
+    },
+    "PLOT INVALIDATION EVENT": {
+        "description": "Use to soft-invalidate a SunMint Plots row (Status -> invalid) so it drops from the dropdown/geojson. Sentinel/governor gate: Retractor Email must resolve to a governor or sentinel. Never deletes. See SUNMINT_TREE_PHOTO_PROCESSING.md section 7.",
+        "required_fields": ["Plot ID", "Reason", "Retractor Email"],
+        "dapp_page": "sentinel-autopilot (no DApp page)",
     },
 }
 
