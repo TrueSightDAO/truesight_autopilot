@@ -9,7 +9,6 @@ import logging
 import mimetypes
 import os
 import re
-import subprocess
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -69,6 +68,7 @@ from .tools.github_tools import read_repo_file
 from .tools.inventory_lookup import list_matching_qr_codes
 from .tools.lookup_event_docs import lookup_event_docs
 from .tools.qr_scanner import (
+    convert_heic_to_jpg,
     lookup_qr_batch,
     lookup_qr_code,
     scan_qr_batch,
@@ -4174,12 +4174,11 @@ async def chat_upload(
         if ext.lower() in (".heic", ".heif") and len(content) < 10 * 1024 * 1024:
             try:
                 jpg_dest = UPLOAD_DIR / f"{dest.stem}.jpg"
-                subprocess.run(
-                    ["sips", "-s", "format", "jpeg", str(dest), "--out", str(jpg_dest)],
-                    capture_output=True,
-                    timeout=30,
-                    check=True,
-                )
+                converted_path = convert_heic_to_jpg(str(dest), str(jpg_dest))
+                if converted_path is None:
+                    raise RuntimeError(
+                        f"HEIC conversion failed for {upload_file.filename}"
+                    )
                 jpg_content = jpg_dest.read_bytes()
                 mime_type = "image/jpeg"
                 size_kb = round(len(jpg_content) / 1024, 1)

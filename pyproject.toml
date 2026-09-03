@@ -24,6 +24,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pyzbar>=0.1.9",
     "Pillow>=10.0.0",
+    "pillow_heif>=1.0.0",
 ]
 
 [project.scripts]

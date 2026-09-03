@@ -160,7 +160,7 @@ def scan_qr_from_file(file_path: str) -> dict[str, Any]:
     # Auto-convert HEIC/HEIF to JPEG since pyzbar/PIL cannot read them directly
     decode_path = file_path
     if p.suffix.lower() in (".heic", ".heif"):
-        jpg_path = _convert_heic_to_jpg(file_path)
+        jpg_path = convert_heic_to_jpg(file_path)
         if jpg_path is None:
             return {
                 "status": "error",
@@ -307,20 +307,27 @@ def scan_qr_batch(file_paths: list[str]) -> dict[str, Any]:
     }
 
 
-def _convert_heic_to_jpg(heic_path: str) -> str | None:
-    """Convert HEIC to JPEG using macOS sips. Returns jpg path or None."""
+def convert_heic_to_jpg(heic_path: str, jpg_path: str | None = None) -> str | None:
+    """Convert a HEIC/HEIF image to JPEG, preserving EXIF (including GPS).
+
+    Uses pillow_heif (pure-Python, cross-platform) - replaces the old macOS-only
+    ``sips`` invocation, which does not exist on the Linux autopilot host, so HEIC
+    uploads previously fell through unconverted and lost their GPS metadata.
+
+    Returns the path of the written JPEG, or None if conversion fails.
+    """
     p = Path(heic_path)
     if p.suffix.lower() not in (".heic", ".heif"):
         return None
-    jpg_path = p.with_suffix(".jpg")
     try:
-        subprocess.run(
-            ["sips", "-s", "format", "jpeg", str(p), "--out", str(jpg_path)],
-            capture_output=True,
-            timeout=30,
-            check=True,
-        )
-        return str(jpg_path)
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+        out = Path(jpg_path) if jpg_path else p.with_suffix(".jpg")
+        with Image.open(heic_path) as im:
+            exif = im.info.get("exif")
+            im.save(out, format="JPEG", quality=90, exif=exif or None)
+        return str(out)
     except Exception as e:
         logger.warning("HEIC conversion failed for %s: %s", heic_path, e)
         return None
