@@ -1523,7 +1523,17 @@ def _auto_process_attachment(
     SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
     ext = Path(local_path).suffix.lower()
     pdf_exts = {".pdf"}
-    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+    image_exts = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".tiff",
+        ".tif",
+        ".bmp",
+        ".webp",
+        ".heic",
+        ".heif",
+    }
     docx_exts = {".docx"}
 
     status_id = send_message(chat_id, "📄 Processing attachment…", thread_id)
@@ -1613,8 +1623,21 @@ def _auto_process_attachment(
 
     # --- Image path ---
     if ext in image_exts:
+        ocr_path = local_path
+        converted_from_heic = False
+        if ext in (".heic", ".heif"):
+            _update_status("🖼️ Converting HEIC to JPEG…")
+            from .tools.qr_scanner import convert_heic_to_jpg
+
+            jpg_path = convert_heic_to_jpg(local_path)
+            if not jpg_path:
+                _update_status("⚠️ HEIC conversion failed — image not OCR-able")
+                return None
+            ocr_path = jpg_path
+            converted_from_heic = True
+
         _update_status("📸 Running OCR on image…")
-        ocr_result = _run_script("ocr_image.py", local_path, "eng")
+        ocr_result = _run_script("ocr_image.py", ocr_path, "eng")
 
         if ocr_result.get("status") != "success":
             _update_status(
@@ -1634,6 +1657,27 @@ def _auto_process_attachment(
             f"[Attachment auto-processed: **{filename}**]\n"
             f"- Type: Image (OCR confidence: {confidence}%, quality: {quality})\n"
         )
+        if converted_from_heic:
+            summary += "- Note: HEIC converted to JPEG (EXIF/GPS preserved)\n"
+
+        # Surface GPS coordinates when the image carries them (e.g. phone photos
+        # of farms / cacao bags). Reads the OCR'd path — for HEIC that is the
+        # converted JPEG, which retains the original EXIF GPS IFD.
+        try:
+            from .tools.qr_scanner import extract_gps_from_image
+
+            gps = extract_gps_from_image(ocr_path)
+            if gps:
+                summary += (
+                    f"- \U0001f4cd GPS: {gps['lat']}, {gps['lon']}"
+                    + (f" (alt {gps['alt']} m)" if gps.get("alt") is not None else "")
+                    + "\n"
+                )
+                if gps.get("timestamp"):
+                    summary += f"- \U0001f550 Captured: {gps['timestamp']}\n"
+        except Exception:
+            pass
+
         if extracted_text:
             summary += f"\nExtracted text:\n```\n{extracted_text[:45000]}\n```\n"
         else:

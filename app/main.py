@@ -69,6 +69,7 @@ from .tools.inventory_lookup import list_matching_qr_codes
 from .tools.lookup_event_docs import lookup_event_docs
 from .tools.qr_scanner import (
     convert_heic_to_jpg,
+    extract_gps_from_image,
     lookup_qr_batch,
     lookup_qr_code,
     scan_qr_batch,
@@ -4273,6 +4274,17 @@ async def chat_upload(
             )
             if pf["converted"]:
                 cp += "(Converted from HEIC to JPEG)\n"
+            if pf["mime_type"].startswith("image/"):
+                try:
+                    gps = extract_gps_from_image(pf["dest"])
+                    if gps:
+                        cp += f"\U0001f4cd GPS: {gps['lat']}, {gps['lon']}\n"
+                        if gps.get("alt") is not None:
+                            cp += f"\U0001f4cd Altitude: {gps['alt']} m\n"
+                        if gps.get("timestamp"):
+                            cp += f"\U0001f550 Captured: {gps['timestamp']}\n"
+                except Exception:
+                    pass
             content_parts.append(cp)
 
         # Pyzbar results
