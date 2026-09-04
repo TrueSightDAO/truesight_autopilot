@@ -333,6 +333,78 @@ def convert_heic_to_jpg(heic_path: str, jpg_path: str | None = None) -> str | No
         return None
 
 
+def extract_gps_from_image(image_path: str) -> dict[str, Any] | None:
+    """Extract GPS coordinates from an image's EXIF metadata.
+
+    Returns {"lat", "lon" (decimal degrees), "lat_ref", "lon_ref", plus
+    "alt" (meters) and "timestamp" when present}, or None when the image has
+    no GPS IFD, is unreadable, or is not an image at all.
+
+    Works on JPEG and on HEIC/HEIF once pillow_heif has registered its opener
+    (convert_heic_to_jpg preserves the GPS IFD, so the converted JPEG carries
+    the same coordinates as the original HEIC).
+    """
+    try:
+        from PIL import ExifTags, Image
+
+        if not Path(image_path).exists():
+            return None
+        try:
+            im = Image.open(image_path)
+        except Exception:
+            return None
+        with im:
+            exif = im.getexif()
+            gps_ifd = exif.get_ifd(ExifTags.IFD.GPSInfo)
+            if not gps_ifd and im.info.get("exif"):
+                # HEIC originals expose EXIF via im.info, not getexif().
+                exif = Image.Exif()
+                try:
+                    exif.load(im.info["exif"])
+                    gps_ifd = exif.get_ifd(ExifTags.IFD.GPSInfo)
+                except Exception:
+                    gps_ifd = {}
+            if not gps_ifd:
+                return None
+            lat_ref = gps_ifd.get(1)
+            lon_ref = gps_ifd.get(3)
+            lat_dms = gps_ifd.get(2)
+            lon_dms = gps_ifd.get(4)
+            if lat_ref is None or lon_ref is None or not lat_dms or not lon_dms:
+                return None
+
+            def _to_decimal(dms, ref):
+                d, m, s = (float(x) for x in dms)
+                dec = d + m / 60.0 + s / 3600.0
+                return round(-dec if ref in ("S", "W") else dec, 6)
+
+            def _txt(v):
+                return v.decode() if isinstance(v, bytes) else str(v)
+
+            result: dict[str, Any] = {
+                "lat": _to_decimal(lat_dms, _txt(lat_ref)),
+                "lon": _to_decimal(lon_dms, _txt(lon_ref)),
+                "lat_ref": _txt(lat_ref),
+                "lon_ref": _txt(lon_ref),
+            }
+            alt = gps_ifd.get(6)
+            if alt is not None:
+                try:
+                    result["alt"] = round(float(alt), 1)
+                except Exception:
+                    pass
+            ts, ds = gps_ifd.get(7), gps_ifd.get(29)
+            if ts is not None and ds is not None:
+                try:
+                    h, m, s = (int(float(x)) for x in ts)
+                    result["timestamp"] = f"{_txt(ds)} {h:02d}:{m:02d}:{s:02d}"
+                except Exception:
+                    pass
+            return result
+    except Exception:
+        return None
+
+
 # ──────────────────────────── QR Lookup ────────────────────────────
 
 
