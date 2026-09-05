@@ -153,7 +153,103 @@ def create_telegram_topic(
     }
 
 
-TOOL_SPEC = ToolSpec(
+def _resolve_thread_target(
+    chat_id: str | None,
+    session_id: str | None,
+) -> tuple[str, str] | dict:
+    """Shared chat_id resolution for close/delete — same precedence as
+    create_telegram_topic. Returns (token, target_chat_id) or an error dict."""
+    token = settings.telegram_bot_api_key
+    if not token:
+        return {
+            "status": "error",
+            "reason": "TELEGRAM_BOT_API_KEY not configured on this box",
+        }
+    target = (
+        chat_id
+        or _chat_id_from_session(session_id)
+        or (
+            str(settings.telegram_home_group_id)
+            if settings.telegram_home_group_id
+            else None
+        )
+    )
+    if not target:
+        return {
+            "status": "error",
+            "reason": "no target group — not in a Telegram topic session and "
+            "TELEGRAM_HOME_GROUP_ID is unset. Pass chat_id explicitly.",
+        }
+    return token, target
+
+
+def close_telegram_topic(
+    thread_id: int,
+    chat_id: str | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Close (archive) a forum topic — reversible, a governor can reopen it
+    from the Telegram UI. One direct API call instead of reaching for ssh_run
+    to hand-roll the curl each time."""
+    resolved = _resolve_thread_target(chat_id, session_id)
+    if isinstance(resolved, dict):
+        return resolved
+    token, target = resolved
+    try:
+        r = httpx.post(
+            f"{_API}/bot{token}/closeForumTopic",
+            json={"chat_id": target, "message_thread_id": thread_id},
+            timeout=_TIMEOUT,
+        )
+        data = r.json()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "reason": f"closeForumTopic call failed: {e}"}
+    if not data.get("ok"):
+        return {
+            "status": "error",
+            "reason": f"Telegram: {data.get('description', 'unknown error')}",
+            "hint": "Requires Sophia's bot to be a group admin with 'Manage Topics'.",
+        }
+    logger.info("closed topic thread=%s in chat %s", thread_id, target)
+    return {"status": "ok", "action": "closed", "message_thread_id": thread_id}
+
+
+def delete_telegram_topic(
+    thread_id: int,
+    chat_id: str | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Delete a forum topic and all its messages — IRREVERSIBLE. Only call
+    this after independently confirming the topic's task is actually
+    complete (not just on the governor's say-so passed through unverified);
+    when in doubt, close it instead and let the governor delete it manually
+    from the Telegram UI."""
+    resolved = _resolve_thread_target(chat_id, session_id)
+    if isinstance(resolved, dict):
+        return resolved
+    token, target = resolved
+    try:
+        r = httpx.post(
+            f"{_API}/bot{token}/deleteForumTopic",
+            json={"chat_id": target, "message_thread_id": thread_id},
+            timeout=_TIMEOUT,
+        )
+        data = r.json()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "reason": f"deleteForumTopic call failed: {e}"}
+    if not data.get("ok"):
+        return {
+            "status": "error",
+            "reason": f"Telegram: {data.get('description', 'unknown error')}",
+            "hint": "Requires Sophia's bot to be a group admin with 'Manage Topics' "
+            "and 'Delete Messages'. If this keeps failing, the governor should "
+            "delete the topic manually from the Telegram UI instead.",
+        }
+    logger.info("deleted topic thread=%s in chat %s", thread_id, target)
+    return {"status": "ok", "action": "deleted", "message_thread_id": thread_id}
+
+
+_CREATE_TOOL_SPEC = ToolSpec(
     name="create_telegram_topic",
     description=(
         "Create a new Telegram forum TOPIC in the working group and optionally "
@@ -199,3 +295,73 @@ TOOL_SPEC = ToolSpec(
     ),
     default_roles=None,  # uniform — any role a governor is in can hand off
 )
+
+_CLOSE_TOOL_SPEC = ToolSpec(
+    name="close_telegram_topic",
+    description=(
+        "Close (archive) a Telegram forum topic — a governor can reopen it "
+        "later from the Telegram UI, so this is reversible. Use when a "
+        "governor asks you to close a topic that's genuinely done. One direct "
+        "API call — prefer this over reconstructing the curl via ssh_run."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "thread_id": {
+                "type": "integer",
+                "description": "The forum topic's message_thread_id to close.",
+            },
+            "chat_id": {
+                "type": "string",
+                "description": "Optional explicit group chat id; defaults to current group / configured working group.",
+            },
+        },
+        "required": ["thread_id"],
+    },
+    handler=lambda args, ctx: json.dumps(
+        close_telegram_topic(
+            thread_id=int(args.get("thread_id", 0)),
+            chat_id=args.get("chat_id"),
+            session_id=ctx.get("session_id"),
+        ),
+        indent=2,
+    ),
+    default_roles=None,  # uniform — reversible, same trust level as create
+)
+
+_DELETE_TOOL_SPEC = ToolSpec(
+    name="delete_telegram_topic",
+    description=(
+        "Delete a Telegram forum topic and ALL its messages — IRREVERSIBLE. "
+        "Only call this after you have independently verified the topic's "
+        "task is actually complete (not just because the governor said so in "
+        "passing) — if there's any doubt, close_telegram_topic instead and "
+        "tell the governor to delete it manually from the Telegram UI. One "
+        "direct API call — prefer this over reconstructing the curl via ssh_run."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "thread_id": {
+                "type": "integer",
+                "description": "The forum topic's message_thread_id to delete.",
+            },
+            "chat_id": {
+                "type": "string",
+                "description": "Optional explicit group chat id; defaults to current group / configured working group.",
+            },
+        },
+        "required": ["thread_id"],
+    },
+    handler=lambda args, ctx: json.dumps(
+        delete_telegram_topic(
+            thread_id=int(args.get("thread_id", 0)),
+            chat_id=args.get("chat_id"),
+            session_id=ctx.get("session_id"),
+        ),
+        indent=2,
+    ),
+    default_roles=frozenset({"governor"}),  # irreversible — governor only
+)
+
+TOOL_SPECS = [_CREATE_TOOL_SPEC, _CLOSE_TOOL_SPEC, _DELETE_TOOL_SPEC]
