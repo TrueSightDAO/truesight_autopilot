@@ -3665,7 +3665,12 @@ async def _publish_transcript(
         sid_hash = _hlib.md5(session_id.encode()).hexdigest()[:12]
         today = time.strftime("%Y-%m-%d", time.gmtime())
 
-        gh = GitHubClient()
+        # Dedicated PAT (falls back to the shared one if unset) + retry=0:
+        # this call is best-effort background transparency publishing, not
+        # a critical write — it should fail fast and get swallowed by the
+        # except below rather than let PyGithub's default retry policy
+        # block this single-worker process for ~25min on a 403.
+        gh = GitHubClient(pat=settings.github_transcript_pat or None, retry=0)
 
         # Build markdown transcript
         lines = [f"# Autopilot Session — {today}\n"]
