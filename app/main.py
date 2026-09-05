@@ -32,6 +32,7 @@ from .media_archive_pipeline import router as media_archive_pipeline_router
 from .signature_ledger_pipeline import router as signature_ledger_pipeline_router
 from .auto_advance import next_action
 from .config import settings
+from .context_compaction import backup_session_file, compact_history
 from .turn_convergence import convergence_message, should_converge
 from .context import get_context_file, refresh_context_repos, refresh_system_prompt
 from .deploy_watcher import register_track as _dw_register_track
@@ -3100,6 +3101,10 @@ async def _stream_chat(
     # Compact completed tool-chains (Pillar B) → trim to the token budget (backstop)
     # → sanitise so any tool result orphaned by the compaction/trim is healed.
     _compact_old_tool_chains(history)
+    # Context compaction (PR2): fold turns older than K once over the token
+    # threshold, BEFORE the drop-oldest trim so it rarely has to fire. In-place;
+    # sanitise below heals any pass-3 user-merge.
+    _maybe_auto_compact(history, session_id)
     _trim_history_to_budget(history)
     _sanitise_tool_messages(history)
 
@@ -4492,6 +4497,10 @@ async def _chat_blocking_turn(
     # (this path previously had NO trim at all — a long thread overflowed and
     # bricked) → sanitise.
     _compact_old_tool_chains(history)
+    # Context compaction (PR2): fold turns older than K once over the token
+    # threshold, BEFORE the drop-oldest trim so it rarely has to fire. In-place;
+    # sanitise below heals any pass-3 user-merge.
+    _maybe_auto_compact(history, session_id)
     _trim_history_to_budget(history)
     _sanitise_tool_messages(history)
 
@@ -5043,6 +5052,78 @@ def _search_transcript(query, session_id, max_spans=8):
         except Exception:
             pass
     return {"status": "ok", "query": query, "matches": len(spans), "spans": spans}
+
+
+def _maybe_auto_compact(history: list[dict], session_id: str) -> bool:
+    """Context compaction (PR2): fold history older than K turns once a session
+    crosses the token threshold, before this turn's history is handed to the
+    LLM. Runs AFTER _compact_old_tool_chains (so the token count is honest) and
+    BEFORE _trim_history_to_budget (so a compacted summary often keeps the
+    drop-oldest trim from ever firing). In-place slice assignment keeps the
+    list object live in _sessions[session_id] (reassigning would leave the
+    in-memory cache stale - see _log_session).
+
+    Env knobs (plan 2b, tunable without a redeploy):
+      CONTEXT_COMPACTION_AUTO           default "1"  \u2014 master kill switch
+      CONTEXT_COMPACTION_TOKEN_THRESHOLD default 20000 (fires well before the
+                                         observed 38-50K stall range)
+      CONTEXT_COMPACTION_KEEP_LAST_TURNS default 6
+    Failure is never fatal: any exception logs and falls back to running
+    uncompacted rather than blocking the turn (plan 2d).
+    """
+    try:
+        import hashlib  # noqa: PLC0415 - local, mirrors _log_session pattern
+
+        if os.getenv("CONTEXT_COMPACTION_AUTO", "1") != "1":
+            return False
+        threshold = int(
+            os.getenv(
+                "CONTEXT_COMPACTION_TOKEN_THRESHOLD",
+                str(settings.context_compaction_token_threshold),
+            )
+        )
+        keep = int(
+            os.getenv(
+                "CONTEXT_COMPACTION_KEEP_LAST_TURNS",
+                str(settings.context_compaction_keep_last_turns),
+            )
+        )
+        if threshold <= 0 or keep <= 0:
+            return False
+        # Cheap fast-path mirroring _trim_history_to_budget: a token count is
+        # only worth paying for once the raw size is plausibly over threshold.
+        if sum(len(str(m.get("content", "") or "")) for m in history) < threshold * 4:
+            return False
+        compacted = compact_history(
+            history, keep_last_n_turns=keep, token_threshold=threshold
+        )
+        if len(compacted) == len(history):
+            return False  # no-op (under threshold / nothing foldable)
+        # Pre-compaction backup on disk, honoring invariant 1 (full history
+        # recoverable). Only when a session file actually exists; compaction is
+        # still valid for in-memory-only sessions.
+        sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
+        log_path = SESSION_LOG_DIR / f"{sid_hash}.json"
+        if log_path.exists():
+            try:
+                backup_session_file(log_path)
+            except Exception:  # noqa: BLE001 \u2014 backup is best-effort
+                logger.warning("Auto-compaction backup failed for %s", sid_hash)
+        before_n = len(history)
+        history[:] = compacted
+        logger.info(
+            "Auto-compacted session %s: %d -> %d messages, %d turns kept verbatim "
+            "(threshold=%d tokens)",
+            sid_hash,
+            before_n,
+            len(compacted),
+            keep,
+            threshold,
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 \u2014 never crash the turn (plan 2d)
+        logger.exception("Auto-compaction failed; continuing uncompacted: %s", e)
+        return False
 
 
 def _sanitise_tool_messages(history: list[dict]) -> None:
