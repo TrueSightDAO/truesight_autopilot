@@ -643,6 +643,33 @@ def _should_always_respond(chat_type: str | None, chat_id: int) -> bool:
     return count <= 2
 
 
+def _sender_is_governor(
+    user_id: int | None,
+    username: str | None,
+    display_name: str | None,
+) -> bool:
+    """True when the sender resolves to Role.GOVERNOR via policy.
+
+    Governor messages bypass the group mention gate (2026-09 UX fix) so the
+    governor doesn't have to @-mention the bot in busy groups; everyone else
+    keeps the mention requirement. Reuses resolve_identity() \u2014 keyed on
+    telegram_id first (env allowlist match / /verify binding), never on
+    display-name text matching alone (Gary's Telegram profile renders oddly
+    and literal text matching already caused one bug this week).
+    """
+    try:
+        from .policy import Role, resolve_identity
+
+        ident = resolve_identity(
+            telegram_id=user_id,
+            telegram_username=username,
+            display_name=display_name,
+        )
+        return ident.role == Role.GOVERNOR
+    except Exception:  # noqa: BLE001 \u2014 never let policy errors open the gate
+        return False
+
+
 def log_observed_message(
     message: str, session_id: str, public_key: str, sender_name: str
 ) -> None:
@@ -1921,6 +1948,11 @@ def handle_message(
     # their own in-flight turn, which was getting silently swallowed with NO
     # acknowledgment at all (found live 2026-08-29: "thoughts?" and a plain
     # follow-up question both vanished mid-turn, not even the queued-ack).
+    #
+    # Governor exception (2026-09 UX fix): senders who resolve to
+    # Role.GOVERNOR (env-allowlist telegram-id match, /verify binding, or
+    # env-bridged name) skip the gate entirely \u2014 the governor shouldn't have to
+    # @-mention in a busy group. Non-governors keep the mention requirement.
     if (
         not attachment_file_id
         and not voice_file_id
@@ -1928,6 +1960,7 @@ def handle_message(
         and not _should_always_respond(chat_type, chat_id)
         and not _bot_was_mentioned(msg)
         and not _thread_dispatch_lock(chat_id, thread_id).locked()
+        and not _sender_is_governor(user_id, username, display_name)
     ):
         if public_key is not None:
             session_id = build_session_id(chat_id, thread_id)

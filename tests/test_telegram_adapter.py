@@ -607,7 +607,9 @@ def test_log_observed_message_posts_to_chat_observe(monkeypatch):
 
     def fake_post(url, json=None, headers=None, timeout=None):
         captured.update(url=url, json=json, headers=headers)
-        return httpx.Response(200, json={"status": "logged"}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200, json={"status": "logged"}, request=httpx.Request("POST", url)
+        )
 
     monkeypatch.setattr(ta.httpx, "post", fake_post)
     ta.log_observed_message("just chatting", "tg:555:0", "PK", "Alice")
@@ -631,7 +633,9 @@ def test_handle_message_large_group_unmentioned_logs_only(monkeypatch, sent):
     monkeypatch.setattr(
         ta,
         "call_chat_with_progress",
-        lambda *a, **k: called_chat.__setitem__("n", called_chat["n"] + 1) or ("", True),
+        lambda *a, **k: (
+            called_chat.__setitem__("n", called_chat["n"] + 1) or ("", True)
+        ),
     )
     ta.handle_message(
         _group_msg(user_id=111, chat_id=555, text="just chatting about lunch"),
@@ -644,12 +648,92 @@ def test_handle_message_large_group_unmentioned_logs_only(monkeypatch, sent):
     assert sent == []  # no reply sent for unmentioned chatter
 
 
+def test_handle_message_large_group_governor_without_mention_responds(
+    monkeypatch, sent
+):
+    # Governor UX fix (2026-09): a governor in a 3+ member group must NOT need
+    # to @-mention the bot \u2014 governor identity bypasses the mention gate.
+    from app.policy import Identity, Role
+
+    monkeypatch.setattr(
+        "app.policy.resolve_identity",
+        lambda **k: Identity(telegram_id=111, role=Role.GOVERNOR, name="Gary Teh"),
+    )
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 5)
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    monkeypatch.setattr(
+        ta,
+        "log_observed_message",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("governor without mention must not be logged-only")
+        ),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
+            captured.update(hit=True) or ("", True)
+        ),
+    )
+    ta.handle_message(
+        _group_msg(user_id=111, chat_id=555, text="status update please"),
+        allowed={111},
+        public_key="PK",
+    )
+    assert captured.get("hit") is True
+
+
+def test_handle_message_large_group_guest_unmentioned_still_logs_only(
+    monkeypatch, sent
+):
+    # Control for the governor bypass: allowlist membership alone is NOT the
+    # exemption \u2014 a GUEST-resolving allowlisted sender in a 3+ member group
+    # still needs an explicit mention (existing behavior preserved).
+    from app.policy import Identity, Role
+
+    monkeypatch.setattr(
+        "app.policy.resolve_identity",
+        lambda **k: Identity(telegram_id=111, role=Role.GUEST, name="Some User"),
+    )
+    monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 5)
+    monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
+    logged = {}
+    monkeypatch.setattr(
+        ta,
+        "log_observed_message",
+        lambda message, session_id, public_key, sender_name: logged.update(
+            message=message
+        ),
+    )
+    called_chat = {"n": 0}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda *a, **k: (
+            called_chat.__setitem__("n", called_chat["n"] + 1) or ("", True)
+        ),
+    )
+    ta.handle_message(
+        _group_msg(user_id=111, chat_id=555, text="just chatting about lunch"),
+        allowed={111},
+        public_key="PK",
+    )
+    assert logged.get("message") == "just chatting about lunch"
+    assert called_chat["n"] == 0
+    assert sent == []
+
+
 def test_handle_message_large_group_mentioned_calls_chat(monkeypatch, sent):
     monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 5)
     monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
-    monkeypatch.setattr(ta, "log_observed_message", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("should not log-only when mentioned")
-    ))
+    monkeypatch.setattr(
+        ta,
+        "log_observed_message",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("should not log-only when mentioned")
+        ),
+    )
     captured = {}
     monkeypatch.setattr(
         ta,
@@ -671,9 +755,13 @@ def test_handle_message_large_group_mentioned_calls_chat(monkeypatch, sent):
 def test_handle_message_two_person_group_always_responds(monkeypatch, sent):
     monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 2)
     monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
-    monkeypatch.setattr(ta, "log_observed_message", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("should not log-only in a 2-person group")
-    ))
+    monkeypatch.setattr(
+        ta,
+        "log_observed_message",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("should not log-only in a 2-person group")
+        ),
+    )
     captured = {}
     monkeypatch.setattr(
         ta,
@@ -694,9 +782,13 @@ def test_handle_message_large_group_attachment_always_processed(monkeypatch, sen
     # Attachments bypass the mention gate entirely — always full processing.
     monkeypatch.setattr(ta, "_get_member_count", lambda chat_id: 8)
     monkeypatch.setattr(ta, "_resolve_own_username", lambda: "nelanco_bot")
-    monkeypatch.setattr(ta, "log_observed_message", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("attachments must not be gated")
-    ))
+    monkeypatch.setattr(
+        ta,
+        "log_observed_message",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("attachments must not be gated")
+        ),
+    )
     monkeypatch.setattr(
         ta, "download_telegram_file", lambda fid: "/tmp/tg_attachments/x.jpg"
     )
@@ -1059,9 +1151,7 @@ def test_reaction_go_does_not_deadlock_on_thread_lock(monkeypatch):
     monkeypatch.setattr(
         rr,
         "lookup",
-        lambda mid: (
-            {"thread_id": "15728", "text": "ready"} if mid == 9001 else None
-        ),
+        lambda mid: {"thread_id": "15728", "text": "ready"} if mid == 9001 else None,
     )
     monkeypatch.setattr(ta, "resolve_governor_public_key", lambda: "PUBKEY")
     monkeypatch.setattr(ta.settings, "auto_advance", False, raising=False)
