@@ -314,6 +314,8 @@ def classify_action(tool_name: str) -> ActionClass:
         "create_dao_submission",
         "create_telegram_topic",
         "post_to_telegram_topic",
+        "close_telegram_topic",
+        "delete_telegram_topic",
         "ssh_run",
         "register_identity",
         "gas_deploy_project",
