@@ -445,5 +445,17 @@ class Settings(BaseSettings):
         os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions")
     )
 
+    # Context compaction (PR2 of SOPHIA_CONTEXT_COMPACTION_PLAN.md): automatic
+    # folding of history older than K turns once a session crosses the token
+    # threshold. Defaults conservative (20K) so it engages well before the
+    # 38-50K stall range; env-overridable at call time via
+    # CONTEXT_COMPACTION_TOKEN_THRESHOLD / CONTEXT_COMPACTION_KEEP_LAST_TURNS.
+    context_compaction_token_threshold: int = int(
+        os.getenv("CONTEXT_COMPACTION_TOKEN_THRESHOLD", "20000")
+    )
+    context_compaction_keep_last_turns: int = int(
+        os.getenv("CONTEXT_COMPACTION_KEEP_LAST_TURNS", "6")
+    )
+
 
 settings = Settings()
