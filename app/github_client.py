@@ -19,11 +19,21 @@ logger = logging.getLogger("autopilot.github")
 class GitHubClient:
     ORG = "TrueSightDAO"
 
-    def __init__(self):
-        if not settings.github_pat:
+    def __init__(self, pat: str | None = None, retry: int | None = None):
+        """``pat`` overrides the default shared ``settings.github_pat`` — used
+        by transcript publishing to isolate its rate-limit budget onto a
+        dedicated token. ``retry`` overrides PyGithub's default retry policy
+        (10 attempts, sleeping through Retry-After — observed blocking a
+        single-worker process for ~25min on a 403). Pass ``retry=0`` for a
+        best-effort caller that would rather fail fast and skip than block."""
+        token = pat or settings.github_pat
+        if not token:
             raise RuntimeError("TRUESIGHT_DAO_AUTOPILOT not set")
-        auth = Auth.Token(settings.github_pat)
-        self.g = Github(auth=auth)
+        auth = Auth.Token(token)
+        kwargs: dict[str, Any] = {"auth": auth}
+        if retry is not None:
+            kwargs["retry"] = retry
+        self.g = Github(**kwargs)
         # NOTE: do NOT call get_user() here. It is a synchronous network call
         # that blocks on GitHub's rate-limit Retry-After backoff (observed up to
         # ~10 min) and hangs app startup whenever the PAT is rate-limited.

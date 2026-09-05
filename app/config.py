@@ -103,6 +103,14 @@ class Settings(BaseSettings):
     # per tool. Empty by default — existing unauthenticated-read fallback in
     # _github_headers() is unchanged for Sophia.
     github_read_pat: str = Field(default="", validation_alias="GITHUB_READ_PAT")
+    # Dedicated token for transcript publishing (_publish_transcript in
+    # main.py) — isolates the transcript repo's rate-limit budget from the
+    # shared github_pat used by every other PR/merge/push call. Falls back to
+    # github_pat when unset, so instances without a dedicated token behave
+    # exactly as before.
+    github_transcript_pat: str = Field(
+        default="", validation_alias="GITHUB_TRANSCRIPT_PAT"
+    )
 
     # This instance's own repo identity, consolidated into one structured
     # setting rather than one field per repo class (was heading that way:
