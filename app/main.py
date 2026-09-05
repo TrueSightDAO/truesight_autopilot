@@ -2786,6 +2786,18 @@ async def _run_tool_round_loop(
             time.time() - _live_progress[session_id]["started_at"]
         )
 
+        # Context compaction (PR3): the pre-turn _maybe_auto_compact call only
+        # fires once, before this loop starts — a long multi-round turn (this
+        # workflow routinely runs 15-30 rounds) can accumulate well past the
+        # token threshold within a single turn since nothing re-checks until
+        # the *next* turn begins. Re-checking every round keeps the in-flight
+        # turn itself bounded. Safe to call every round: compact_history's
+        # turn-boundary detection only ever folds *completed* prior turns —
+        # the current in-progress turn (still open, no final reply yet) is
+        # always part of the retained tail and is never touched. The internal
+        # cheap fast-path (char-count guard) keeps this a no-op most rounds.
+        _maybe_auto_compact(history, session_id)
+
         if _cancel_flags.get(session_id):
             logger.info(
                 "[%d] %sCancelled by user before round %d",
@@ -4526,6 +4538,15 @@ async def _chat_blocking_turn(
     try:
         for _round in range(max_rounds):
             round_num = _round + 1
+            # Context compaction (PR3): same reasoning as the streaming path's
+            # _run_tool_round_loop — the pre-turn _maybe_auto_compact call above
+            # only fires once, before this loop starts, so a long multi-round
+            # turn can grow well past the token threshold before the *next*
+            # turn ever re-checks. Re-checking every round bounds the
+            # in-flight turn itself. Always safe: only completed prior turns
+            # are ever folded, never the current in-progress one; the internal
+            # fast-path guard keeps this a cheap no-op most rounds.
+            _maybe_auto_compact(history, session_id)
             completion = await asyncio.to_thread(
                 client.chat, system_prompt, history, tools=tools
             )
