@@ -80,6 +80,7 @@ class TestToolClassification:
         "sync_beta_to_prod",
         "generate_pdf",
         "aws_query",
+        "compact_session_manual",
     ]
 
     def test_all_read_tools_classified_as_read(self):

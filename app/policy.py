@@ -320,6 +320,7 @@ def classify_action(tool_name: str) -> ActionClass:
         "sync_beta_to_prod",
         "generate_pdf",
         "push_to_personal_repo",
+        "compact_session_manual",
     }
 
     # Secret/credential tools — anything whose chat-facing return value could contain a raw
