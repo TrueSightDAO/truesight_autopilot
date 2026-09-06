@@ -249,6 +249,135 @@ def delete_telegram_topic(
     return {"status": "ok", "action": "deleted", "message_thread_id": thread_id}
 
 
+_HANDOFF_MANIFEST_RAW = (
+    "https://raw.githubusercontent.com/TrueSightDAO/agentic_ai_context/main/"
+    "handoffs/HANDOFF_MANIFEST.md"
+)
+
+
+def _read_handoff_registry() -> str | None:
+    """Read HANDOFF_MANIFEST.md text - local synced clone first (fast), then
+    GitHub main fallback (mirrors telegram_adapter's lookup order). Returns
+    None on any failure: verification in close_telegram_topic_checked is
+    best-effort, never a hard dependency of the close itself."""
+    try:
+        p = (
+            settings.context_repos_dir
+            / "agentic_ai_context"
+            / "handoffs"
+            / "HANDOFF_MANIFEST.md"
+        )
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        resp = httpx.get(_HANDOFF_MANIFEST_RAW, timeout=8.0)
+        if resp.status_code == 200:
+            return resp.text
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _registry_row_for_thread(registry_text: str, thread_id: int) -> list[str] | None:
+    """Return the first manifest row (as cells) whose cells match thread_id -
+    bare, or as the ``tg:<chat>:<thread>`` session-id suffix. Matches the
+    adapter's own row-matching rule but returns ANY status row (terminal or
+    not) so the report can say *what* the registry holds."""
+    for line in registry_text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if any(
+            c.strip("`") == str(thread_id) or c.strip("`").endswith(f":{thread_id}")
+            for c in cells
+        ):
+            return cells
+    return None
+
+
+def close_telegram_topic_checked(
+    thread_id: int,
+    delete: bool = False,
+    governor_name: str | None = None,
+    chat_id: str | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Close (archive) a forum topic AFTER verifying it carries no open
+    handoff work - the "smart close" ceremony in one call.
+
+    Verification (best-effort, never a hard dependency of the close):
+      1. Read HANDOFF_MANIFEST.md (local synced clone, then GitHub main).
+      2. A thread mapping to a NON-terminal registered handoff row = open
+         work -> BLOCK: return ``status="blocked"`` with the plan file and
+         Auto-start flag, and close nothing. When the work genuinely IS done,
+         first mark the manifest row terminal (PR to agentic_ai_context
+         handoffs/HANDOFF_MANIFEST.md), then re-run.
+      3. No row, or a terminal row -> safe: close (reversible) by default;
+         pass ``delete=True`` to also permanently delete the topic - that is
+         irreversible and requires a governor session (``governor_name``).
+    """
+    from .. import telegram_adapter as ta  # lazy - avoid any module cycle
+
+    plan = auto_start = None
+    status = "none"
+    verified = False
+    try:
+        text = _read_handoff_registry()
+        if text:
+            found = ta._parse_handoff_plan_and_flags(text, thread_id)
+            if found:
+                plan, auto_start = found
+            row = _registry_row_for_thread(text, thread_id)
+            if row:
+                idx = ta._find_column_index(text, "Status")
+                if idx is not None and idx < len(row):
+                    status = row[idx].strip("` ")
+            verified = True
+    except Exception:  # noqa: BLE001 - verification never blocks a close
+        pass
+
+    if plan:
+        return {
+            "status": "blocked",
+            "action_taken": "none",
+            "reason": (
+                f"thread {thread_id} is a registered handoff with open work "
+                f"(plan: {plan}, auto_start: {bool(auto_start)}). Closing now "
+                "would orphan it. Review the plan first; when it is genuinely "
+                "complete, mark the HANDOFF_MANIFEST.md row terminal (PR to "
+                "agentic_ai_context), then re-run this tool."
+            ),
+            "plan": plan,
+            "auto_start": bool(auto_start),
+            "manifest_status": status,
+        }
+
+    if delete and not governor_name:
+        return {
+            "status": "error",
+            "action_taken": "none",
+            "reason": (
+                "delete=True requires a governor session (governor_name was "
+                "not set). Close instead, or have the governor delete the "
+                "topic from the Telegram UI."
+            ),
+        }
+
+    out = (
+        delete_telegram_topic(thread_id, chat_id=chat_id, session_id=session_id)
+        if delete
+        else close_telegram_topic(thread_id, chat_id=chat_id, session_id=session_id)
+    )
+    out["verification"] = {
+        "handoff_verified": verified,
+        "registered_handoff": bool(plan),
+        "manifest_status": status,
+    }
+    return out
+
+
 _CREATE_TOOL_SPEC = ToolSpec(
     name="create_telegram_topic",
     description=(
@@ -364,4 +493,58 @@ _DELETE_TOOL_SPEC = ToolSpec(
     default_roles=frozenset({"governor"}),  # irreversible — governor only
 )
 
-TOOL_SPECS = [_CREATE_TOOL_SPEC, _CLOSE_TOOL_SPEC, _DELETE_TOOL_SPEC]
+_CHECKED_CLOSE_TOOL_SPEC = ToolSpec(
+    name="close_telegram_topic_checked",
+    description=(
+        "Close (archive) a Telegram forum topic AFTER verifying it carries no "
+        "open handoff work - the 'smart close' ceremony in one call. Looks the "
+        "thread up in HANDOFF_MANIFEST.md (single source of truth for active "
+        "handoffs): if the thread maps to a non-terminal registered handoff, "
+        "returns status='blocked' with the plan file and closes nothing. "
+        "Default action is the reversible close; pass delete=true only for a "
+        "genuinely terminal topic - that permanently deletes the topic and "
+        "its messages (irreversible) and requires a governor session. Prefer "
+        "this over the raw close_telegram_topic / delete_telegram_topic "
+        "whenever a governor says 'close this case'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "thread_id": {
+                "type": "integer",
+                "description": "The forum topic's message_thread_id to close.",
+            },
+            "delete": {
+                "type": "boolean",
+                "description": (
+                    "If true, permanently delete the topic and ALL its "
+                    "messages (irreversible) instead of the reversible "
+                    "archive. Requires a governor session."
+                ),
+            },
+            "chat_id": {
+                "type": "string",
+                "description": "Optional explicit group chat id; defaults to current group / configured working group.",
+            },
+        },
+        "required": ["thread_id"],
+    },
+    handler=lambda args, ctx: json.dumps(
+        close_telegram_topic_checked(
+            thread_id=int(args.get("thread_id", 0)),
+            delete=bool(args.get("delete", False)),
+            governor_name=ctx.get("governor_name"),
+            chat_id=args.get("chat_id"),
+            session_id=ctx.get("session_id"),
+        ),
+        indent=2,
+    ),
+    default_roles=None,  # uniform - reversible by default; delete self-guards on governor_name
+)
+
+TOOL_SPECS = [
+    _CREATE_TOOL_SPEC,
+    _CLOSE_TOOL_SPEC,
+    _DELETE_TOOL_SPEC,
+    _CHECKED_CLOSE_TOOL_SPEC,
+]
