@@ -19,7 +19,6 @@ governor reviews and approves the final values before any submission.
 Usage:
     python3 scripts/estimate_contribution.py --session 22f8f538dedd
     python3 scripts/estimate_contribution.py --session 22f8f538dedd --json
-    python3 scripts/estimate_contribution.py --session 22f8f538dedd --envoy-minutes 90
 """
 
 from __future__ import annotations
@@ -28,18 +27,39 @@ import argparse
 import json
 import os
 import re
-import sys
 from datetime import datetime
 from pathlib import Path
 
 SESSION_LOG_DIR = Path(
     os.getenv("SOPHIA_SESSION_DIR", "/opt/truesight_autopilot/sessions")
 )
-CONTEXT_WRAPPER_RE = re.compile(
-    r"\[(?:GOVERNOR_IDENTITY|Telegram context|Handoff context|emoji-go)[^\]]*\]"
+PREFIX_WRAPPER_RE = re.compile(
+    r"\[(?:GOVERNOR_IDENTITY|Telegram context|Handoff context)[^\]]*\]"
 )
+# Harness-injected auto-turns that are NOT governor input (whole turn dropped):
+#   [TURN DIRECTIVE ...]  — turn-control / tool-round-limit notices
+#   [emoji-go: ...] with quoted resume text or bare go-word — resume replays
+TURN_DIRECTIVE_RE = re.compile(r"\[TURN DIRECTIVE[^\]]*\]")
+EMOJI_GO_RE = re.compile(r"\[emoji-go[^\]]*\]")
 GOVERNOR_ID_RE = re.compile(r"GOVERNOR_IDENTITY:\s*You are speaking with\s+([^.\]]+)\.")
 LLM_ROUND_RE = re.compile(r"=== (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}) llm-round-")
+# Auto-ping phrases (reaction-driven, not substantive governor input).
+AUTO_PING_WORDS = {
+    "go",
+    "go for it",
+    "resume",
+    "resume this",
+    "proceed",
+    "do it",
+    "ok",
+    "okay",
+    "yes",
+    "yeah",
+    "\U0001f44d",
+    "\U0001f44d\ufe0f",
+    "\u2705",
+    "\ud83d\udc4d",
+}
 
 DEFAULTS = {
     "tool_op_sec": 18.0,  # 200 ops ~= 60 min raw (2026-08-24 anchor)
@@ -94,7 +114,21 @@ def _substantive_governor_msgs(history: list[dict]) -> list[str]:
         if m.get("role") != "user":
             continue
         text = str(m.get("content") or "").strip()
-        text = CONTEXT_WRAPPER_RE.sub("", text).strip()
+        # Whole-turn droppers: harness-injected auto-turns are NOT governor
+        # input — [TURN DIRECTIVE] turn-control notices, and resume replays
+        # that quote a prior transcript ("original resume text: ...").
+        if TURN_DIRECTIVE_RE.search(text) or "original resume text:" in text.lower():
+            continue
+        # Strip every known wrapper tag (informational prefixes + emoji-go).
+        text = PREFIX_WRAPPER_RE.sub("", text)
+        text = EMOJI_GO_RE.sub("", text).strip()
+        # Drop bare auto-ping reactions / go-words (not fresh governor input)
+        # and anything too short to be substantive.
+        if not text:
+            continue
+        lowered = text.lower().rstrip(" .!")
+        if lowered in AUTO_PING_WORDS:
+            continue
         if len(text) >= 10:
             out.append(text)
     return out
@@ -119,17 +153,8 @@ def estimate(session_hash: str, overrides: dict) -> dict:
     llm_rounds = len(rounds_ts) or assistant_msgs
 
     raw_min = _active_minutes(rounds_ts, overrides["gap_trim_min"])
-    if raw_min:
-        raw_basis = (
-            f"wall-clock {_fmt_span(rounds_ts)} across {llm_rounds} llm rounds"
-            f" (idle gaps >{overrides['gap_trim_min']}m trimmed)"
-        )
-    else:
+    if not rounds_ts:
         raw_min = round(tool_ops * overrides["tool_op_sec"] / 60.0, 1)
-        raw_basis = f"{tool_ops} tool ops x {overrides['tool_op_sec']}s (no debug log)"
-
-    direct_min = round(llm_rounds * overrides["per_llm_round_min"], 1)
-    gary_min = round(len(gov_msgs) * overrides["per_gov_msg_min"], 1)
 
     return {
         "session": session_hash,
@@ -138,137 +163,117 @@ def estimate(session_hash: str, overrides: dict) -> dict:
         "tool_ops": tool_ops,
         "llm_rounds": llm_rounds,
         "gov_messages": len(gov_msgs),
-        "estimates": {
-            "sophia_raw_min": raw_min,
-            "sophia_direct_min": direct_min,
-            "gary_direct_min": gary_min,
-        },
-        "basis": {
-            "sophia_raw": raw_basis,
-            "sophia_direct": (
-                f"{llm_rounds} llm rounds x {overrides['per_llm_round_min']} min"
-            ),
-            "gary_direct": (
-                f"{len(gov_msgs)} governor msgs x {overrides['per_gov_msg_min']} min"
-            ),
-        },
+        "span": _fmt_span(rounds_ts),
+        "raw_min": raw_min,
+        "direct_min": round(llm_rounds * overrides["per_llm_round_min"], 1),
+        "gary_min": round(len(gov_msgs) * overrides["per_gov_msg_min"], 1),
+        "envoy_min": float(overrides.get("envoy_minutes", 0.0)),
     }
 
 
-def _payload(contributors: str, minutes: float, description: str) -> dict:
-    return {
-        "Type": "Time (Minutes)",
-        "Amount": str(minutes),
-        "Contributors": contributors,
-        "Description": description,
-    }
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--session", required=True, help="12-hex session hash")
-    ap.add_argument("--json", action="store_true", help="emit raw JSON only")
-    for key, default in DEFAULTS.items():
-        ap.add_argument(
-            f"--{key}",
-            type=float,
-            default=default,
-            help=f"(default {default})",
-        )
-    ap.add_argument(
-        "--envoy-minutes",
-        type=float,
-        default=0.0,
-        help="Envoy TrueSight minutes, if Gary supplies them from nelanco-claude",
-    )
-    args = ap.parse_args(argv)
-    overrides = {key: getattr(args, key) for key in DEFAULTS}
-    try:
-        est = estimate(args.session, overrides)
-    except SystemExit as exc:
-        print(exc, file=sys.stderr)
-        return 1
-
-    if args.json:
-        print(json.dumps(est, indent=2))
-        return 0
-
-    e = est["estimates"]
-    print(f"session      : {est['session']}")
-    print(f"governor     : {est['governor']}")
-    print(
-        f"history msgs : {est['history_msgs']} (tool ops {est['tool_ops']},"
-        f" llm rounds {est['llm_rounds']}, gov msgs {est['gov_messages']})"
-    )
-    print()
-    print("seat                 event                                      min   basis")
+def _emit_table(est: dict, span: str) -> None:
     rows = [
         (
             "Sophia Truesight",
             "Raw machine execution",
-            e["sophia_raw_min"],
-            est["basis"]["sophia_raw"],
+            est["raw_min"],
+            f"wall-clock {span} across {est['llm_rounds']} llm rounds "
+            "(idle gaps >5.0m trimmed)"
+            if span
+            else f"tool ops x 18s ({est['tool_ops']} ops)",
         ),
         (
             "Sophia Truesight",
             "Direct time (engagement/analysis)",
-            e["sophia_direct_min"],
-            est["basis"]["sophia_direct"],
+            est["direct_min"],
+            f"{est['llm_rounds']} llm rounds x 1.5 min",
         ),
         (
             "Gary Teh",
             "Gary Teh direct time",
-            e["gary_direct_min"],
-            est["basis"]["gary_direct"],
+            est["gary_min"],
+            f"{est['gov_messages']} governor msgs x 3.5 min",
         ),
         (
             "Envoy TrueSight",
             "(no local source)",
-            args.envoy_minutes,
-            "supplied by Gary from nelanco-claude"
-            if args.envoy_minutes
-            else "see OPEN_FOLLOWUPS.md entry",
+            est["envoy_min"],
+            "see OPEN_FOLLOWUPS.md entry",
         ),
     ]
-    for seat, event, minutes, basis in rows:
-        print(f"{seat:<17} {event:<40} {minutes:>5}  {basis}")
+    print(f"session      : {est['session']}")
+    print(f"governor     : {est['governor']}")
+    print(
+        f"history msgs : {est['history_msgs']} (tool ops {est['tool_ops']}, "
+        f"llm rounds {est['llm_rounds']}, gov msgs {est['gov_messages']})"
+    )
+    print()
+    print(f"{'seat':<20} {'event':<38} {'min':>7}  basis")
+    print("-" * 100)
+    for seat, event, mins, basis in rows:
+        print(f"{seat:<20} {event:<38} {mins:>7}  {basis}")
+
+
+def _emit_payloads(est: dict) -> None:
     print()
     print(
-        "Suggested [CONTRIBUTION EVENT] payloads (informational — governor approves):"
+        "Suggested [CONTRIBUTION EVENT] payloads (informational \u2014 governor approves):"
     )
-    for seat, event, minutes in [
-        ("Sophia Truesight", "Raw machine execution", e["sophia_raw_min"]),
-        (
-            "Sophia Truesight",
-            "Direct time (engagement/analysis)",
-            e["sophia_direct_min"],
-        ),
-        ("Gary Teh", "Gary Teh direct time", e["gary_direct_min"]),
-    ]:
+    payloads = [
+        ("Raw machine execution", est["raw_min"]),
+        ("Direct time (engagement/analysis)", est["direct_min"]),
+    ]
+    # Gary is a separate seat/event only when he has substantive messages.
+    if est["gov_messages"]:
+        payloads.append(("Gary Teh direct time", est["gary_min"]))
+    if est["envoy_min"] > 0:
+        payloads.append(("Envoy TrueSight direct time", est["envoy_min"]))
+    for desc, mins in payloads:
         print(
             json.dumps(
-                _payload(seat, minutes, f"{event} — session {est['session']}"), indent=4
-            )
-        )
-        print()
-    if args.envoy_minutes:
-        print(
-            json.dumps(
-                _payload(
-                    "Envoy TrueSight",
-                    args.envoy_minutes,
-                    f"Envoy direct time — session {est['session']} (interactive, nelanco-claude)",
-                ),
+                {
+                    "Type": "Time (Minutes)",
+                    "Amount": str(mins),
+                    "Contributors": "Gary Teh"
+                    if desc == "Gary Teh direct time"
+                    else "Envoy TrueSight"
+                    if "Envoy" in desc
+                    else "Sophia Truesight",
+                    "Description": f"{desc} \u2014 session {est['session']}",
+                },
                 indent=4,
+                ensure_ascii=False,
             )
         )
         print()
-    print(
-        "Submit via dao_client report_ai_agent_contribution.py (PR/commit evidence"
-        " required) or the DApp; TDG Issued stays 0 unless the governor awards."
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--session", required=True, help="session hash, e.g. 22f8f538dedd")
+    ap.add_argument("--json", action="store_true", help="emit JSON instead of table")
+    ap.add_argument(
+        "--envoy-minutes",
+        type=float,
+        default=0.0,
+        help="Envoy minutes override (no local transcript source yet)",
     )
-    return 0
+    args = ap.parse_args(argv)
+
+    overrides = {
+        "tool_op_sec": DEFAULTS["tool_op_sec"],
+        "per_gov_msg_min": DEFAULTS["per_gov_msg_min"],
+        "per_llm_round_min": DEFAULTS["per_llm_round_min"],
+        "gap_trim_min": DEFAULTS["gap_trim_min"],
+        "envoy_minutes": args.envoy_minutes,
+    }
+    est = estimate(args.session, overrides)
+    if args.json:
+        print(json.dumps(est, indent=2, ensure_ascii=False))
+    else:
+        _emit_table(est, est["span"])
+        _emit_payloads(est)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
