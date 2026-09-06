@@ -58,7 +58,7 @@ def test_handoff_prefix_auto_start_false_keeps_go_signal_framing(monkeypatch):
     )
     prefix = ta._handoff_prefix(556, "anything")
     assert "PRE-AUTHORIZED" not in prefix
-    assert 'the governor\'s full authorization' in prefix
+    assert "the governor's full authorization" in prefix
 
 
 # --- post_to_telegram_topic (post into an EXISTING thread) ---
@@ -217,3 +217,79 @@ def test_post_plain_text_also_flagged(monkeypatch):
         resume_awaiting=False,
     )
     assert marked == [558]
+
+
+# --- close_telegram_topic_checked (smart close wrapper) ---
+
+
+def test_checked_close_blocks_on_active_handoff(monkeypatch):
+    monkeypatch.setattr(tt, "_read_handoff_registry", lambda: _REG)
+    closed = []
+    monkeypatch.setattr(
+        tt,
+        "close_telegram_topic",
+        lambda thread_id, chat_id=None, session_id=None: (
+            closed.append(thread_id)
+            or {"status": "ok", "action": "closed", "message_thread_id": thread_id}
+        ),
+    )
+    out = tt.close_telegram_topic_checked(1939)  # active row in _REG
+    assert out["status"] == "blocked"
+    assert out["action_taken"] == "none"
+    assert "CHOCOLATE_SUBSCRIPTION_PLAN.md" in out["plan"]
+    assert closed == []  # nothing was closed
+
+
+def test_checked_close_allows_terminal_handoff(monkeypatch):
+    monkeypatch.setattr(tt, "_read_handoff_registry", lambda: _REG)
+    calls = []
+    monkeypatch.setattr(
+        tt,
+        "close_telegram_topic",
+        lambda thread_id, chat_id=None, session_id=None: (
+            calls.append(thread_id)
+            or {"status": "ok", "action": "closed", "message_thread_id": thread_id}
+        ),
+    )
+    out = tt.close_telegram_topic_checked(1924)  # SUPERSEDED row in _REG
+    assert out["status"] == "ok"
+    assert calls == [1924]
+    assert out["verification"]["registered_handoff"] is False
+    assert "SUPERSEDED" in out["verification"]["manifest_status"]
+
+
+def test_checked_close_allows_unregistered_thread(monkeypatch):
+    monkeypatch.setattr(tt, "_read_handoff_registry", lambda: _REG)
+    calls = []
+    monkeypatch.setattr(
+        tt,
+        "close_telegram_topic",
+        lambda thread_id, chat_id=None, session_id=None: (
+            calls.append(thread_id)
+            or {"status": "ok", "action": "closed", "message_thread_id": thread_id}
+        ),
+    )
+    out = tt.close_telegram_topic_checked(4242)  # no row in _REG
+    assert out["status"] == "ok" and calls == [4242]
+    assert out["verification"]["manifest_status"] == "none"
+
+
+def test_checked_close_delete_requires_governor(monkeypatch):
+    monkeypatch.setattr(tt, "_read_handoff_registry", lambda: _REG)
+    out = tt.close_telegram_topic_checked(4242, delete=True, governor_name=None)
+    assert out["status"] == "error" and "governor" in out["reason"]
+
+
+def test_checked_close_delete_proceeds_for_governor(monkeypatch):
+    monkeypatch.setattr(tt, "_read_handoff_registry", lambda: _REG)
+    calls = []
+    monkeypatch.setattr(
+        tt,
+        "delete_telegram_topic",
+        lambda thread_id, chat_id=None, session_id=None: (
+            calls.append(thread_id)
+            or {"status": "ok", "action": "deleted", "message_thread_id": thread_id}
+        ),
+    )
+    out = tt.close_telegram_topic_checked(4242, delete=True, governor_name="Gary Teh")
+    assert out["status"] == "ok" and calls == [4242]
