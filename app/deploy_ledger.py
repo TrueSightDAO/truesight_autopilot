@@ -359,7 +359,7 @@ def append_deploy_record(
     if md_res.get("status") != "success" or js_res.get("status") != "success":
         err = md_res.get("error") or js_res.get("error") or "record write failed"
         return {"status": "error", "error": err, "record_id": rec_id}
-    rebuild_feed()
+    _prepend_feed(rec)
     logger.info(
         "deploy_ledger: appended %s (%s -> %s/%s)",
         rec_id,
@@ -372,6 +372,41 @@ def append_deploy_record(
         "record_id": rec_id,
         "evidence_url": md_res.get("content_url", ""),
         "content_url": md_res.get("content_url", ""),
+    }
+
+
+def _prepend_feed(rec: dict[str, Any]) -> dict[str, Any]:
+    """Incrementally prepend one record to deploys/feed/manifest.json.
+
+    The old rebuild_feed() re-read every entry file on every deploy — O(entries)
+    GitHub reads per deploy, which was the dominant rate-limit cost (observed
+    ~83% of the PAT's daily calls hitting this repo, same entries re-read ~8x).
+    This reads the existing manifest once and prepends, keeping the feed
+    consistent without the O(entries) re-read. rebuild_feed() remains available
+    for a full repair pass.
+    """
+    manifest = _read_file(FEED_PATH)
+    entries: list[dict[str, Any]] = []
+    if isinstance(manifest, dict):
+        entries = list(manifest.get("entries", []))
+    entries.insert(0, rec)
+    payload = {
+        "total": len(entries),
+        "updated_utc": _iso_utc(),
+        "entries": entries[:200],
+    }
+    res = _put_file(
+        FEED_PATH,
+        json.dumps(payload, indent=2) + "\n",
+        f"feed: +{rec.get('id')} (incremental)",
+    )
+    if res.get("status") != "success":
+        logger.warning(
+            "deploy_ledger: incremental feed update failed: %s", res.get("error")
+        )
+    return {
+        "status": "success" if res.get("status") == "success" else "error",
+        "total": len(entries),
     }
 
 
