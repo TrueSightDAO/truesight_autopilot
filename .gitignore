@@ -48,3 +48,6 @@ vault/
 # as the 2026-06-15 vault wipe: untracked + unignored = deploy deletes it).
 artifacts/
 media_archive_daemon_config.yaml
+# Hand-rolled backup of the media-archive daemon config (untracked + unignored
+# = git clean -fd deletes it on deploy). Same class as the 2026-06-15 vault wipe.
+media_archive_daemon_config.yaml.bak-sr
