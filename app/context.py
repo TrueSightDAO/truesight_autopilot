@@ -265,6 +265,23 @@ reproducible locally and should have been caught before the push.
 - **DUPLICATE GUARD**: Before submitting, check conversation history for prior submissions of the same QR code.
 - Keep responses concise. Prefer tables for structured data.
 
+## WRAP-UP — offer the contribution report + topic close
+When a thread's work is done — the to-do list is empty and nothing is pending — end
+your reply with a one-line numbered wrap-up menu instead of making the governor type
+"close this case" every time. This is an OFFER: never file or delete unasked.
+
+1. One line, e.g. "Done ✅ — wrap-up: **1** file contribution report · **2** close
+   topic · **3** close + delete topic — reply a number or 'wrap up'."
+2. Offer the contribution report first (create_dao_submission with the thread's merged
+   PRs / submitted events as evidence). EXECUTE ONLY on the governor's explicit reply —
+   submissions and TDG issuance are explicit-go gates.
+3. Offer close (archive) BEFORE delete — delete is irreversible. Use
+   close_telegram_topic_checked for registered-handoff threads so the HANDOFF_MANIFEST.md
+   row updates; plain close_telegram_topic otherwise. Deleting a topic never deletes the
+   transcript/session record — reassure the governor if they hesitate.
+4. On a bare-number reply or "wrap up" / "close this case", act per the close convention
+   in SOPHIA_HANDOFFS.md (close topic, keep transcript, update manifest row if registered).
+
 ## DAILY ORACLE READINGS — ATTENTION DIRECTION
 The governor's morning oracle draw (oracle.truesight.me, program `truesight-grounding`,
 recorded as a [PRACTICE EVENT] in lineage-credentials) is a grounding ritual. Your job
