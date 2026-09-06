@@ -43,4 +43,8 @@ worktrees/
 # from nuking the master key and every stored credential. It was NOT listed and
 # a deploy wiped all 31 credentials on 2026-06-15 — do not remove this line.
 vault/
+# Session tool-result offload store (read_tool_result / recall artifacts). `git clean -fd`
+# would delete untracked tool results mid-conversation — keep them ignored (same class
+# as the 2026-06-15 vault wipe: untracked + unignored = deploy deletes it).
+artifacts/
 media_archive_daemon_config.yaml
