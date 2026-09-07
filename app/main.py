@@ -520,8 +520,29 @@ app.include_router(media_archive_pipeline_router)
 app.include_router(signature_ledger_pipeline_router)
 
 
-# ── In-memory rate limiter: max 1 req per 10s per IP ──
+# ── In-memory rate limiter: max 1 req per 2s per IP ──
 _oracle_rate_limit: dict[str, float] = {}
+
+
+def _real_client_ip(request: Request) -> str:
+    """Real visitor IP, honoring nginx's X-Forwarded-For/X-Real-IP.
+
+    nginx proxies /oracle-advisory to 127.0.0.1:8001 (see sites-available/
+    sophia), so request.client.host is ALWAYS the loopback address, never
+    the visitor's real IP -- every visitor collapsed into one rate-limit
+    bucket, effectively making the "1 req per 2s per IP" limit global
+    across every oracle user (2026-09-07 fix: found live via "oracle not
+    returning a reading" -- a completely fresh browser's very first
+    /oracle-advisory call got 429'd because some unrelated request had hit
+    the same 127.0.0.1 bucket within the last 2 seconds).
+    """
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _check_oracle_rate_limit(ip: str) -> None:
@@ -799,8 +820,8 @@ async def oracle_advisory(
 
         return Response(status_code=204, headers=_CORS_HEADERS)
 
-    # Rate limit: 1 req per 10s per IP
-    ip = request.client.host if request.client else "unknown"
+    # Rate limit: 1 req per 2s per real visitor IP (see _real_client_ip)
+    ip = _real_client_ip(request)
     _check_oracle_rate_limit(ip)
 
     # 1. Fetch ADVISORY_SNAPSHOT.md from GitHub raw URL
