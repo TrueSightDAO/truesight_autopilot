@@ -344,6 +344,17 @@ class Settings(BaseSettings):
         default="",
         validation_alias="TELEGRAM_HOME_GROUP_ID",
     )
+    # Comma-separated numeric chat ids that always get a full response,
+    # regardless of group size or @mention — an adjustable override on top
+    # of the default member-count rule in _should_always_respond(). Lets an
+    # instance shared across multiple groups (e.g. Onaya sitting quietly in
+    # a busy shared Ops group meant mostly for Sophia, but responding freely
+    # in her own dedicated group) be tuned per-deployment without a code
+    # change. Empty by default — no behavior change from the member-count rule.
+    telegram_always_respond_chat_ids: str = Field(
+        default="",
+        validation_alias="TELEGRAM_ALWAYS_RESPOND_CHAT_IDS",
+    )
     # Emoji-reaction go-signal (see plans/SOPHIA_EMOJI_REACTION_GO_PLAN.md):
     # a standard-emoji reaction from an authorized user on a resume-awaiting
     # message acts as a go-signal. Deny-list of emoji that are NOT a go
