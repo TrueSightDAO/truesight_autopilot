@@ -14,7 +14,7 @@ Edit CONFIG and SLIDES below. Photos must exist locally (curate from
 agroverse_shop_beta/assets, sunmint, lineage-assets per the standard).
 """
 
-from PIL import Image
+from PIL import Image, ImageOps
 import os
 
 # ---------------------------------------------------------------------------
@@ -41,6 +41,7 @@ BLUE = (0.10, 0.37, 0.71)
 # ---------------------------------------------------------------------------
 def crop16x9(src, dst, w=1920, h=1080):
     im = Image.open(src)
+    im = ImageOps.exif_transpose(im)  # honor EXIF orientation (phone photos)
     if im.mode != "RGB":
         im = im.convert("RGB")
     W, H = im.size
