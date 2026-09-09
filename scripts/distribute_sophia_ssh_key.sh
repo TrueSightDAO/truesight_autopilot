@@ -29,7 +29,7 @@ dao_protocol:98.93.94.86
 seni_sk:34.234.193.80
 seni_sql:44.193.55.205
 seni_redis:54.234.59.188
-krake_ror:18.205.20.43
+krake_ror:98.81.159.70
 krake_sk:54.227.147.20
 krake_sk_webhook:52.207.88.236
 krake_sk_crawler:52.91.57.12

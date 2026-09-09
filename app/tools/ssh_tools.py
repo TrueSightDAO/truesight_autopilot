@@ -92,9 +92,9 @@ FLEET: dict[str, dict[str, str]] = {
         "desc": "Redis for Edgar Sidekiq/cache (Nelanco, seni_redis_2)",
     },
     "krake_ror": {
-        "ip": "18.205.20.43",
+        "ip": "98.81.159.70",
         "user": "ubuntu",
-        "desc": "Krake Rails backend, getdata.io (Nelanco)",
+        "desc": "Krake Rails backend, getdata.io (Nelanco). ASG-managed — IP is DYNAMIC (no EIP); recycled 2026-09-09 to i-069771c1f79288216 on LT v5. If SSH times out, re-resolve via EC2 DescribeAutoScalingGroups/DescribeInstances.",
     },
     "krake_sk": {
         "ip": "54.227.147.20",
