@@ -629,10 +629,37 @@ def _get_member_count(chat_id: int) -> int | None:
     return None
 
 
+_ALWAYS_RESPOND_CHAT_IDS: set[int] | None = None
+
+
+def _load_always_respond_chat_ids() -> set[int]:
+    global _ALWAYS_RESPOND_CHAT_IDS
+    if _ALWAYS_RESPOND_CHAT_IDS is None:
+        ids: set[int] = set()
+        for part in settings.telegram_always_respond_chat_ids.split(","):
+            part = part.strip()
+            if part:
+                try:
+                    ids.add(int(part))
+                except ValueError:
+                    logger.warning(
+                        "Non-numeric TELEGRAM_ALWAYS_RESPOND_CHAT_IDS entry: %r", part
+                    )
+        _ALWAYS_RESPOND_CHAT_IDS = ids
+    return _ALWAYS_RESPOND_CHAT_IDS
+
+
 def _should_always_respond(chat_type: str | None, chat_id: int) -> bool:
     """DMs and 2-person groups (bot + one human) always get a full response;
     larger groups need an explicit mention. Unknown member count fails open
-    (always respond) rather than silently going quiet on a real question."""
+    (always respond) rather than silently going quiet on a real question.
+
+    TELEGRAM_ALWAYS_RESPOND_CHAT_IDS is an explicit per-deployment override
+    checked first — e.g. a shared instance that should respond freely in its
+    own dedicated group but stay mention-gated in a busy group shared with
+    another bot, without needing a code change to retune."""
+    if chat_id in _load_always_respond_chat_ids():
+        return True
     if chat_type == "private":
         return True
     if chat_type not in ("group", "supergroup"):
