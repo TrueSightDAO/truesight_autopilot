@@ -31,6 +31,7 @@ chmod 700 /home/ubuntu/.ssh
 
 cat >> /home/ubuntu/.ssh/authorized_keys << 'PUBKEY'
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILVeXXbMiSGb3c0TQCmhzb7deVdm+De29bxCLHTsVc/m agentic-ai-github-TrueSightDAO
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO6cw+vEJfTk9cltYeNCzSkWj5DZ3+Hp/tSZf8paZNka sophia-infra-truesight-autopilot
 PUBKEY
 
 chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
