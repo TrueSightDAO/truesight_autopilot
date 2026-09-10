@@ -1400,7 +1400,10 @@ async def _refresh_events_catalog() -> None:
         labels = entry.get("canonical_labels", [])
         required = entry.get("required_fields", [])
 
-        # Catalog always wins for canonical_labels
+        # Catalog always wins for canonical_labels, but DAO-guaranteed labels
+        # (e.g. FBE "Plot ID") are unioned in so a catalog omission can never
+        # silently drop them again.
+        labels = _merge_catalog_labels(event_name, labels)
         if event_name in _CANONICAL_LABELS:
             _CANONICAL_LABELS[event_name] = labels
             updated += 1
@@ -1604,6 +1607,27 @@ _NON_CANONICAL_KEYS = {
     "tags",
 }
 
+# Labels the DAO guarantees for an event even when the Edgar catalog entry
+# omits them. Guards against a catalog that documents a label in its
+# description but forgets it in ``canonical_labels`` -- which silently drops
+# the value during attribute normalization. (FARM BOUNDARY EVIDENCE EVENT
+# 'Plot ID', 2026-09-10: the catalog described the Plot ID line but never
+# listed it, so a governor-supplied Plot ID was dropped, the GAS handler fell
+# through to its farm-slug fallback, and overwrote the wrong plot row. See
+# agentic_ai_context/OPEN_FOLLOWUPS.md.)
+_DAO_GUARANTEED_LABELS: dict[str, list[str]] = {
+    "FARM BOUNDARY EVIDENCE EVENT": ["Plot ID"],
+}
+
+
+def _merge_catalog_labels(event_name: str, labels: list[str] | None) -> list[str]:
+    """Union catalog labels with DAO-guaranteed labels (never drop the latter)."""
+    merged = list(labels or [])
+    for extra in _DAO_GUARANTEED_LABELS.get(event_name, []):
+        if extra not in merged:
+            merged.append(extra)
+    return merged
+
 
 def _normalize_via_catalog(
     attributes: dict, canonical_labels: list[str], event_name: str = ""
@@ -1766,11 +1790,18 @@ def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
             if key_lower in _NON_CANONICAL_KEYS:
                 continue
             canonical_key = _FIELD_ALIASES.get(key_lower, key)
-        # If event has defined canonical labels, only keep matching ones
+        # If the event has defined canonical labels, drop keys that don't match
+        # one -- but never silently: log which key was dropped so a catalog
+        # omission (e.g. FBE "Plot ID") surfaces in the logs instead of
+        # becoming a silent data loss.
         if canonical_set and canonical_key not in canonical_set:
-            # For events with no defined labels (QR CODE UPDATE), keep all
-            if canonical_set:
-                continue
+            logger.warning(
+                "Dropping non-canonical key '%s' for %s (canonical_labels=%s)",
+                key,
+                event_name or "unknown",
+                sorted(canonical_set),
+            )
+            continue
         normalized[canonical_key] = str(value)
 
     return normalized
