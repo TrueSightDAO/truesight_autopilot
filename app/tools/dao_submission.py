@@ -15,7 +15,8 @@ def submit_ai_agent_contribution(
     pr_urls: list[str],
     contributors: str | None = None,
     amount: str = "0",
-    tdg_issued: str = "0",
+    tdg_issued: str | None = None,
+    contribution_type: str = "Time (Minutes)",
     generation_source: str | None = None,
     attached_file_path: str | None = None,
     attached_filename: str | None = None,
@@ -57,8 +58,15 @@ def submit_ai_agent_contribution(
 
     if contributors:
         cmd.extend(["--contributors", contributors])
-    cmd.extend(["--amount", amount])
-    cmd.extend(["--tdg-issued", tdg_issued])
+    # The CLI derives TDG from --type + the amount (rubric SSOT); it accepts no
+    # --amount / --tdg-issued flags. Map the autopilot's `amount` onto the
+    # matching flag and let the CLI auto-compute TDG.
+    _ctype = (contribution_type or "Time (Minutes)").strip()
+    cmd.extend(["--type", _ctype])
+    if _ctype in ("USD", "USDT received", "USDT sent"):
+        cmd.extend(["--usd", str(amount)])
+    else:
+        cmd.extend(["--minutes", str(amount)])
     if generation_source:
         cmd.extend(["--generation-source", generation_source])
     if attached_file_path:
@@ -145,8 +153,11 @@ TOOL_SPECS = [
                 },
                 "tdg_issued": {
                     "type": "string",
-                    "description": "TDG to issue.",
-                    "default": "0",
+                    "description": (
+                        "Optional governor override for TDG. Leave UNSET to "
+                        "auto-compute from Type + Amount via the rubric (SSOT); "
+                        "do not pass 0."
+                    ),
                 },
                 "attachment_path": {
                     "type": "string",
