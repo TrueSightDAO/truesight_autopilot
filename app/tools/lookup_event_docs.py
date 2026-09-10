@@ -171,8 +171,8 @@ _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
         "dapp_page": "post_repackaging_cleanup.html",
     },
     "FARM BOUNDARY EVIDENCE EVENT": {
-        "description": "Use when a farm sends geotagged boundary photos (plot corners). Omit Plot ID when unknown - backend auto-assigns PL-###; NEVER send an empty '- Plot ID:' line (parser line-bleed). Join Media URLs with '; '. See SUNMINT_TREE_PHOTO_PROCESSING.md section 6.",
-        "required_fields": ["Farm Name", "Media URLs"],
+        "description": "Use when a farm sends geotagged boundary photos (plot corners). Plot Type is REQUIRED (restoration|mature|maturing|enrichment|research|nursery|infrastructure). Omit Plot ID when unknown - backend auto-assigns PL-###; NEVER send an empty '- Plot ID:' line (parser line-bleed). Join Media URLs with '; '. See SUNMINT_TREE_PHOTO_PROCESSING.md section 6.",
+        "required_fields": ["Farm Name", "Plot Type", "Media URLs"],
         "dapp_page": "limites-da-fazenda (sunmint)",
     },
     "TREE PLANTING EVENT": {
