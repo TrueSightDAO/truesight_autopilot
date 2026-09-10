@@ -1678,6 +1678,38 @@ def _normalize_key(s: str) -> str:
     return _re.sub(r"[ _-]+", " ", s).lower().strip()
 
 
+def _resolve_tdg_issued(supplied, contribution_type: str, amount: str) -> str:
+    """Resolve the 'TDG Issued' value for a contribution.
+
+    TDG is DERIVED from Type + Amount via the dao_client rubric (the single
+    source of truth, ``truesight_dao_client.rubric``). It must NEVER be hard-
+    defaulted to "0" -- doing so silently zeroed real contributions (Cristo
+    Rei, Sitio Torres FSVP, 2026-09).
+
+    A governor-supplied figure is honoured ONLY when it is an explicit,
+    non-zero number. Anything else -- absent, "", "0", or unparseable --
+    falls through to the rubric auto-compute.
+    """
+    text = (
+        "" if supplied is None else str(supplied).strip().lstrip("$").replace(",", "")
+    )
+    if text:
+        try:
+            value = float(text)
+        except ValueError:
+            value = 0.0
+        if value > 0:
+            return f"{value:.2f}"
+    try:
+        from truesight_dao_client.rubric import format_tdg, tdg_for
+
+        return format_tdg(tdg_for(contribution_type, amount))
+    except Exception:
+        # Unknown type / non-numeric amount: never crash the turn; fall back so
+        # downstream validation can flag it.
+        return text or "0.00"
+
+
 def _normalize_submission_labels(event_name: str, attributes: dict) -> dict:
     """Coerce LLM-generated attribute keys to canonical dao_client labels.
 
@@ -2280,7 +2312,7 @@ def _run_tool_sync(
             "contributors", governor_name or "autopilot@agroverse.shop"
         )
         amount = func_args.get("amount", "0")
-        tdg_issued = func_args.get("tdg_issued", "0")
+        supplied_tdg = func_args.get("tdg_issued")
         attachment_path = func_args.get("attachment_path", "")
         attachment_filename = func_args.get("attachment_filename", "")
         if not title or not body or not pr_urls:
@@ -2300,6 +2332,12 @@ def _run_tool_sync(
         )
         description = f"{title}\n\n{pr_block}\n\nDetails:\n{body}"
         contribution_type = func_args.get("type", "Time (Minutes)")
+        # TDG is DERIVED from Type + Amount via the dao_client rubric (SSOT).
+        # NEVER hard-default to "0" - that silently zeroed real contributions
+        # (Cristo Rei, Sitio Torres FSVP - 2026-09). A governor override is
+        # honoured only for an explicit NON-ZERO figure; everything else
+        # (absent / "0" / unparseable) falls through to auto-compute.
+        tdg_issued = _resolve_tdg_issued(supplied_tdg, contribution_type, amount)
         attrs: dict[str, str] = {
             "Type": contribution_type,
             "Amount": amount,
@@ -2317,6 +2355,7 @@ def _run_tool_sync(
                 contributors=contributors,
                 amount=amount,
                 tdg_issued=tdg_issued,
+                contribution_type=contribution_type,
                 attached_file_path=attachment_path,
                 attached_filename=attachment_filename or None,
             )
