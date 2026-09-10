@@ -9,13 +9,37 @@ import tempfile
 from pathlib import Path
 
 
+def compute_tdg_from_rubric(contribution_type: str, amount: str) -> str | None:
+    """Derive TDG from the canonical dao_client rubric (single source of truth).
+
+    Returns the rubric value as a 2dp string (e.g. ``600`` min of
+    ``Time (Minutes)`` -> ``"1000.00"``), or ``None`` when it cannot be derived
+    (unknown type or non-numeric amount). Callers MUST treat ``None`` as "let the
+    downstream CLI compute it", never as a reason to hand-zero the award.
+
+    Rationale: Gary's standing rule (2026-09-10, thread 24442, documented in
+    ``agentic_ai_context/dao/DAO_CLIENT_AI_AGENT_CONTRIBUTIONS.md`` rule 5) --
+    always use the auto-computed rubric TDG (100 TDG per Time hour, 1:1 for
+    USD/USDT); never default it to 0 by hand.
+    """
+    try:
+        from truesight_dao_client.rubric import format_tdg, tdg_for
+    except Exception:
+        return None
+    try:
+        return format_tdg(tdg_for(contribution_type, amount))
+    except Exception:
+        return None
+
+
 def submit_ai_agent_contribution(
     title: str,
     body: str,
     pr_urls: list[str],
     contributors: str | None = None,
     amount: str = "0",
-    tdg_issued: str = "0",
+    contribution_type: str = "Time (Minutes)",
+    tdg_issued: str | None = None,
     generation_source: str | None = None,
     attached_file_path: str | None = None,
     attached_filename: str | None = None,
@@ -46,6 +70,7 @@ def submit_ai_agent_contribution(
         cmd = [entry_point]
 
     cmd.extend(["--title", title])
+    cmd.extend(["--type", contribution_type])
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write(body)
@@ -57,8 +82,14 @@ def submit_ai_agent_contribution(
 
     if contributors:
         cmd.extend(["--contributors", contributors])
-    cmd.extend(["--amount", amount])
-    cmd.extend(["--tdg-issued", tdg_issued])
+    # The dao_client CLI derives BOTH Amount and TDG itself from --hours/
+    # --minutes/--usd via the rubric SSOT; it does not accept --amount or
+    # --tdg-issued. Pass the amount in the shape it expects so the TDG is
+    # auto-computed per the rubric rather than silently hand-zeroed.
+    if contribution_type in ("USD", "USDT sent", "USDT received"):
+        cmd.extend(["--usd", amount])
+    else:
+        cmd.extend(["--minutes", amount])
     if generation_source:
         cmd.extend(["--generation-source", generation_source])
     if attached_file_path:
@@ -145,8 +176,12 @@ TOOL_SPECS = [
                 },
                 "tdg_issued": {
                     "type": "string",
-                    "description": "TDG to issue.",
-                    "default": "0",
+                    "description": (
+                        "TDG to issue. Leave UNSET to use the auto-computed "
+                        "rubric value (100 TDG per Time hour; 1:1 for USD) - "
+                        "this is the default and preferred. Only set this to "
+                        "override the rubric with a governor-approved figure."
+                    ),
                 },
                 "attachment_path": {
                     "type": "string",
