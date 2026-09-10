@@ -2280,7 +2280,21 @@ def _run_tool_sync(
             "contributors", governor_name or "autopilot@agroverse.shop"
         )
         amount = func_args.get("amount", "0")
-        tdg_issued = func_args.get("tdg_issued", "0")
+        contribution_type = func_args.get("type", "Time (Minutes)")
+        # Never hard-default TDG to 0: a governor-set non-zero figure wins,
+        # otherwise fall back to the rubric SSOT auto-computed value (Gary's
+        # standing rule, 2026-09-10, DAO_CLIENT_AI_AGENT_CONTRIBUTIONS.md rule 5).
+        _tdg_override = (func_args.get("tdg_issued") or "").strip()
+        try:
+            _has_tdg_override = bool(_tdg_override) and float(_tdg_override) != 0.0
+        except ValueError:
+            _has_tdg_override = False
+        if _has_tdg_override:
+            tdg_issued = _tdg_override
+        else:
+            from .tools.dao_submission import compute_tdg_from_rubric as _compute_tdg
+
+            tdg_issued = _compute_tdg(contribution_type, amount) or "0"
         attachment_path = func_args.get("attachment_path", "")
         attachment_filename = func_args.get("attachment_filename", "")
         if not title or not body or not pr_urls:
@@ -2299,7 +2313,6 @@ def _run_tool_sync(
             f"- {u.strip()}" for u in pr_urls
         )
         description = f"{title}\n\n{pr_block}\n\nDetails:\n{body}"
-        contribution_type = func_args.get("type", "Time (Minutes)")
         attrs: dict[str, str] = {
             "Type": contribution_type,
             "Amount": amount,
@@ -2316,6 +2329,7 @@ def _run_tool_sync(
                 pr_urls=pr_urls,
                 contributors=contributors,
                 amount=amount,
+                contribution_type=contribution_type,
                 tdg_issued=tdg_issued,
                 attached_file_path=attachment_path,
                 attached_filename=attachment_filename or None,
