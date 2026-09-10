@@ -3622,6 +3622,10 @@ _REDACTION_PATTERNS: list[tuple[re.Pattern, str]] = [
         re.compile(r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b"),
         "[REDACTED:GITHUB_TOKEN]",
     ),
+    (
+        re.compile(r"github_pat_[A-Za-z0-9_]{22,}"),
+        "[REDACTED:GITHUB_FINE_GRAINED_PAT]",
+    ),
     (re.compile(r"xox[abprs]-[A-Za-z0-9-]{20,}"), "[REDACTED:SLACK_TOKEN]"),
     (
         re.compile(
