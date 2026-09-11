@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     # FOLLOWUPS_ENABLED=false.
     followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
 
+    # The email-inbox watch (app/email_inbox_watch.py) triages unread
+    # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the
+    # loop into the lifespan, but it stays OFF by default until the governor
+    # has reviewed dry-run logs and given the Unit 3 go. Even when enabled,
+    # outbound writes additionally require EMAIL_WATCH_ENABLE_SENDS (also
+    # default off). Default False keeps this deploy behavior-neutral.
+    email_watch_enabled: bool = Field(
+        default=False, validation_alias="EMAIL_WATCH_ENABLED"
+    )
+
     # _handoff_prefix() (app/telegram_adapter.py) reads Sophia's public
     # HANDOFF_MANIFEST.md and injects "you're pre-authorized to execute this
     # plan" framing whenever a message LOOKS like a go-signal ("go for it",

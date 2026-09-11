@@ -383,3 +383,78 @@ def test_state_write_is_atomic(monkeypatch, tmp_path):
     w._dispatch_tool("gmail_search", {"query": "x"}, {"thread": "t1"}, False)
     assert (tmp_path / "state.json").exists()
     assert not list(tmp_path.glob(".email-watch-*.tmp"))  # no temp left behind
+
+
+# --------------------------------------------------------------------------
+# Unit 4 - lifespan wiring (guarded; OFF by default)
+# --------------------------------------------------------------------------
+
+
+def test_email_watch_enabled_defaults_false():
+    """The loop must ship inert: EMAIL_WATCH_ENABLED default False."""
+    from app.config import Settings
+
+    # A fresh Settings with no env override for the flag must be False.
+    assert Settings().email_watch_enabled is False
+
+
+def test_start_helper_is_noop_when_disabled(monkeypatch):
+    """When disabled, the helper schedules nothing and returns False."""
+    import app.main as app_main
+
+    scheduled = []
+    monkeypatch.setattr(app_main.settings, "email_watch_enabled", False)
+
+    def _capture(c):
+        c.close()
+        scheduled.append(c)
+
+    monkeypatch.setattr(app_main.asyncio, "create_task", _capture)
+    assert app_main._start_email_watch_if_enabled() is False
+    assert scheduled == []
+
+
+def test_start_helper_schedules_loop_when_enabled(monkeypatch):
+    """When enabled, the helper schedules the loop and returns True."""
+    import app.main as app_main
+
+    scheduled = []
+    monkeypatch.setattr(app_main.settings, "email_watch_enabled", True)
+
+    def _capture(c):
+        c.close()
+        scheduled.append(c)
+
+    monkeypatch.setattr(app_main.asyncio, "create_task", _capture)
+    assert app_main._start_email_watch_if_enabled() is True
+    assert len(scheduled) == 1
+    assert app_main.email_watch is not None
+
+
+def test_enabling_loop_does_not_enable_sends(monkeypatch, tmp_path):
+    """Unit 4 point: enabling the loop must NOT turn on sending by itself.
+
+    With the loop enabled but EMAIL_WATCH_ENABLE_SENDS unset, an outbound
+    gmail_send is still intercepted as a dry_run/gate-off stub.
+    """
+    w = _watch(monkeypatch, tmp_path)
+    # Loop "enabled" conceptually, but ambient gate off + dry_run off is the
+    # ungated danger case - the dedicated flag must still hold the line.
+    monkeypatch.setattr(m, "SENDS_ENABLED", False)
+    monkeypatch.setattr(m.settings, "dry_run", False)
+    called = {"n": 0}
+    monkeypatch.setattr(
+        w, "_run_handler", lambda name, args: called.__setitem__("n", called["n"] + 1)
+    )
+    result, disp, mode = w._dispatch_tool(
+        "gmail_send",
+        {"to": "known@x.com", "subject": "s", "body": "b"},
+        {"thread": "t1"},
+        False,  # not first contact
+    )
+    payload = json.loads(result)
+    assert payload["status"] == "dry_run"
+    assert payload["would"] == "gmail_send"
+    assert disp == "would_gmail_send"
+    assert mode == "live|gate-off"
+    assert called["n"] == 0  # handler NEVER invoked
