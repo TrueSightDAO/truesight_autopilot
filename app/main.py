@@ -58,6 +58,7 @@ from .aws_monitor import AWSMonitor
 from .daily_briefing import handle_daily_briefing
 from .edgar_logger import EdgarLogger as EdgarDirectClient
 from .email_poller import EmailPoller
+from .email_inbox_watch import EmailInboxWatch
 from .fix_agent import FixAgent
 from .followup_loop import followup_loop
 from .github_client import GitHubClient
@@ -138,6 +139,7 @@ _init_bugsnag()
 
 email_poller: EmailPoller | None = None
 aws_monitor: AWSMonitor | None = None
+email_watch: EmailInboxWatch | None = None
 _sessions: dict[str, list[dict[str, str]]] = {}
 _pending_submissions: dict[
     str, dict
@@ -426,6 +428,38 @@ def _install_signal_loggers():
             pass
 
 
+def _start_email_watch_if_enabled() -> bool:
+    """Start the email-inbox watch loop when EMAIL_WATCH_ENABLED is set.
+
+    Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md. OFF by default so the deploy is
+    behavior-neutral until the governor reviews dry-run logs and gives the Unit 3
+    go. Even when enabled, outbound writes additionally require
+    EMAIL_WATCH_ENABLE_SENDS (also default off), so enabling the loop only turns
+    on *reading/triaging* mail, never sending, by itself.
+
+    Kept as a standalone helper so the guard is unit-testable without booting the
+    full lifespan (the file's existing convention - cf. _refresh_events_catalog).
+    Returns True if the loop was scheduled, False otherwise.
+    """
+    global email_watch
+    if not settings.email_watch_enabled:
+        logger.info("EMAIL_WATCH_ENABLED=false - email inbox watch not started")
+        return False
+    try:
+        email_watch = EmailInboxWatch()
+        asyncio.create_task(email_watch.run_loop())
+        logger.info(
+            "Email inbox watch started (interval=%.0fs, sends_enabled=%s)",
+            float(os.getenv("EMAIL_WATCH_INTERVAL_SECONDS", "3600")),
+            os.getenv("EMAIL_WATCH_ENABLE_SENDS", "").strip().lower()
+            in {"1", "true", "yes", "on"},
+        )
+        return True
+    except Exception as e:
+        logger.warning("Email inbox watch failed to start: %s", e)
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global email_poller, aws_monitor
@@ -461,6 +495,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(email_poller.run_loop())
         except Exception as e:
             logger.warning("Email poller failed to start: %s", e)
+        _start_email_watch_if_enabled()
         try:
             aws_monitor = AWSMonitor()
             asyncio.create_task(aws_monitor.run_loop())
