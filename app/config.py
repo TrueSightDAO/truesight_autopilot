@@ -365,6 +365,26 @@ class Settings(BaseSettings):
         default="",
         validation_alias="TELEGRAM_ALWAYS_RESPOND_CHAT_IDS",
     )
+    # ── Discord ──────────────────────────────────────────────────────
+    # Bot token is read from the VAULT (name: DISCORD_BOT_TOKEN), never env.
+    # The adapter refuses to start unless DISCORD_ADAPTER_ENABLED is true.
+    discord_adapter_enabled: bool = Field(
+        default=False, validation_alias="DISCORD_ADAPTER_ENABLED"
+    )
+    # Compose replies but do NOT post them to Discord (safe first deploy).
+    discord_dry_run: bool = Field(default=True, validation_alias="DISCORD_DRY_RUN")
+    # Numeric Discord guild (server) id this instance serves.
+    discord_guild_id: str = Field(default="", validation_alias="DISCORD_GUILD_ID")
+    # Comma-separated Discord user ids (snowflakes, kept as strings) allowed
+    # to instruct the bot. Empty => fall back to the sheet binding only.
+    discord_allowed_user_ids: str = Field(
+        default="", validation_alias="DISCORD_ALLOWED_USER_IDS"
+    )
+    # Which governor identity the bot speaks as (resolved to a public key).
+    discord_governor_name: str = Field(
+        default="Gary Teh", validation_alias="DISCORD_GOVERNOR_NAME"
+    )
+
     # Emoji-reaction go-signal (see plans/SOPHIA_EMOJI_REACTION_GO_PLAN.md):
     # a standard-emoji reaction from an authorized user on a resume-awaiting
     # message acts as a go-signal. Deny-list of emoji that are NOT a go
