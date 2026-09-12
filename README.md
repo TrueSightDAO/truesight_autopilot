@@ -42,9 +42,13 @@ Both modes share the same brain: **DeepSeek-V3** (30× cheaper than Claude) with
 
 ## Architecture & Services
 
-Sophia runs as **four systemd services** on a dedicated EC2 box, fronted by nginx
+Sophia runs as **five systemd services** on a dedicated EC2 box, fronted by nginx
 (`sophia.truesight.me`). They're deliberately split so the credential vault and the
-Telegram adapter stay responsive even while the brain is busy on a long LLM turn.
+chat adapters stay responsive even while the brain is busy on a long LLM turn.
+
+> Adding a new chat surface? Read
+> `agentic_ai_context/AUTOPILOT_CHANNEL_INTEGRATIONS.md` — the canonical pattern for
+> front-end adapters (Telegram, Discord, DApp, …) and the "add a venue" checklist.
 
 ```mermaid
 flowchart TB
@@ -52,6 +56,7 @@ flowchart TB
     NGINX["nginx · sophia.truesight.me :443<br/>/ → brain :8001 · /vault,/auth → vault :8002"]
     subgraph BOX["EC2 · /opt/truesight_autopilot"]
         ADAPTER["truesight-autopilot-telegram<br/>app.telegram_adapter<br/>long-poll · topic→role dispatch"]
+        DISCORD["truesight-autopilot-discord<br/>app.discord_adapter<br/>gateway · channel→session"]
         BRAIN["truesight-autopilot · :8001<br/>app.main:app (FastAPI)<br/>LLM tool-loop · sessions<br/>context-mgmt · roles · policy"]
         WATCH["truesight-autopilot-watchdog<br/>app.attention_watchdog<br/>read-only nudges"]
         VAULT["truesight-vault · :8002<br/>app.vault_app:app<br/>Fernet vault · /vault UI · /auth"]
@@ -61,7 +66,9 @@ flowchart TB
     EDGAR["Edgar / dao_protocol<br/>(DAO ledger)"]
 
     G -->|long-poll| ADAPTER
+    D["Discord<br/>(guild channels)"] -.->|gateway| DISCORD
     ADAPTER <-->|"HTTP /chat (SSE)"| BRAIN
+    DISCORD -->|"HTTP /chat-blocking"| BRAIN
     G -.->|HTTPS| NGINX
     NGINX --> BRAIN
     NGINX --> VAULT
@@ -76,10 +83,11 @@ flowchart TB
 |---|---|---|---|
 | **truesight-autopilot** | `uvicorn app.main:app` | 8001 | **The brain.** The `/chat` LLM tool-loop (DeepSeek), session store + context management, role/policy gating, the proactive monitors, and all ~34 tools. |
 | **truesight-autopilot-telegram** | `python -m app.telegram_adapter` | — | **Telegram adapter.** Long-polls Telegram, maps each forum topic to a role, dispatches the thread to the brain's `/chat`, streams the reply back. |
+| **truesight-autopilot-discord** | `python -m app.discord_adapter` | — | **Discord adapter.** Gateway client — routes each guild channel to its own session (`dc:{guild}:{channel}`), dispatches to the brain's `/chat-blocking`. Governor gate + sheet binding; `DISCORD_DRY_RUN` defaults **true**. *Merged, inert until enabled — see `agentic_ai_context/AUTOPILOT_CHANNEL_INTEGRATIONS.md`.* |
 | **truesight-autopilot-watchdog** | `python -m app.attention_watchdog` | — | **Attention watchdog.** Read-only — nudges in Saved Messages about unanswered asks. Never acts on your behalf. |
 | **truesight-vault** | `uvicorn app.vault_app:app` | 8002 | **Credential vault.** Fernet-encrypted on-disk store + the governor-only `/vault` web UI (DAO-Identity RSA login) + the `/auth` email-verification routes. Separate worker so it stays up when the brain is busy. |
 
-All four are restarted together by `deploy_autopilot` and `scripts/deploy.sh`. nginx
+All five are restarted together by `deploy_autopilot` and `scripts/deploy.sh`. nginx
 (`config/nginx/sophia.conf`) terminates HTTPS, routes `/vault` + `/auth` to :8002 and
 everything else to :8001, and proxies `/dao/*`, `/proxy/gas`, etc. on to the separate
 `dao_protocol` service.
@@ -91,6 +99,7 @@ app/
   main.py               # the brain: FastAPI app, /chat LLM tool-loop, session store,
                         #   context management (externalize / compact / token-trim), /chat/context
   telegram_adapter.py   # Telegram long-poll adapter            -> -telegram service
+  discord_adapter.py    # Discord gateway adapter               -> -discord service
   attention_watchdog.py # read-only nudge watchdog              -> -watchdog service
   vault_app.py          # vault FastAPI app (:8002)             -> -vault service
   vault.py              # Fernet-encrypted credential store (writes vault/ on disk)
