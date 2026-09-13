@@ -13,14 +13,17 @@ does real git on the box instead:
 - opens a PR via the GitHub API and returns its URL.
 
 Guardrails:
-- repo must be in ``settings.allowed_repos`` (same gate as ``open_fix_pr``).
+- repo must pass ``settings.repo_write_allowed`` — DEFAULT-ALLOW (any
+  repo) unless an ``ALLOWED_REPOS`` strict list is set; PRODUCTION repos
+  and API-only machine-owned data repos are always refused (same gate as
+  ``open_fix_pr``).
 - the push target may NEVER be the repo's default branch (or main/master) —
   branch + PR always; merging stays behind ``merge_pr`` / a human.
 - git operations use SSH (``~/.ssh/id_ed25519_truesight_autopilot`` on the
   box) — no PAT needed for clone/push. PR creation still uses the GitHub
   API via ``settings.github_pat``.
-- ``api_only_repos`` are refused (they're write-only data repos; use
-  Contents API instead — see GITHUB_AGENTIC_AI_SSH.md).
+- ``api_only_repos`` are refused for clone/branch-edit (machine-owned data
+  repos; use the Contents API instead — see GITHUB_AGENTIC_AI_SSH.md).
 """
 
 from __future__ import annotations
@@ -140,29 +143,9 @@ def git_push_changes(
     """
     if not repo or not branch or not commit_message:
         return _err("repo, branch, and commit_message are required")
-    if repo not in settings.allowed_repos:
-        return _err(
-            "repo not in allowed list", repo=repo, allowed=settings.allowed_repos
-        )
-    if repo in settings.api_only_repos:
-        return _err(
-            "API-only data repo: never clone or branch-edit. This repo is "
-            "machine-owned (automation writes it via the Contents API). Read "
-            "with read_repo_file or its raw.githubusercontent.com URLs; write "
-            "single files with upload_file_to_github. See "
-            "GITHUB_AGENTIC_AI_SSH.md § 'API-only repos'.",
-            repo=repo,
-            api_only=settings.api_only_repos,
-        )
-    if repo in settings.prod_repos:
-        return _err(
-            f"PRODUCTION repo: beta-first rule. Push this change to "
-            f"'{settings.prod_repos[repo]}' instead, let the governor review "
-            "the beta deploy, then promote with sync_beta_to_prod only on "
-            "the governor's explicit approval. Never push to prod directly.",
-            repo=repo,
-            beta_repo=settings.prod_repos[repo],
-        )
+    allowed, reason = settings.repo_write_allowed(repo)
+    if not allowed:
+        return _err(reason, repo=repo)
     if not (writes or edits or deletes):
         return _err("nothing to do: provide writes, edits, and/or deletes")
 
