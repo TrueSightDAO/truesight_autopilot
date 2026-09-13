@@ -276,6 +276,11 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot.service /etc/systemd/system/
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot-telegram.service /etc/systemd/system/
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot-watchdog.service /etc/systemd/system/
+    # Discord adapter unit: installed unconditionally so the code is on disk,
+    # but only STARTED when DISCORD_ADAPTER_ENABLED=true (gated start below) --
+    # the adapter self-exits when disabled and its unit is Restart=always, so an
+    # unconditional start would spin a restart loop.
+    sudo cp $REMOTE_DIR/systemd/truesight-autopilot-discord.service /etc/systemd/system/
     sudo systemctl daemon-reload
     sudo systemctl enable truesight-autopilot truesight-autopilot-telegram
     echo \"Waiting 5s for active requests to drain before restart...\"
@@ -290,6 +295,16 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     else
         echo 'TELEGRAM_BOT_API_KEY not set in .env — leaving telegram adapter stopped.'
         sudo systemctl stop truesight-autopilot-telegram 2>/dev/null || true
+    fi
+    # Start the Discord adapter only when explicitly enabled. Mirrors the
+    # Telegram pattern above; gated because the adapter exits when
+    # DISCORD_ADAPTER_ENABLED is unset while the unit is Restart=always.
+    if grep -q '^DISCORD_ADAPTER_ENABLED=true' $REMOTE_DIR/.env 2>/dev/null; then
+        sudo systemctl enable truesight-autopilot-discord
+        sudo systemctl restart truesight-autopilot-discord
+    else
+        echo 'DISCORD_ADAPTER_ENABLED not true in .env - leaving discord adapter stopped.'
+        sudo systemctl stop truesight-autopilot-discord 2>/dev/null || true
     fi
     # Start the attention watchdog only once its user-session exists
     # (one-time interactive: .venv/bin/python scripts/telethon_login.py).
