@@ -232,6 +232,11 @@ class Settings(BaseSettings):
         "farm-media-raw",
         "farm-media-daemon",
         "farm_media_manifests",
+        # CRF Anapu program site -> cfr.truesight.me (Gary, thread 25181,
+        # 2026-09-11). Standalone GitHub Pages repo (public). Replicates the
+        # SunMint registration/instrument pages, branded + RSA-submissions
+        # attributed to the CRF program.
+        "cfr-anapu",
     ]
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation

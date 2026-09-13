@@ -2,16 +2,81 @@
   "matheus-nota-fiscal": {
     "id": "matheus-nota-fiscal",
     "last_checked": null,
-    "next_check": "2026-06-18T16:49:11.739097+00:00",
+    "next_check": "2026-09-13T01:11:23.820190+00:00",
     "attempts": 0,
     "last_pinged": null,
     "status": "resolved"
   },
   "chocolate-subscription-phase2": {
     "id": "chocolate-subscription-phase2",
-    "last_checked": null,
-    "next_check": "2026-06-18T16:49:11.739097+00:00",
-    "attempts": 0,
-    "last_pinged": null
+    "last_checked": "2026-09-13T03:49:51.650485+00:00",
+    "next_check": "2026-09-20T03:49:51.650517+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "warmup-conversion-30day-readout": {
+    "id": "warmup-conversion-30day-readout",
+    "last_checked": "2026-09-13T03:49:52.498542+00:00",
+    "next_check": "2026-09-20T03:49:52.498573+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "matheus-nota-fiscal-exportacao": {
+    "id": "matheus-nota-fiscal-exportacao",
+    "last_checked": "2026-09-13T03:49:53.197571+00:00",
+    "next_check": "2026-09-20T03:49:53.197603+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "podream-tech-followup": {
+    "id": "podream-tech-followup",
+    "last_checked": "2026-09-13T03:49:53.648786+00:00",
+    "next_check": "2026-09-20T03:49:53.648819+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "gianluca-farmers-tech-followup": {
+    "id": "gianluca-farmers-tech-followup",
+    "last_checked": "2026-09-13T03:49:54.105488+00:00",
+    "next_check": "2026-09-20T03:49:54.105523+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "ling-mobile-capsule": {
+    "id": "ling-mobile-capsule",
+    "last_checked": "2026-09-13T03:49:54.555407+00:00",
+    "next_check": "2026-09-20T03:49:54.555440+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "jerrie-mobile-un-aora-ppt": {
+    "id": "jerrie-mobile-un-aora-ppt",
+    "last_checked": "2026-09-13T03:49:58.147572+00:00",
+    "next_check": "2026-09-20T03:49:58.147604+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "jerrie-cacao-ceremonial-tea-ppt": {
+    "id": "jerrie-cacao-ceremonial-tea-ppt",
+    "last_checked": "2026-09-13T03:49:58.594167+00:00",
+    "next_check": "2026-09-20T03:49:58.594198+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
+  },
+  "orlantildes-coopercabruca": {
+    "id": "orlantildes-coopercabruca",
+    "last_checked": "2026-09-13T03:49:59.050586+00:00",
+    "next_check": "2026-09-20T03:49:59.050620+00:00",
+    "attempts": 1,
+    "last_pinged": null,
+    "status": "resolved"
   }
 }

@@ -162,6 +162,130 @@ def test_send_builds_raw_payload(tmp_path):
     assert base64.b64encode(b"Hello\nthere.").decode("ascii") in raw
 
 
+def test_build_raw_message_threading_headers():
+    """In-Reply-To / References headers are set only when provided."""
+    raw = gt._build_raw_message(
+        to="p@q.com",
+        subject="Re: hi",
+        body="body",
+        in_reply_to="<parent@mail.gmail.com>",
+        references="<root@mail.gmail.com> <parent@mail.gmail.com>",
+    )
+    decoded = base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8")
+    assert "In-Reply-To: <parent@mail.gmail.com>" in decoded
+    assert "References: <root@mail.gmail.com> <parent@mail.gmail.com>" in decoded
+
+
+def test_build_raw_message_no_threading_headers_when_absent():
+    """Absent threading params must not emit empty headers."""
+    raw = gt._build_raw_message(to="p@q.com", subject="hi", body="body")
+    decoded = base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8")
+    assert "In-Reply-To:" not in decoded
+    assert "References:" not in decoded
+
+
+def test_send_sets_thread_id_in_request_body(tmp_path):
+    """thread_id is passed as threadId on the send request body."""
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    captured = {}
+
+    def capture_send(userId, body):
+        captured["body"] = body
+        exec_mock = MagicMock()
+        exec_mock.execute.return_value = {
+            "id": "sent-2",
+            "threadId": "t-42",
+            "labelIds": ["SENT"],
+        }
+        return exec_mock
+
+    service.users.return_value.messages.return_value.send.side_effect = capture_send
+
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        out = json.loads(
+            gt.gmail_send(
+                to="p@q.com",
+                subject="Re: hi",
+                body="threaded reply",
+                account="admin",
+                thread_id="t-42",
+                in_reply_to="<parent@mail.gmail.com>",
+                references="<parent@mail.gmail.com>",
+            )
+        )
+
+    assert out["status"] == "ok"
+    assert captured["body"]["threadId"] == "t-42"
+    raw = base64.urlsafe_b64decode(captured["body"]["raw"].encode("ascii")).decode(
+        "utf-8"
+    )
+    assert "In-Reply-To: <parent@mail.gmail.com>" in raw
+
+
+def test_send_omits_thread_id_when_absent(tmp_path):
+    """No threadId key when thread_id not supplied (new thread)."""
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    captured = {}
+
+    def capture_send(userId, body):
+        captured["body"] = body
+        exec_mock = MagicMock()
+        exec_mock.execute.return_value = {"id": "s", "threadId": "t", "labelIds": []}
+        return exec_mock
+
+    service.users.return_value.messages.return_value.send.side_effect = capture_send
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        gt.gmail_send(to="p@q.com", subject="s", body="b", account="admin")
+
+    assert "threadId" not in captured["body"]
+
+
+def test_create_draft_sets_thread_id_in_request_body(tmp_path):
+    """thread_id is passed as message.threadId when creating a draft."""
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    captured = {}
+
+    def capture_create(userId, body):
+        captured["body"] = body
+        exec_mock = MagicMock()
+        exec_mock.execute.return_value = {"id": "d2", "message": {"id": "m2"}}
+        return exec_mock
+
+    service.users.return_value.drafts.return_value.create.side_effect = capture_create
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        out = json.loads(
+            gt.gmail_create_draft(
+                to="p@q.com",
+                subject="Re: hi",
+                body="draft reply",
+                account="admin",
+                thread_id="t-7",
+            )
+        )
+
+    assert out["status"] == "ok"
+    assert captured["body"]["message"]["threadId"] == "t-7"
+
+
+def test_gmail_send_schema_exposes_threading_params():
+    """The model-visible schema must advertise the new params."""
+    from app.tool_registry import discover_tools
+
+    spec = next(s for s in discover_tools() if s.name == "gmail_send")
+    props = spec.parameters["properties"]
+    assert "thread_id" in props
+    assert "in_reply_to" in props
+    assert "references" in props
+    spec_draft = next(s for s in discover_tools() if s.name == "gmail_create_draft")
+    props_draft = spec_draft.parameters["properties"]
+    assert "thread_id" in props_draft
+    assert "in_reply_to" in props_draft
+    assert "references" in props_draft
+
+
 def test_create_draft_uses_drafts_create(tmp_path):
     _write_token(tmp_path, "admin")
     service = _mock_service()

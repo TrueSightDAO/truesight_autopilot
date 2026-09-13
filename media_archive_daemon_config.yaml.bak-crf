@@ -1,0 +1,284 @@
+daily_budget: 500
+projects:
+- name: truesight-main
+  credentials: /opt/truesight_autopilot/config/youtube/youtube_token.json
+  client_secrets: /opt/truesight_autopilot/config/youtube/client_secret.json
+inboxes:
+- farm_id: cristo-rei-pacaje-para
+  path: /media/media_archive_inbox/farm-media/cristo-rei-pacaje-para
+  priority: 1
+- farm_id: cleide
+  path: /media/media_archive_inbox/farm-media/cleide
+  priority: 2
+- farm_id: paulo-la-do-sitio
+  path: /media/media_archive_inbox/farm-media/paulo-la-do-sitio
+  priority: 1
+- farm_id: santa-anna-fazenda
+  path: /media/media_archive_inbox/farm-media/santa-anna-fazenda
+  priority: 1
+- farm_id: jedielcio
+  path: /media/media_archive_inbox/farm-media/jedielcio
+  priority: 1
+- farm_id: raimundo-geniza-para
+  path: /media/media_archive_inbox/farm-media/raimundo-geniza-para
+  priority: 1
+- farm_id: fazenda-dona-rosa
+  path: /media/media_archive_inbox/farm-media/fazenda-dona-rosa
+  priority: 1
+- farm_id: fazenda-santa-rosa
+  path: /media/media_archive_inbox/farm-media/fazenda-santa-rosa
+  priority: 1
+- farm_id: fernando-carla
+  path: /media/media_archive_inbox/farm-media/fernando-carla
+  priority: 1
+- farm_id: fazenda-sao-jorge-bahia
+  path: /media/media_archive_inbox/farm-media/fazenda-sao-jorge-bahia
+  priority: 1
+- farm_id: oscar-bahia
+  path: /media/media_archive_inbox/farm-media/oscar-bahia
+  priority: 1
+- farm_id: fazenda-santa-ana-bahia
+  path: /media/media_archive_inbox/farm-media/fazenda-santa-ana-bahia
+  priority: 1
+- farm_id: cacau-na-veia-pacaje
+  path: /media/media_archive_inbox/farm-media/cacau-na-veia-pacaje
+  priority: 1
+- farm_id: sitio-torres-pacaja-para
+  path: /media/media_archive_inbox/farm-media/sitio-torres-pacaja-para
+  priority: 1
+quota_reset_utc: 07:05
+defaults:
+  privacy: public
+  tags:
+  - cacao
+  - agroverse
+  description_footer: Cacao farm visit, CEPOTX, Para, Brazil.
+archive:
+  bucket: media.agroverse.shop
+  region: us-east-1
+  preview_frame_frac: 0.25
+  roots:
+  - farm_id: cristo-rei-pacaje-para
+    path: /media/cristo_rei_pacaje_work/media
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+  - farm_id: santa-ana-fazenda-bahia
+    path: /media/santa_ana_bahia_work
+  - farm_id: sao-jorge
+    path: /media/sao_jorge_work/extracted
+  - farm_id: oscar-bahia
+    path: /media/oscar_work/src
+  - farm_id: fernando-carla
+    path: /media/fernando_carla_work
+  - farm_id: paulo-interview
+    path: /media/paulo_interview
+  - farm_id: bomsucesso
+    path: /media/bomsucesso_work/in
+  - farm_id: raimundo-geniza
+    path: /media/raimundo_geniza
+  - farm_id: cvp
+    path: /media/cvp
+  - farm_id: rancho-maranta-plot-1
+    path: /media/plot1/rancho maranta plot 1
+  - farm_id: cacao-variety-parap
+    zip: /media/upload_zips/cacao_variety_parap.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: fazenda-dona-rosa
+    zip: /media/upload_zips/fazenda_dona_rosa.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: fazenda-santa-rosa
+    zip: /media/upload_zips/fazenda_santa_rosa.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: fernando-carla
+    zip: /media/upload_zips/fernando_carla.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: oscar-bahia
+    zip: /media/upload_zips/oscar.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: paulo-interview
+    zip: /media/upload_zips/paulo_interview.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: raimundo-geniza
+    zip: /media/upload_zips/raimundo_geniza.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: rancho-maranata
+    zip: /media/upload_zips/rancho_maranata.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: rancho-maranta-plot-1
+    zip: /media/upload_zips/rancho_maranta_plot_1.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: rancho-maranta-plot-2
+    zip: /media/upload_zips/rancho_maranta_plot_2.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: santa-anna-fazenda
+    zip: /media/upload_zips/santa_anna_fazenda.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: sao-jorge
+    zip: /media/upload_zips/sao_jorge_fazenda.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: sorting
+    zip: /media/upload_zips/sorting.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: cleide
+    zip: /media/upload_zips/cleide and marcelo's farm.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: paulo-la-do-sitio
+    zip: /media/upload_zips/paulo_2024.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: paulo-la-do-sitio
+    zip: /media/upload_zips/la do sitio.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: to-analyze
+    zip: /media/upload_zips/to analyze.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+
+
+  - farm_id: medicilandia-convention-2024
+    zip: /media/upload_zips/medicilandia_farmers_convention_2024.zip
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+  - farm_id: sitio-torres-pacaja-para
+    path: /media/pacaje_work/loc3
+    extensions:
+    - .MOV
+    - .mov
+    - .mp4
+    - .HEIC
+    - .heic
+    - .JPG
+    - .jpg
+# Captions / geo enrichment (farm_media_captions.py + farm_media_geo.py)
+captions:
+  model: base            # faster-whisper model: base | small | medium
+  language: pt           # source audio language (task="translate" -> English)
+
+geo:
+  api_key_env: GOOGLE_MAPS_API_KEY   # Maps/Geocoding key (in /opt/truesight_autopilot/.env)
+  cache_path: /tmp/farm_media_geo_cache.json   # dedupe cache (farms share GPS)

@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "tracks": []
+  "tracks": [
+    {
+      "id": "MIIBIjANBgkqhkiG9w0B:tg:-1003919341801:26819",
+      "label": "Telegram chat \u2014 Gary Teh",
+      "track_type": "telegram_chat",
+      "started_at": "2026-09-13T19:01:03.082Z",
+      "last_heartbeat": "2026-09-13T19:01:03.082Z",
+      "expected_max_duration_s": 120,
+      "status": "running",
+      "metadata": {
+        "session_id": "MIIBIjANBgkqhkiG9w0B:tg:-1003919341801:26819"
+      }
+    }
+  ]
 }
