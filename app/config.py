@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 from pathlib import Path
 
@@ -9,9 +10,92 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _repo_list(value: object) -> list[str]:
+    """Parse a repo list from either a list (init kwarg / default) or a plain
+    comma/space-separated string (env var).
+
+    Deliberately tolerant: pydantic-settings would otherwise demand JSON for a
+    list-typed field, so the natural ``ALLOWED_REPOS=a,b`` would raise a
+    settings ValidationError at boot.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [t.strip() for t in value.replace(",", " ").split() if t.strip()]
+    if isinstance(value, (list, tuple, set)):
+        out: list[str] = []
+        for item in value:
+            out.extend(_repo_list(item))
+        return out
+    return [str(value).strip()]
+
+
+# Literal historical allowlist (36 repos, incl. the KrakeIO bridge). Kept as
+# the back-compat default of ``allowed_repos`` so the default-allow model can
+# land in two units with no behavior change in between; see
+# plans/SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md.
+_LEGACY_ALLOWED_REPOS: list[str] = [
+    "getdata-mcp-bridge",
+    "dapp_beta",
+    "dapp_prod",
+    "tokenomics",
+    "truesight_me",
+    "truesight_me_prod",
+    "truesight_me_beta",
+    "agroverse_shop",
+    "agroverse_shop_prod",
+    "agroverse_shop_beta",
+    "dao_client",
+    "market_research",
+    "go_to_market",
+    "sentiment_importer",
+    "truesight_autopilot",
+    "agentic_ai_context",
+    "dao_protocol",
+    "fda_fsvp",
+    "capoeira",
+    "program-template",
+    "butterfly-effect-club",
+    "oracle",
+    "agroverse-inventory",
+    "treasury-cache",
+    ".github",
+    "ecosystem_change_logs",
+    "tribomirimbahia",
+    "lineage-engine",
+    "lineage-assets",
+    "sunmint_farmer",
+    "sunmint_mobile",
+    "sunmint_beta",
+    "sunmint_prod",
+    "farm-media-raw",
+    "farm-media-daemon",
+    "farm_media_manifests",
+]
+
+# Governor-blessed globs for github_tools.create_repo(). Creating a NEW repo
+# stays bounded even though writing an EXISTING one is default-allow.
+_DEFAULT_CREATE_REPO_PATTERNS: list[str] = [
+    "*-program",
+    "cfr-*",
+    "*-site",
+    "*-beta",
+    "*-prod",
+    "*-cache",
+    "*-raw",
+]
+
+
 class Settings(BaseSettings):
+    # populate_by_name lets ``Settings(allowed_repos=[...])`` (field name) keep
+    # working alongside the ``LEGACY_ALLOWED_REPOS`` validation_alias — the
+    # alias is what keeps that legacy field OFF the ALLOWED_REPOS env var,
+    # which now means strict mode.
     model_config = SettingsConfigDict(
-        extra="ignore", env_file=".env", env_file_encoding="utf-8"
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        populate_by_name=True,
     )
     # Service
     port: int = Field(default=8001, validation_alias="PORT")
@@ -194,45 +278,46 @@ class Settings(BaseSettings):
         "getdata-mcp-bridge": "KrakeIO",
     }
 
-    # Allowed repos for code modifications
-    allowed_repos: list[str] = [
-        "getdata-mcp-bridge",
-        "dapp_beta",
-        "dapp_prod",
-        "tokenomics",
-        "truesight_me",
-        "truesight_me_prod",
-        "truesight_me_beta",
-        "agroverse_shop",
-        "agroverse_shop_prod",
-        "agroverse_shop_beta",
-        "dao_client",
-        "market_research",
-        "go_to_market",
-        "sentiment_importer",
-        "truesight_autopilot",
-        "agentic_ai_context",
-        "dao_protocol",
-        "fda_fsvp",
-        "capoeira",
-        "program-template",
-        "butterfly-effect-club",
-        "oracle",
-        "agroverse-inventory",
-        "treasury-cache",
-        ".github",
-        "ecosystem_change_logs",
-        "tribomirimbahia",
-        "lineage-engine",
-        "lineage-assets",
-        "sunmint_farmer",
-        "sunmint_mobile",
-        "sunmint_beta",
-        "sunmint_prod",
-        "farm-media-raw",
-        "farm-media-daemon",
-        "farm_media_manifests",
-    ]
+    # Allowed repos for code modifications — LEGACY ALIAS. Defaults to the
+    # literal historical list so PR2 ships with zero behavior change (§5d);
+    # PR3 rewires the guard sites onto ``repo_write_allowed()``, after which
+    # this field survives only for back-compat with existing call sites/tests.
+    # The odd validation_alias keeps it OFF the ALLOWED_REPOS env var (which
+    # now means strict mode) while ``Settings(allowed_repos=[...])`` by field
+    # name still works, since BaseSettings sets populate_by_name.
+    allowed_repos: list[str] = Field(
+        default_factory=lambda: list(_LEGACY_ALLOWED_REPOS),
+        validation_alias="LEGACY_ALLOWED_REPOS",
+        repr=False,
+    )
+
+    # ── Default-allow repo-access model (PR2, SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md) ──
+    # DEFAULT-ALLOW: with no config, agents may write any repo EXCEPT the two
+    # protected classes (``api_only_repos`` / ``prod_repos``), so a new repo or
+    # subdomain no longer needs a code change + redeploy.
+    #
+    # STRICT MODE (fail-safe): set ALLOWED_REPOS=<comma-separated names> and
+    # only those repos are writable — today's behavior, re-tightenable by an
+    # operator without a code change. Empty/unset ⇒ default-allow.
+    strict_repos: list[str] = Field(
+        default_factory=list, validation_alias="ALLOWED_REPOS", repr=False
+    )
+
+    # Globs a NEW repo name must match for github_tools.create_repo(), so the
+    # "spin up a repo/subdomain" path stays one tool call while an arbitrary or
+    # hallucinated name is still refused. Override with CREATE_REPO_PATTERNS.
+    create_repo_patterns: list[str] = Field(
+        default_factory=lambda: list(_DEFAULT_CREATE_REPO_PATTERNS),
+        validation_alias="CREATE_REPO_PATTERNS",
+        repr=False,
+    )
+
+    @field_validator(
+        "allowed_repos", "strict_repos", "create_repo_patterns", mode="before"
+    )
+    @classmethod
+    def _parse_repo_lists(cls, value: object) -> list[str]:
+        return _repo_list(value)
 
     # Machine-owned DATA repos — never clone, never branch-edit. Automation
     # (GAS, workers, transcript pushers) writes these via the Contents API;
@@ -280,6 +365,76 @@ class Settings(BaseSettings):
             if repo not in self.api_only_repos:
                 self.api_only_repos.append(repo)
         return self
+
+    @model_validator(mode="after")
+    def _sync_repo_access_lists(self) -> Settings:
+        """Reconcile the legacy ``allowed_repos`` alias with ``strict_repos``.
+
+        - explicit ``allowed_repos`` kwarg (tests, orchestration_specs) — treat
+          it as the strict list, so an injected allowlist really gates.
+        - ``ALLOWED_REPOS`` env set — mirror it into ``allowed_repos``.
+        - neither — ``allowed_repos`` keeps the literal legacy default, i.e.
+          unchanged behavior until PR3 rewires the guard sites.
+        """
+        if "allowed_repos" in self.model_fields_set and self.allowed_repos:
+            self.strict_repos = list(self.allowed_repos)
+        elif self.strict_repos:
+            self.allowed_repos = list(self.strict_repos)
+        # CREATE_REPO_PATTERNS set to empty ⇒ fall back to the blessed defaults
+        # rather than leaving the create-gate with no patterns at all.
+        if not self.create_repo_patterns:
+            self.create_repo_patterns = list(_DEFAULT_CREATE_REPO_PATTERNS)
+        return self
+
+    def repo_write_allowed(self, repo: str) -> tuple[bool, str]:
+        """Single source of truth for "may agents write this repo?".
+
+        Returns ``(ok, reason)`` — ``reason`` is ``""`` when allowed, else a
+        short explanation suitable for a tool error string. The two protected
+        classes are checked FIRST and hold in both modes, so default-allow can
+        never widen a prod or machine-owned-data write.
+        """
+        if not repo:
+            return False, "repo name is required"
+        if repo in self.prod_repos:
+            return False, (
+                f"'{repo}' is a PRODUCTION repo (beta-first rule). Push to "
+                f"'{self.prod_repos[repo]}' instead and promote with "
+                "sync_beta_to_prod on the governor's explicit approval."
+            )
+        if repo in self.api_only_repos:
+            return False, (
+                f"'{repo}' is an API-only data repo (machine-owned). Read with "
+                "read_repo_file / raw URLs; write single files with "
+                "upload_file_to_github. Never clone or branch-edit."
+            )
+        if self.strict_repos:
+            if repo in self.strict_repos:
+                return True, ""
+            return False, (
+                f"'{repo}' is not in the strict allowlist (ALLOWED_REPOS is "
+                "set). Unset ALLOWED_REPOS for default-allow, or a governor "
+                "adds the repo to it."
+            )
+        return True, ""
+
+    def create_repo_allowed(self, repo: str) -> tuple[bool, str]:
+        """Pattern gate for ``create_repo``.
+
+        Default-allow covers writing an EXISTING repo; creating a new one must
+        match a governor-blessed glob so a hallucinated name cannot spin up
+        arbitrary org repos.
+        """
+        if not repo:
+            return False, "repo name is required"
+        for pat in self.create_repo_patterns:
+            if fnmatch.fnmatchcase(repo, pat):
+                return True, ""
+        return False, (
+            f"'{repo}' does not match any blessed create_repo pattern "
+            f"({', '.join(self.create_repo_patterns)}). A governor must add a "
+            "pattern to settings.create_repo_patterns (or CREATE_REPO_PATTERNS)."
+        )
 
     # Production deploy repos (forks of their beta base). Beta-first rule:
     # agents NEVER push, branch-edit, or merge PRs here. Flow: change lands in
