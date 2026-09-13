@@ -75,6 +75,11 @@ FLEET: dict[str, dict[str, str]] = {
         "ip": "98.93.94.86",
         "user": "ubuntu",
         "desc": "dao_protocol FastAPI server, port 8010 (Nelanco)",
+        # Pinned: dao_protocol trusts sophia_infra (added to its
+        # authorized_keys), but NOT the vault-first default ssh_key_server_us
+        # (the Krake key) — which _key_path() would otherwise hand it, causing
+        # "Permission denied (publickey)". See _identity_for().
+        "key": "~/.ssh/sophia_infra",
     },
     "seni_sk": {
         "ip": "34.234.193.80",
@@ -183,6 +188,30 @@ def _key_path() -> Path:
     return candidates[0]  # return default even if missing, for the error message
 
 
+def _identity_for(host: str) -> Path:
+    """Resolve the SSH identity for a *specific* fleet host.
+
+    ``_key_path()`` is vault-first and host-agnostic, so it hands every host
+    the same key (``ssh_key_server_us`` when present). That is wrong for hosts
+    which trust a different key — e.g. ``dao_protocol`` trusts
+    ``sophia_infra``, not the Krake key, so it answered every call with
+    "Permission denied (publickey)".
+
+    A host may therefore pin its own key via ``FLEET[host]["key"]``. Hosts
+    without a pinned key keep the historical vault-first behaviour, so their
+    resolution is unchanged.
+    """
+    pinned = (FLEET.get(host) or {}).get("key")
+    if pinned:
+        p = Path(pinned).expanduser()
+        if p.is_file():
+            return p
+        logger.warning(
+            "pinned key %s for host %s is missing — falling back to default", pinned, host
+        )
+    return _key_path()
+
+
 def _truncate(s: str) -> tuple[str, bool]:
     if len(s) <= _MAX_OUTPUT_CHARS:
         return s, False
@@ -210,7 +239,7 @@ def ssh_run(
             host=host,
             fleet={k: v["desc"] for k, v in FLEET.items()},
         )
-    key = _key_path()
+    key = _identity_for(host)
     if not key.is_file():
         tried = [
             str(Path(_DEFAULT_KEY_PATH).expanduser()),
