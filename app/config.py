@@ -436,6 +436,50 @@ class Settings(BaseSettings):
             "pattern to settings.create_repo_patterns (or CREATE_REPO_PATTERNS)."
         )
 
+    def repo_upload_allowed(self, repo: str) -> tuple[bool, str]:
+        """Contents-API single-file write gate (``upload_file_to_github``).
+
+        Prod repos are refused (beta-first: the file lands in the beta repo,
+        then a governor promotes with ``sync_beta_to_prod``). Everything else
+        \u2014 including the machine-owned ``api_only_repos`` class \u2014 is allowed,
+        because a Contents-API single-file commit is exactly the sanctioned
+        write path those repos exist for.
+
+        In STRICT MODE this mirrors today's behaviour precisely: writable =
+        ``strict_repos \u222a api_only_repos``.
+        """
+        if not repo:
+            return False, "repo name is required"
+        if repo in self.prod_repos:
+            return False, (
+                f"'{repo}' is a PRODUCTION repo (beta-first rule). Upload to "
+                f"'{self.prod_repos[repo]}' instead and promote with "
+                "sync_beta_to_prod on the governor's explicit approval."
+            )
+        if self.strict_repos:
+            if repo in self.strict_repos or repo in self.api_only_repos:
+                return True, ""
+            return False, (
+                f"'{repo}' is not in the strict allowlist (ALLOWED_REPOS is "
+                "set) nor an API-only data repo. Unset ALLOWED_REPOS for "
+                "default-allow, or a governor adds the repo to it."
+            )
+        return True, ""
+
+    def writable_repos_for_display(self) -> str:
+        """Human-readable write scope for tool descriptions / LLM prompts.
+
+        Single source for what the schemas advertise, so the description can
+        never drift from the enforced model (default-allow unless an
+        ALLOWED_REPOS strict list is set).
+        """
+        if self.strict_repos:
+            return ", ".join(self.strict_repos)
+        return (
+            "any repo (default-allow; PRODUCTION repos and API-only "
+            "machine-owned data repos are always refused)"
+        )
+
     # Production deploy repos (forks of their beta base). Beta-first rule:
     # agents NEVER push, branch-edit, or merge PRs here. Flow: change lands in
     # the beta repo → governor reviews the beta deploy → governor explicitly

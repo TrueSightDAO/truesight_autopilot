@@ -2275,9 +2275,9 @@ def _run_tool_sync(
 
         repo_name = func_args.get("repo", "")
         issue = func_args.get("issue_description", "")
-        allowed = settings.allowed_repos
-        if repo_name not in allowed:
-            return f"Error: repo '{repo_name}' not in allowed list."
+        allowed, reason = settings.repo_write_allowed(repo_name)
+        if not allowed:
+            return f"Refused: {reason}"
         blocked = repo_class_block(repo_name)
         if blocked:
             return blocked
@@ -2318,9 +2318,9 @@ def _run_tool_sync(
         repo_name = func_args.get("repo", "")
         pr_number = func_args.get("pr_number", 0)
         merge_method = func_args.get("merge_method", "squash")
-        allowed = settings.allowed_repos
-        if repo_name not in allowed:
-            return f"Error: repo '{repo_name}' not in allowed list."
+        allowed, reason = settings.repo_write_allowed(repo_name)
+        if not allowed:
+            return f"Refused: {reason}"
         if not pr_number:
             return "Error: pr_number is required."
         gh = GitHubClient()
@@ -5475,7 +5475,7 @@ async def github_webhook(payload: dict):
     if (
         action == "closed"
         and head_ref.startswith(_AUTOPILOT_BRANCH_PREFIX)
-        and repo_name in settings.allowed_repos
+        and settings.repo_write_allowed(repo_name)[0]
     ):
         try:
             gh = GitHubClient()
@@ -5543,7 +5543,18 @@ async def _branch_janitor_loop():
             now = datetime.now(timezone.utc)
             cutoff = now - timedelta(days=30)
             total_deleted = 0
-            for repo in settings.allowed_repos:
+            # Default-allow: sweep every org repo we may write (excludes prod /
+            # api-only), not just the legacy allowlist.
+            try:
+                janitor_repos = [
+                    r["name"]
+                    for r in (await asyncio.to_thread(gh.list_org_repos) or [])
+                    if settings.repo_write_allowed(r["name"])[0]
+                ]
+            except Exception as e:
+                logger.warning("Janitor: list_org_repos failed: %s", e)
+                janitor_repos = list(settings.strict_repos)
+            for repo in janitor_repos:
                 try:
                     branches = await asyncio.to_thread(
                         gh.list_branches_matching, repo, _AUTOPILOT_BRANCH_PREFIX

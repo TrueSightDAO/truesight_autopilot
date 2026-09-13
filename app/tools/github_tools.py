@@ -155,25 +155,9 @@ def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
 
 from ..tool_registry import ToolSpec  # noqa: E402
 
-_ALLOWED_CHAT_REPOS = ", ".join(
-    [
-        "dapp_beta",
-        "dapp_prod",
-        "tokenomics",
-        "truesight_me",
-        "truesight_me_prod",
-        "agroverse_shop",
-        "agroverse_shop_prod",
-        "dao_client",
-        "market_research",
-        "sentiment_importer",
-        "truesight_autopilot",
-        ".github",
-        "agentic_ai_context",
-        "agroverse-inventory",
-        "dao_protocol",
-    ]
-)
+# Write scope advertised in tool schemas — sourced from the config model so the
+# description can never drift from what ``repo_write_allowed`` enforces.
+_ALLOWED_CHAT_REPOS = settings.writable_repos_for_display()
 
 
 def _repo_org(repo: str) -> str:
@@ -195,21 +179,16 @@ def create_repo(repo: str, private: bool = True, description: str = "") -> dict[
     """Create a brand-new (empty) GitHub repo under the org resolved for
     ``repo`` via settings.repo_org_overrides (default TrueSightDAO).
 
-    Guardrail: ``repo`` must already be listed in settings.allowed_repos —
-    the same governor-curated allowlist that gates git_push_changes/
-    open_fix_pr. This means a human has to pre-approve the repo name (by
-    adding it to config.py) before this tool can create it; it does not
-    open up creating arbitrary new repos on request.
+    Guardrail (default-allow model): ``repo`` must match a governor-blessed
+    ``settings.create_repo_patterns`` glob (e.g. ``*-program``, ``cfr-*``,
+    ``*-site``). Writing an EXISTING repo is default-allow, but creating a NEW
+    one stays bounded so a hallucinated name cannot spin up arbitrary org
+    repos. Add a pattern to config.py / CREATE_REPO_PATTERNS to bless a new
+    naming family. See plans/SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md.
     """
-    if repo not in settings.allowed_repos:
-        return {
-            "status": "error",
-            "reason": (
-                f"'{repo}' is not in settings.allowed_repos. A governor must add it there "
-                "first (and to repo_org_overrides if it's not a TrueSightDAO repo) before "
-                "this tool can create it — same gate as git_push_changes."
-            ),
-        }
+    ok, reason = settings.create_repo_allowed(repo)
+    if not ok:
+        return {"status": "error", "reason": reason}
 
     org = _repo_org(repo)
     pat = _repo_pat(repo)
@@ -321,17 +300,9 @@ def _merge_pr_handler(args: dict, ctx: dict) -> str:
     repo_name = args.get("repo", "")
     pr_number = args.get("pr_number", 0)
     merge_method = args.get("merge_method", "squash")
-    if repo_name not in settings.allowed_repos:
-        return f"Error: repo '{repo_name}' not in allowed list."
-    if repo_name in settings.prod_repos:
-        return (
-            f"Refused: '{repo_name}' is a PRODUCTION repo (beta-first rule). "
-            f"Changes land in '{settings.prod_repos[repo_name]}'; promotion to "
-            "prod is via sync_beta_to_prod on the governor's explicit approval, "
-            "not PR merges on prod."
-        )
-    if repo_name in settings.api_only_repos:
-        return f"Refused: '{repo_name}' is an API-only data repo (machine-owned); agents do not merge PRs there."
+    allowed, reason = settings.repo_write_allowed(repo_name)
+    if not allowed:
+        return f"Refused: {reason}"
     if not pr_number:
         return "Error: pr_number is required."
     gh = GitHubClient()
@@ -349,10 +320,9 @@ def _mark_pr_ready_handler(args: dict, ctx: dict) -> str:
 
     repo_name = args.get("repo", "")
     pr_number = args.get("pr_number", 0)
-    if repo_name not in settings.allowed_repos:
-        return _json.dumps(
-            {"status": "error", "reason": f"repo '{repo_name}' not in allowed list"}
-        )
+    allowed, reason = settings.repo_write_allowed(repo_name)
+    if not allowed:
+        return _json.dumps({"status": "error", "reason": reason})
     if not pr_number:
         return _json.dumps({"status": "error", "reason": "pr_number is required"})
     gh = GitHubClient()
@@ -402,9 +372,10 @@ TOOL_SPECS = [
     ToolSpec(
         name="create_repo",
         description=(
-            "Create a brand-new, empty GitHub repo. Guardrail: the repo name must already be "
-            "listed in settings.allowed_repos (same gate as git_push_changes/open_fix_pr) — "
-            "if it's not, a governor needs to add it there first. Org defaults to TrueSightDAO; "
+            "Create a brand-new, empty GitHub repo. Guardrail: the repo name must match a "
+            "governor-blessed settings.create_repo_patterns glob (e.g. '*-program', 'cfr-*', "
+            "'*-site') — an unblessed/hallucinated name is refused; a governor adds a pattern "
+            "to config.py / CREATE_REPO_PATTERNS to open a naming family. Org defaults to TrueSightDAO; "
             "for a different org (e.g. KrakeIO), the governor must also add an entry to "
             "settings.repo_org_overrides. Use this before git_push_changes when the target "
             "repo doesn't exist yet."
@@ -414,7 +385,7 @@ TOOL_SPECS = [
             "properties": {
                 "repo": {
                     "type": "string",
-                    "description": "Repo name to create (must already be in settings.allowed_repos).",
+                    "description": "Repo name to create (must match a blessed create_repo pattern).",
                 },
                 "private": {
                     "type": "boolean",

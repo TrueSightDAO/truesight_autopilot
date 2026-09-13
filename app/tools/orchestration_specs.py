@@ -12,10 +12,10 @@ from __future__ import annotations
 from ..config import settings
 from ..tool_registry import ToolSpec
 
-# Single source of truth — main.py enforces against settings.allowed_repos,
-# so the schema's advertised list must come from the same place (it used to
+# Single source of truth — main.py enforces via settings.repo_write_allowed,
+# so the schema's advertised scope comes from the same config model (it used to
 # be a hand-copied list that drifted; see OPEN_FOLLOW_UPS item 3).
-_ALLOWED_CHAT_REPOS = ", ".join(settings.allowed_repos)
+_ALLOWED_CHAT_REPOS = settings.writable_repos_for_display()
 
 TOOL_SPECS = [
     ToolSpec(

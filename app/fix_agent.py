@@ -105,7 +105,7 @@ class FixAgent:
 
         logger.info("Fix loop started: repo=%s branch=%s", repo, branch)
 
-        repos = ", ".join(settings.allowed_repos)
+        repos = settings.writable_repos_for_display()
         desc = issue_description[:3000]
         if len(issue_description) > 3000:
             desc += "\n\n[... truncated ...]"
@@ -349,7 +349,7 @@ class FixAgent:
     # ───────────────────────── System Prompt ─────────────────────────
 
     def _build_system_prompt(self, repo: str, diagnosis: dict[str, str]) -> str:
-        repos = ", ".join(settings.allowed_repos)
+        repos = settings.writable_repos_for_display()
         return (
             "You are an autonomous code fixer for TrueSight DAO.\n\n"
             f"Repo: {repo}\n"
@@ -536,8 +536,9 @@ class FixAgent:
         self, repo: str, branch: str, func_name: str, args: dict[str, Any]
     ) -> str:
         target_repo = args.get("repo", repo)
-        if target_repo not in settings.allowed_repos:
-            return f"Error: repo '{target_repo}' is not in ALLOWED_REPOS. Allowed: {', '.join(settings.allowed_repos)}"
+        allowed, reason = settings.repo_write_allowed(target_repo)
+        if not allowed:
+            return f"Error: {reason}"
 
         if func_name == "read_file":
             return self._tool_read_file(target_repo, args["path"], branch)

@@ -2,7 +2,7 @@
   "matheus-nota-fiscal": {
     "id": "matheus-nota-fiscal",
     "last_checked": null,
-    "next_check": "2026-09-13T18:21:21.847885+00:00",
+    "next_check": "2026-09-13T19:21:27.348701+00:00",
     "attempts": 0,
     "last_pinged": null,
     "status": "resolved"
@@ -10,7 +10,7 @@
   "chocolate-subscription-phase2": {
     "id": "chocolate-subscription-phase2",
     "last_checked": null,
-    "next_check": "2026-09-13T18:21:21.847885+00:00",
+    "next_check": "2026-09-13T19:21:27.348701+00:00",
     "attempts": 0,
     "last_pinged": null
   }

@@ -58,7 +58,10 @@ def _branch_file(bare: Path, branch: str, path: str, tmp_path: Path) -> str:
     return (check / path).read_text()
 
 
-def test_repo_not_in_allowlist_is_rejected():
+def test_strict_mode_rejects_repo_not_in_allowlist(monkeypatch):
+    """Default-allow (no ALLOWED_REPOS) accepts arbitrary repos; setting the
+    strict list re-tightens to the old allowlist behaviour."""
+    monkeypatch.setattr(git_tools.settings, "strict_repos", ["truesight_autopilot"])
     out = git_tools.git_push_changes(
         repo="some-rando-repo",
         branch="f/x",
@@ -66,7 +69,31 @@ def test_repo_not_in_allowlist_is_rejected():
         writes=[{"path": "a.txt", "content": "a"}],
     )
     assert out["status"] == "error"
-    assert "allowed" in out["reason"]
+    assert "strict allowlist" in out["reason"]
+
+
+def test_prod_repo_is_always_refused_even_when_default_allow(monkeypatch):
+    monkeypatch.setattr(git_tools.settings, "strict_repos", [])
+    out = git_tools.git_push_changes(
+        repo="agroverse_shop_prod",
+        branch="f/x",
+        commit_message="m",
+        writes=[{"path": "a.txt", "content": "a"}],
+    )
+    assert out["status"] == "error"
+    assert "PRODUCTION" in out["reason"]
+
+
+def test_api_only_repo_is_always_refused_even_when_default_allow(monkeypatch):
+    monkeypatch.setattr(git_tools.settings, "strict_repos", [])
+    out = git_tools.git_push_changes(
+        repo="treasury-cache",
+        branch="f/x",
+        commit_message="m",
+        writes=[{"path": "a.txt", "content": "a"}],
+    )
+    assert out["status"] == "error"
+    assert "API-only" in out["reason"]
 
 
 def test_default_branch_push_is_refused(bare_repo):
