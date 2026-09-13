@@ -51,6 +51,13 @@ _INTENT_GUIDANCE: dict[str, str] = {
     "onboard contributor": "CONTRIBUTOR ADD EVENT",
     "capital injection": "CAPITAL INJECTION EVENT",
     "record payment": "PAYMENT EVENT",
+    "reserve item": "RESERVATION EVENT",
+    "reservation": "RESERVATION EVENT",
+    "buyer paid not collected": "RESERVATION EVENT",
+    "buyer paid, not collected": "RESERVATION EVENT",
+    "collect reserved item": "RESERVATION SETTLEMENT EVENT",
+    "settle reservation": "RESERVATION SETTLEMENT EVENT",
+    "redeem reservation": "RESERVATION SETTLEMENT EVENT",
     "register boundary": "FARM BOUNDARY EVIDENCE EVENT",
     "register plot": "FARM BOUNDARY EVIDENCE EVENT",
     "farm boundary": "FARM BOUNDARY EVIDENCE EVENT",
@@ -145,13 +152,27 @@ _IMPORTANT_FIELDS: dict[str, list[str]] = {
         "Reason",
         "Retractor Email",
     ],
+    # Event 1 of the reservation flow: cash is in, goods are held. NO inventory row moves.
+    "RESERVATION EVENT": [
+        "Buyer",
+        "Buyer Email",
+        "QR Code",
+        "Payment Collected By",
+        "Sale Price",
+        "Proof",
+    ],
+    # Event 2 of the reservation flow: buyer collected the held item (QR must be RESERVED).
+    "RESERVATION SETTLEMENT EVENT": [
+        "QR Code",
+        "Buyer Email",
+    ],
 }
 
 # Minimal fallback for when Edgar is unreachable
 _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
     "SALES EVENT": {
         "description": "Use when a bag is sold to an end customer (retail sale). QR status updated to SOLD. "
-                       "BATCH RULE: ONE submission per QR code — never aggregate. Read SOPHIA_BATCH_SALES_PLAN.md §0.",
+        "BATCH RULE: ONE submission per QR code — never aggregate. Read SOPHIA_BATCH_SALES_PLAN.md §0.",
         "required_fields": ["Item", "Sales price", "Sold by"],
         "dapp_page": "report_sales.html",
     },
@@ -185,6 +206,22 @@ _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
         "required_fields": ["Plot ID", "Reason", "Retractor Email"],
         "dapp_page": "sentinel-autopilot (no DApp page)",
     },
+    "RESERVATION EVENT": {
+        "description": "Use when a buyer has PAID CASH but has NOT yet collected a specific QR-coded item. "
+        "Books the positive-USD cash leg (revenue, cash-basis) and sets the QR to RESERVED. "
+        "NO inventory row and NO tree-planting liability move here - those land at settlement. "
+        "The hold is marked solely by the QR status RESERVED. See RESERVATION_EVENT_SPEC.md.",
+        "required_fields": ["Buyer", "QR Code", "Payment Collected By", "Sale Price"],
+        "dapp_page": "report_reservation.html",
+    },
+    "RESERVATION SETTLEMENT EVENT": {
+        "description": "Use when the buyer COLLECTS a previously reserved item. Requires the QR to currently be "
+        "RESERVED (else the event is ignored). Books the NON-revenue legs only: inventory -1 off the "
+        "QR's current holder, plus the Cacao Tree To Be Planted liability +1. Sets QR to SOLD and "
+        "emails the buyer. Must NOT carry a sale keyword or Is Revenue - see RESERVATION_EVENT_SPEC.md Ruled #3.",
+        "required_fields": ["QR Code"],
+        "dapp_page": "report_reservation_settlement.html",
+    },
 }
 
 
@@ -195,8 +232,11 @@ def _fetch_catalog() -> dict[str, Any]:
         resp = httpx.get(CATALOG_URL, timeout=15)
         resp.raise_for_status()
         _catalog = resp.json()
-        logger.info("events catalog loaded: %d events (version=%s)",
-                     len(_catalog.get("events", {})), _catalog.get("version"))
+        logger.info(
+            "events catalog loaded: %d events (version=%s)",
+            len(_catalog.get("events", {})),
+            _catalog.get("version"),
+        )
         return _catalog
     except Exception as exc:
         logger.warning("Failed to fetch events catalog from %s: %s", CATALOG_URL, exc)
@@ -266,7 +306,9 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
     lower = event_name.strip().lower()
     resolved = _INTENT_GUIDANCE.get(lower)
     if resolved:
-        logger.info("lookup_event_docs: resolved intent '%s' -> '%s'", event_name, resolved)
+        logger.info(
+            "lookup_event_docs: resolved intent '%s' -> '%s'", event_name, resolved
+        )
         event_name = resolved
 
     catalog = _fetch_catalog()
@@ -297,7 +339,9 @@ def lookup_event_docs(event_name: str) -> dict[str, Any]:
             return result
 
     # Completely unknown
-    available = list((catalog.get("events") or {}).keys()) or list(_FALLBACK_DOCS.keys())
+    available = list((catalog.get("events") or {}).keys()) or list(
+        _FALLBACK_DOCS.keys()
+    )
     return {
         "event_name": event_name,
         "error": f"Event type '{event_name}' not found in documentation.",
