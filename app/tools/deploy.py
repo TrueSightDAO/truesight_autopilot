@@ -380,6 +380,46 @@ def _get_current_commit(remote_dir: str) -> str:
         return "unknown"
 
 
+def _discord_unit_enabled(remote_dir: str) -> bool:
+    """True when DISCORD_ADAPTER_ENABLED=true is in the box .env.
+
+    The Discord adapter raises SystemExit when the flag is unset and its unit
+    is Restart=always, so cycling it while disabled would spin a loop. Fail
+    closed (False) on any read error.
+    """
+    try:
+        with open(
+            os.path.join(remote_dir, ".env"), encoding="utf-8", errors="replace"
+        ) as fh:
+            for line in fh:
+                if line.strip().startswith("DISCORD_ADAPTER_ENABLED="):
+                    val = line.split("=", 1)[1].strip().strip("\"'")
+                    return val.lower() == "true"
+    except OSError:
+        return False
+    return False
+
+
+def _install_systemd_units(remote_dir: str, _ELEVATE: str) -> None:
+    """Copy systemd unit files into /etc/systemd/system and daemon-reload.
+
+    Parity with scripts/deploy.sh. Without this, deploy_autopilot would pull a
+    newly merged unit file into the working tree but never install it, so a
+    brand-new unit (e.g. the Discord adapter) could be merged, pulled, and
+    still never exist on the box. Raises DeployError on failure.
+    """
+    _run_local(
+        "bash -c '"
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot.service /etc/systemd/system/ && "
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot-telegram.service /etc/systemd/system/ && "
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot-watchdog.service /etc/systemd/system/ && "
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot-discord.service /etc/systemd/system/ && "
+        f"{_ELEVATE} systemctl daemon-reload'",
+        cwd=remote_dir,
+        timeout=30,
+    )
+
+
 def _run_nginx_certbot(remote_dir: str, _ELEVATE: str) -> None:
     """Idempotent nginx/certbot housekeeping. Raises DeployError on failure —
     caller decides whether that's fatal (it isn't, see _post_pull_steps)."""
@@ -432,6 +472,10 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     )
     steps.append({"step": "pip_install", "status": "ok"})
 
+    logger.info("Step 2b: install/refresh systemd unit files")
+    _install_systemd_units(remote_dir, _ELEVATE)
+    steps.append({"step": "install_units", "status": "ok"})
+
     logger.info("Step 3: nginx + certbot setup (best-effort, before the restart)")
     try:
         _run_nginx_certbot(remote_dir, _ELEVATE)
@@ -461,16 +505,19 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     # still running the PREVIOUS deploy's process, silently stuck on old code
     # (e.g. the emoji-reaction go-signal fixes never reached the Telegram
     # polling process at all, even though `git log` on disk showed them).
+    # Discord adapter is cycled ONLY when enabled in .env: it raises
+    # SystemExit when DISCORD_ADAPTER_ENABLED is unset and its unit is
+    # Restart=always, so cycling it while disabled would loop.
+    _restart_units = [
+        "truesight-autopilot-telegram",
+        "truesight-autopilot-watchdog",
+        "truesight-vault",
+    ]
+    if _discord_unit_enabled(remote_dir):
+        _restart_units.append("truesight-autopilot-discord")
+    _restart_units.append("truesight-autopilot")
     subprocess.Popen(
-        [
-            _ELEVATE,
-            "systemctl",
-            "restart",
-            "truesight-autopilot-telegram",
-            "truesight-autopilot-watchdog",
-            "truesight-vault",
-            "truesight-autopilot",
-        ],
+        [_ELEVATE, "systemctl", "restart", *_restart_units],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -789,12 +836,43 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
         )
         steps.append({"step": "pip_install", "status": "ok"})
 
-        # Step 3: restart systemd service (async — this kills us, so do it last)
-        logger.info("Step 3: restart systemd service")
-        # Use nohup so the restart survives the SSH session closing
+        # Install/refresh systemd units FIRST (parity with scripts/deploy.sh),
+        # so a newly merged unit file actually exists on the box.
+        logger.info("Step 2b: install systemd unit files")
         _run_remote(
             client,
-            "sudo nohup systemctl restart truesight-autopilot truesight-autopilot-telegram truesight-autopilot-watchdog truesight-vault > /dev/null 2>&1 &",
+            f"cd {remote_dir} && sudo cp systemd/truesight-autopilot.service "
+            "systemd/truesight-autopilot-telegram.service "
+            "systemd/truesight-autopilot-watchdog.service "
+            "systemd/truesight-autopilot-discord.service /etc/systemd/system/ && "
+            "sudo systemctl daemon-reload",
+            timeout=30,
+        )
+        steps.append({"step": "install_units", "status": "ok"})
+
+        # Step 3: restart systemd service (async — this kills us, so do it last)
+        logger.info("Step 3: restart systemd service")
+        # Cycle the Discord adapter only when enabled in .env (it self-exits
+        # and the unit is Restart=always otherwise). nohup so the restart
+        # survives the SSH session closing.
+        _discord_on = (
+            _run_remote(
+                client,
+                f"grep -q '^DISCORD_ADAPTER_ENABLED=true' {remote_dir}/.env "
+                "2>/dev/null && echo yes || echo no",
+                timeout=10,
+            ).strip()
+            == "yes"
+        )
+        _units = (
+            "truesight-autopilot truesight-autopilot-telegram "
+            "truesight-autopilot-watchdog truesight-vault"
+        )
+        if _discord_on:
+            _units += " truesight-autopilot-discord"
+        _run_remote(
+            client,
+            f"sudo nohup systemctl restart {_units} > /dev/null 2>&1 &",
             timeout=10,
         )
         steps.append({"step": "restart_service", "status": "ok"})
