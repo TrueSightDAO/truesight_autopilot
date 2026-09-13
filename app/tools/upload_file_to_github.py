@@ -85,11 +85,24 @@ def upload_file_to_github(
         resp = httpx.put(url, headers=_github_headers(), json=payload, timeout=15.0)
         resp.raise_for_status()
         data = resp.json()
+        _content_url = data.get("content", {}).get("html_url", "")
+        try:
+            from ..repo_access_audit import record_repo_access
+
+            record_repo_access(
+                repo=repo,
+                action="upload_file_to_github",
+                result="success",
+                evidence_url=_content_url,
+                detail=f"path={path} branch={branch}",
+            )
+        except Exception:  # fail-soft: never break the upload over an audit hiccup
+            logger.warning("upload_to_github: repo-access audit failed", exc_info=True)
         return {
             "status": "success",
             "action": "updated" if "sha" in payload else "created",
             "commit_sha": data.get("commit", {}).get("sha", ""),
-            "content_url": data.get("content", {}).get("html_url", ""),
+            "content_url": _content_url,
             "message": f"File uploaded to {repo}/{path} on branch '{branch}'.",
         }
     except httpx.HTTPStatusError as exc:

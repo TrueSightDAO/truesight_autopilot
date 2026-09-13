@@ -213,6 +213,20 @@ class FixAgent:
         )
 
         if pr_url:
+            try:
+                from .repo_access_audit import record_repo_access
+
+                record_repo_access(
+                    repo=repo,
+                    action="open_fix_pr",
+                    result="success",
+                    evidence_url=pr_url,
+                    detail="fix_agent.run_simple",
+                )
+            except Exception:  # fail-soft
+                pass
+
+        if pr_url:
             edgar = EdgarLogger()
             edgar.log_contribution(
                 minutes=5,
@@ -335,6 +349,20 @@ class FixAgent:
             base="main",
             labels=["AI/proposed fix"],
         )
+
+        if pr_url:
+            try:
+                from .repo_access_audit import record_repo_access
+
+                record_repo_access(
+                    repo=repo,
+                    action="open_fix_pr",
+                    result="success",
+                    evidence_url=pr_url,
+                    detail="fix_agent.run",
+                )
+            except Exception:  # fail-soft
+                pass
 
         if pr_url:
             edgar = EdgarLogger()

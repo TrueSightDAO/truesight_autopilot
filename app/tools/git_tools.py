@@ -293,6 +293,20 @@ def git_push_changes(
             except httpx.RequestError as exc:
                 result["pr_error"] = f"branch pushed but PR creation failed: {exc}"
 
+        # ── audit: record the authorised write (PR4 default-allow model) ──
+        try:
+            from ..repo_access_audit import record_repo_access
+
+            record_repo_access(
+                repo=repo,
+                action="git_push_changes",
+                result="success",
+                evidence_url=result.get("pr_url", ""),
+                detail=f"branch={branch} changes={len(applied)}",
+            )
+        except Exception:  # fail-soft: never break the push over an audit hiccup
+            logger.warning("git_tools: repo-access audit failed", exc_info=True)
+
         logger.info(
             "git_push_changes: %s -> %s (%d changes, pr=%s)",
             repo,
