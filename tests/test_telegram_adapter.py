@@ -1270,6 +1270,12 @@ def test_call_chat_does_not_append_stale_approval_prompt(monkeypatch):
         def json():
             return {"response": "submitted", "proposal": {"x": 1}}
 
+    # call_chat() first does a live brain-health probe (_wait_for_brain) before the
+    # POST; neutralise it so the test is hermetic (CI has no listener on :8001).
+    monkeypatch.setattr(ta, "_wait_for_brain", lambda *a, **k: True)
+    # Non-hermetic guard: call_chat() probes the brain (/health) before POSTing.
+    # Pin the probe up so the test is deterministic regardless of a live brain.
+    monkeypatch.setattr(ta, "_wait_for_brain", lambda *a, **k: True)
     monkeypatch.setattr(ta.httpx, "post", lambda *a, **k: _Resp())
     out = ta.call_chat("hello", "s1", "pk")
     assert out == "submitted"
