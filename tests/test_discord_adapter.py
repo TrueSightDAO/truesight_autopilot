@@ -88,10 +88,32 @@ def test_author_role_sheet_binding_governor(monkeypatch):
     assert da.author_role("999", set()) == "governor"
 
 
-def test_author_role_binding_not_governor(monkeypatch):
+def test_author_role_bound_non_governor_is_member(monkeypatch):
+    # A contributor bound to a Discord id but NOT in the Governors cache
+    # resolves to 'member' (verified, non-governor) -- not 'guest'.
+    monkeypatch.setattr(da, "discord_email", lambda uid: "theus.reis.ssa@gmail.com")
+    monkeypatch.setattr(da, "_email_is_governor", lambda email: False)
+    assert da.author_role("578258537957031951", set()) == "member"
+
+
+def test_author_role_env_member_allowlist(monkeypatch):
+    monkeypatch.setattr(da, "discord_email", lambda uid: None)
+    monkeypatch.setattr(da.settings, "discord_member_user_ids", "999,111")
+    assert da.author_role("999", set()) == "member"
+    assert da.author_role("222", set()) == "guest"
+
+
+def test_author_role_unbound_empty_member_allowlist_is_guest(monkeypatch):
+    monkeypatch.setattr(da, "discord_email", lambda uid: None)
+    monkeypatch.setattr(da.settings, "discord_member_user_ids", "")
+    assert da.author_role("999", set()) == "guest"
+
+
+def test_author_role_governor_beats_member(monkeypatch):
     monkeypatch.setattr(da, "discord_email", lambda uid: "random@example.com")
     monkeypatch.setattr(da, "_email_is_governor", lambda email: False)
-    assert da.author_role("999", set()) == "guest"
+    monkeypatch.setattr(da.settings, "discord_member_user_ids", "999")
+    assert da.author_role("999", {"999"}) == "governor"
 
 
 def test_author_role_fail_closed_on_error(monkeypatch):
@@ -133,6 +155,21 @@ def test_handle_message_non_governor_logged_not_dispatched(monkeypatch):
     )
     da.handle_message(_msg(), set(), "KEY", "1", "42")
     assert observed["n"] == 1  # logged as context
+
+
+def test_handle_message_member_logged_not_dispatched(monkeypatch):
+    observed = {"n": 0}
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
+    monkeypatch.setattr(
+        da, "log_observed_message", lambda *a, **k: observed.update(n=observed["n"] + 1)
+    )
+    monkeypatch.setattr(
+        da,
+        "call_chat",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("member dispatched!")),
+    )
+    da.handle_message(_msg(), set(), "KEY", "1", "42")
+    assert observed["n"] == 1  # recognised + logged, but data-only
 
 
 def test_handle_message_governor_dispatches_and_replies(monkeypatch):

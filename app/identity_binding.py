@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import secrets
@@ -126,20 +125,24 @@ def _generate_code() -> tuple[str, str]:
 
 
 def _get_sheets_service():
-    """Get an authenticated Google Sheets service."""
-    from google.oauth2 import service_account
+    """Get an authenticated Google Sheets service from the shared loader.
+
+    Credentials come from the on-host service-account files via
+    :func:`app.tools.google_creds.load_credentials` (``config/google/*.json``).
+    The previous ``GOOGLE_SHEETS_CREDENTIALS`` env-var lookup was never
+    provisioned on the host, so every sheets-backed binding operation silently
+    no-op'd (found 2026-09-16).
+    """
     from googleapiclient.discovery import build
 
-    creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
-    if not creds_json:
-        logger.warning("GOOGLE_SHEETS_CREDENTIALS not set — sheets operations disabled")
-        return None
+    from .tools.google_creds import load_credentials
 
-    creds_dict = json.loads(creds_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    credentials = load_credentials(
+        None, ["https://www.googleapis.com/auth/spreadsheets"]
     )
+    if credentials is None:
+        logger.warning("No Google credentials resolved — sheets operations disabled")
+        return None
     return build("sheets", "v4", credentials=credentials)
 
 

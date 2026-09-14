@@ -182,20 +182,24 @@ def _fetch_discord_id_email(discord_id: str) -> str | None:
     Returns the email string, or None if unbound. Never raises.
     """
     try:
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
     except Exception:  # noqa: BLE001 -- google libs optional at call time
         return None
 
-    creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
-    if not creds_json:
+    # Credentials come from the shared on-host loader (config/google/*.json),
+    # NOT an env-var JSON blob. The old GOOGLE_SHEETS_CREDENTIALS lookup was
+    # never populated on the host, so this function returned None for EVERY
+    # user and the sheet-binding half of the gate was dead code (found
+    # 2026-09-16).
+    from .tools.google_creds import load_credentials
+
+    credentials = load_credentials(
+        None, ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    )
+    if credentials is None:
+        logger.warning("Discord binding: no Google credentials resolved")
         return None
     try:
-        creds_dict = json.loads(creds_json)
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-        )
         service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
         rows = (
             service.spreadsheets()
@@ -247,19 +251,36 @@ def _email_is_governor(email: str | None) -> bool:
 
 
 def author_role(user_id: str | int, allowed: set[str]) -> str:
-    """Resolve an author to 'governor' or 'guest'.
+    """Resolve an author to 'governor', 'member', or 'guest'.
 
-    Order: env allowlist (strongest) -> sheet binding -> Governors cache.
+    Order:
+      1. env governor allowlist (``DISCORD_ALLOWED_USER_IDS``) -> governor
+      2. sheet binding (Contributors contact information, Discord-ID column)
+         + Governors cache: email is a governor -> governor
+      3. bound to a real contributor, or on the env member allowlist
+         (``DISCORD_MEMBER_USER_IDS``) -> member
+      4. otherwise -> guest
+
+    * governor -- may instruct the bot and authorize actions.
+    * member   -- a verified contributor who is NOT a governor: may converse
+                  (ask / research / draft) but is **data-only**, never an
+                  instruction, and carries no governor authority.
+    * guest    -- unknown; observed as context only.
+
     Fail-closed: any error resolves to 'guest'.
     """
     uid = str(user_id)
     if is_allowed(uid, allowed):
         return "governor"
     try:
-        if _email_is_governor(discord_email(uid)):
-            return "governor"
+        email = discord_email(uid)
     except Exception:  # noqa: BLE001 -- never let a binding error open the gate
         return "guest"
+    if _email_is_governor(email):
+        return "governor"
+    member_ids = parse_allowed_ids(getattr(settings, "discord_member_user_ids", ""))
+    if email or is_allowed(uid, member_ids):
+        return "member"
     return "guest"
 
 
@@ -405,9 +426,16 @@ def handle_message(
     role = author_role(user_id, allowed)
 
     # Data/instruction boundary: only a governor's message is an instruction.
+    # A MEMBER is a verified contributor but NOT a governor -- recognised and
+    # attributed (context tied to a real identity), yet still data-only: never
+    # dispatched as an instruction. Enabling member *replies* requires the
+    # brain to be tier-aware (a member turn minted on the governor's public key
+    # would inherit governor authority), so it stays off for now -- see
+    # agentic_ai_context OPEN_FOLLOWUPS.md.
     if role != "governor":
         logger.info(
-            "Discord message from non-governor %s (%s) in %s -- logging as context only",
+            "Discord message from %s %s (%s) in %s -- logging as context only",
+            role,
             username,
             user_id,
             channel_id,
