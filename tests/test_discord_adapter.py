@@ -167,3 +167,119 @@ def test_send_message_dry_run_does_not_post(monkeypatch):
     ids = da.send_message("555", "hello world")
     assert posted["n"] == 0
     assert ids == ["dry-run"]
+
+
+# ── credential resolution (shared loader) ───────────────────────────────
+
+
+def _fake_sheet_service(rows):
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": rows
+    }
+    return svc
+
+
+def test_resolve_sheets_credentials_uses_shared_loader(monkeypatch):
+    # No JSON-in-env override -> the shared google_creds loader is the default.
+    monkeypatch.delenv("GOOGLE_SHEETS_CREDENTIALS", raising=False)
+    from app.tools import google_creds
+
+    sentinel = object()
+    seen = {}
+
+    def fake_load(service_account_name=None, scopes=None):
+        seen["name"] = service_account_name
+        seen["scopes"] = scopes
+        return sentinel
+
+    monkeypatch.setattr(google_creds, "load_credentials", fake_load)
+    assert da._resolve_sheets_credentials() is sentinel
+    assert seen["scopes"] == da._SHEETS_SCOPES
+
+
+def test_resolve_sheets_credentials_override_first(monkeypatch):
+    # A valid JSON-in-env override is honoured without touching the loader.
+    monkeypatch.setenv("GOOGLE_SHEETS_CREDENTIALS", '{"type": "service_account"}')
+    sentinel = object()
+
+    class _FakeCreds:
+        @staticmethod
+        def from_service_account_info(info, scopes=None):
+            return sentinel
+
+    monkeypatch.setattr(
+        "google.oauth2.service_account.Credentials",
+        _FakeCreds,
+        raising=False,
+    )
+    assert da._resolve_sheets_credentials() is sentinel
+
+
+def test_fetch_discord_id_email_row_match_returns_col_d_email(monkeypatch):
+    monkeypatch.setattr(da, "_resolve_sheets_credentials", lambda: object())
+    row = [""] * 7
+    row[3] = "matheus@example.com"  # D — email
+    row[6] = "578258537957031951"  # G — Discord snowflake
+    svc = _fake_sheet_service([["Name", "B", "C", "Email", "E", "F", "Discord ID"], row])
+    with patch("googleapiclient.discovery.build", return_value=svc):
+        assert (
+            da._fetch_discord_id_email("578258537957031951") == "matheus@example.com"
+        )
+
+
+def test_fetch_discord_id_email_legacy_handle_does_not_bind(monkeypatch):
+    # Column G may hold legacy handles; only exact snowflakes should bind.
+    monkeypatch.setattr(da, "_resolve_sheets_credentials", lambda: object())
+    row = [""] * 7
+    row[3] = "legacy@example.com"  # D — email
+    row[6] = "H4N5#0433"  # G — legacy handle, NOT a snowflake
+    svc = _fake_sheet_service([row])
+    with patch("googleapiclient.discovery.build", return_value=svc):
+        assert da._fetch_discord_id_email("578258537957031951") is None
+
+
+def test_fetch_discord_id_email_unbound_returns_none(monkeypatch):
+    monkeypatch.setattr(da, "_resolve_sheets_credentials", lambda: object())
+    row = [""] * 7
+    row[3] = "someone@example.com"
+    row[6] = "111111111111111111"
+    svc = _fake_sheet_service([row])
+    with patch("googleapiclient.discovery.build", return_value=svc):
+        assert da._fetch_discord_id_email("999") is None
+
+
+def test_fetch_discord_id_email_credentials_failure_returns_none(monkeypatch):
+    monkeypatch.setattr(da, "_resolve_sheets_credentials", lambda: None)
+    assert da._fetch_discord_id_email("578258537957031951") is None
+
+
+def test_fetch_discord_id_email_sheets_error_returns_none(monkeypatch):
+    monkeypatch.setattr(da, "_resolve_sheets_credentials", lambda: object())
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.side_effect = RuntimeError(
+        "permission denied"
+    )
+    with patch("googleapiclient.discovery.build", return_value=svc):
+        assert da._fetch_discord_id_email("578258537957031951") is None
+
+
+def test_author_role_guest_on_credentials_failure(monkeypatch):
+    monkeypatch.setattr(da, "_resolve_sheets_credentials", lambda: None)
+    da._binding_cache.clear()
+    assert da.author_role("578258537957031951", set()) == "guest"
+
+
+def test_discord_email_does_not_cache_failure(monkeypatch):
+    da._binding_cache.clear()
+    monkeypatch.setattr(da, "_lookup_discord_id_email", lambda uid: (False, None))
+    assert da.discord_email("123") is None
+    assert "123" not in da._binding_cache  # failures must not be cached
+
+
+def test_discord_email_caches_successful_lookup(monkeypatch):
+    da._binding_cache.clear()
+    monkeypatch.setattr(da, "_lookup_discord_id_email", lambda uid: (True, "a@b.c"))
+    assert da.discord_email("123") == "a@b.c"
+    assert da._binding_cache["123"][1] == "a@b.c"
+
