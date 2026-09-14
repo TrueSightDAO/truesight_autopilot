@@ -196,7 +196,7 @@ def _parse_block(body: str, line_offset: int) -> dict[str, Any] | str:
 
     # Normalise status
     status = parsed.get("status", "open").strip().lower()
-    if status not in ("open", "resolved", "aborted"):
+    if status not in ("open", "resolved", "aborted", "blocked"):
         return f"Followup '{parsed['id']}' has invalid status '{status}'"
     parsed["status"] = status
 
@@ -274,14 +274,14 @@ def get_state(id: str) -> dict[str, Any] | None:
 
 def set_status(id: str, new_status: str) -> bool:
     """
-    Set a follow-up's status (open | resolved | aborted).
+    Set a follow-up's status (open | resolved | aborted | blocked).
 
     Updates BOTH the .md block AND the state sidecar.
     For resolved/aborted, moves the block under the appropriate heading.
     Returns True on success, False if the id wasn't found.
     """
     new_status = new_status.strip().lower()
-    if new_status not in ("open", "resolved", "aborted"):
+    if new_status not in ("open", "resolved", "aborted", "blocked"):
         raise ValueError(f"Invalid status: {new_status}")
 
     content = _read_md()
@@ -306,8 +306,11 @@ def set_status(id: str, new_status: str) -> bool:
         flags=re.MULTILINE,
     )
 
-    if new_status == "open":
-        # Just update in place
+    if new_status in ("open", "blocked"):
+        # Just update in place. `blocked` stays visible in the file but is
+        # excluded from firing (list_open/next_due act only on `open`), so an
+        # item genuinely waiting on a governor decision stops re-nagging weekly
+        # while remaining on the record.
         new_content = content[: match.start()] + updated_block + content[match.end() :]
     elif new_status == "resolved":
         # Move to ## Recently shipped
