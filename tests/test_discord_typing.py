@@ -89,7 +89,9 @@ def test_turn_wraps_call_chat_with_typing(monkeypatch):
 
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
     monkeypatch.setattr(da, "resolve_governor_public_key", lambda: "pk")
-    monkeypatch.setattr(da, "call_chat", lambda *a, **k: (events.append("chat"), "hi")[1])
+    monkeypatch.setattr(
+        da, "call_chat", lambda *a, **k: (events.append("chat"), "hi")[1]
+    )
     monkeypatch.setattr(da, "send_message", lambda *a, **k: events.append("send") or [])
 
     class _Spy:

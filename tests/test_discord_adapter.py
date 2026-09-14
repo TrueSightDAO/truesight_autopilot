@@ -6,6 +6,8 @@ pure helpers and the allowlist/identity gate (patched).
 
 from __future__ import annotations
 
+import httpx
+
 from app import discord_adapter as da
 
 
@@ -129,6 +131,7 @@ def test_author_role_fail_closed_on_error(monkeypatch):
 
 def _msg(user_id="999", content="hello", bot=False, channel="555"):
     return {
+        "id": "msg1",
         "channel_id": channel,
         "content": content,
         "author": {"id": user_id, "username": "u", "bot": bot},
@@ -202,3 +205,83 @@ def test_send_message_dry_run_does_not_post(monkeypatch):
     ids = da.send_message("555", "hello world")
     assert posted["n"] == 0
     assert ids == ["dry-run"]
+
+
+# --- working-ack reaction + timeout messaging --------------------------
+
+
+def test_api_treats_204_as_success(monkeypatch):
+    class _Resp:
+        status_code = 204
+        content = b""
+        text = ""
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(da, "_headers", lambda: {})
+    monkeypatch.setattr(da.httpx, "request", lambda *a, **k: _Resp())
+    assert da._api("PUT", "/x") == {}
+
+
+def test_add_reaction_dry_run_does_not_call_api(monkeypatch):
+    calls = {"n": 0}
+    monkeypatch.setattr(da.settings, "discord_dry_run", True)
+    monkeypatch.setattr(da, "_api", lambda *a, **k: calls.update(n=calls["n"] + 1))
+    assert da.add_reaction("555", "msg1") is False
+    assert calls["n"] == 0
+
+
+def test_add_reaction_puts_encoded_emoji_when_live(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(da.settings, "discord_dry_run", False)
+    monkeypatch.setattr(da, "_api", lambda m, p, *a, **k: seen.update(m=m, p=p) or {})
+    assert da.add_reaction("555", "msg1") is True
+    assert seen["m"] == "PUT"
+    assert seen["p"] == "/channels/555/messages/msg1/reactions/%E2%8F%B3/@me"
+
+
+def test_remove_reaction_uses_delete(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(da.settings, "discord_dry_run", False)
+    monkeypatch.setattr(da, "_api", lambda m, p, *a, **k: seen.update(m=m, p=p) or {})
+    assert da.remove_reaction("555", "msg1") is True
+    assert seen["m"] == "DELETE"
+
+
+def test_call_chat_timeout_message_is_actionable(monkeypatch):
+    def boom(*a, **k):
+        raise httpx.TimeoutException("too slow")
+
+    monkeypatch.setattr(da.httpx, "post", boom)
+    monkeypatch.setattr(da, "create_jwt", lambda key: "t")
+    msg = da.call_chat("hi", "s", "KEY")
+    assert "unusually long" in msg
+    assert "unreachable" not in msg
+
+
+def test_call_chat_connection_error_still_says_unreachable(monkeypatch):
+    def boom(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(da.httpx, "post", boom)
+    monkeypatch.setattr(da, "create_jwt", lambda key: "t")
+    assert "unreachable" in da.call_chat("hi", "s", "KEY")
+
+
+def test_handle_message_governor_acks_reaction(monkeypatch):
+    acked = {}
+
+    def _ack(ch, mid, *a, **k):
+        acked["ch"] = ch
+        acked["mid"] = mid
+        return True
+
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
+    monkeypatch.setattr(da, "call_chat", lambda text, sid, key: "reply!")
+    monkeypatch.setattr(da, "send_message", lambda ch, txt: [])
+    monkeypatch.setattr(da, "remove_reaction", lambda *a, **k: True)
+    monkeypatch.setattr(da, "add_reaction", _ack)
+    da.handle_message(_msg(content="<@42> do a thing"), {"999"}, "KEY", "1", "42")
+    assert acked["ch"] == "555"
+    assert acked["mid"] == "msg1"

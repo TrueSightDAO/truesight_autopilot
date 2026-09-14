@@ -14,7 +14,10 @@ Flow per message (mirrors ``app/telegram_adapter.py``):
      DAO governor registry) so ``/chat-blocking`` knows it is the governor.
   3. POST the text to ``/chat-blocking`` with an ``X-Session-Id`` derived from
      (guild, channel) so each channel is its own conversation.
-  4. Send the assistant's reply back to the same channel.
+  4. Send the assistant's reply back to the same channel. A working-emoji
+     reaction acks receipt the moment a turn starts, and Discord's native
+     "typing..." bubble is refreshed for the turn's duration, so a slow turn is
+     never silent.
 
 Security model: the trust boundary is the Discord **user-ID allowlist plus the
 governor-sheet binding**. The adapter runs on the same host as the FastAPI
@@ -38,6 +41,7 @@ import logging
 import os
 import threading
 import time
+import urllib.parse
 from typing import Any, Callable
 
 import httpx
@@ -51,7 +55,12 @@ logger = logging.getLogger("autopilot.discord")
 _DISCORD_API = "https://discord.com/api/v10"
 _GATEWAY_QUERY = "?v=10&encoding=json"
 _MESSAGE_LIMIT = 2000  # Discord hard cap per message
-_CHAT_TIMEOUT = 180.0  # /chat-blocking can run tools + multiple LLM calls
+# /chat-blocking can run tools + multiple LLM calls; tool-heavy turns routinely
+# exceed three minutes, so give them headroom before the ADAPTER stops waiting.
+# This is a client-side wait ceiling, not a brain limit.
+_CHAT_TIMEOUT = 300.0
+# Reaction added the instant a governor turn is received ("working on it").
+_WORKING_EMOJI = "\u23f3"  # hourglass
 _TYPING_REFRESH_SECONDS = 8.0  # Discord's typing bubble expires after ~10s
 _USER_AGENT = "TrueSightDAO-Sophia (https://truesight.me, 1.0)"
 _ATTACH_DIR = "/tmp/discord_attachments"  # adapter + autopilot share the EC2 box / user
@@ -305,6 +314,7 @@ def _api(method: str, path: str, payload: dict[str, Any] | None = None) -> dict 
             resp = httpx.request(
                 method, url, headers=_headers(), json=payload, timeout=20.0
             )
+            # 204 = reaction add/remove and typing (no content)
             if resp.status_code in (200, 201, 204):
                 return resp.json() if resp.content else {}
             if resp.status_code == 429:
@@ -359,6 +369,39 @@ def send_message(channel_id: str | int, text: str) -> list[str]:
         if result and result.get("id"):
             ids.append(result["id"])
     return ids
+
+
+def add_reaction(
+    channel_id: str | int, message_id: str | int, emoji: str = _WORKING_EMOJI
+) -> bool:
+    """React to a message as an immediate "received" ack. Best-effort.
+
+    Returns True when the reaction was applied. Never raises; honours
+    DISCORD_DRY_RUN. A tool-heavy /chat-blocking turn can run for minutes, and
+    without an ack the governor cannot tell "received, working" from "dropped".
+    """
+    if not message_id:
+        return False
+    if settings.discord_dry_run:
+        logger.info("[DRY_RUN] would react %s to message %s", emoji, message_id)
+        return False
+    token = urllib.parse.quote(emoji, safe="")
+    path = f"/channels/{channel_id}/messages/{message_id}/reactions/{token}/@me"
+    return _api("PUT", path) is not None
+
+
+def remove_reaction(
+    channel_id: str | int, message_id: str | int, emoji: str = _WORKING_EMOJI
+) -> bool:
+    """Remove the working ack once the turn is done. Best-effort; never raises."""
+    if not message_id:
+        return False
+    if settings.discord_dry_run:
+        logger.info("[DRY_RUN] would unreact %s on message %s", emoji, message_id)
+        return False
+    token = urllib.parse.quote(emoji, safe="")
+    path = f"/channels/{channel_id}/messages/{message_id}/reactions/{token}/@me"
+    return _api("DELETE", path) is not None
 
 
 def post_typing(channel_id: str | int) -> None:
@@ -440,6 +483,16 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
             headers=headers,
             timeout=_CHAT_TIMEOUT,
         )
+    except httpx.TimeoutException:
+        # The brain is alive but the turn outran our wait, so the real reply is
+        # dropped. Say something TRUE and actionable -- "unreachable" would be
+        # misleading, and silence is worse.
+        logger.warning("chat-blocking timed out after %.0fs", _CHAT_TIMEOUT)
+        return (
+            "\u23f3 That turn is taking unusually long "
+            f"(> {int(_CHAT_TIMEOUT)}s). The brain is still working, but I "
+            "stopped waiting, so the reply was dropped \u2014 resend to retry."
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("chat-blocking request failed: %s", exc)
         return "\u26a0\ufe0f Autopilot is unreachable right now \u2014 please retry."
@@ -470,6 +523,7 @@ def handle_message(
     user_id = str(author.get("id") or "")
     username = author.get("global_name") or author.get("username") or user_id
     channel_id = str(data.get("channel_id") or "")
+    message_id = str(data.get("id") or "")
     raw = _extract_message_text(data)
     text = strip_bot_mention(raw, bot_id)
     if not text:
@@ -513,11 +567,14 @@ def handle_message(
         user_id,
         channel_id,
     )
-    # Show "Sophia is typing..." for the duration of the turn; the bubble is
-    # refreshed every _TYPING_REFRESH_SECONDS and cleared once the reply is sent.
+    # Ack receipt immediately (hourglass reaction) so a slow turn is never
+    # silent, and show Discord's native "typing..." bubble refreshed for the
+    # duration of the turn.
+    add_reaction(channel_id, message_id)
     with TypingIndicator(channel_id):
         reply = call_chat(text, session_id, public_key)
         send_message(channel_id, reply)
+    remove_reaction(channel_id, message_id)
 
 
 def _handle_message_safe(
