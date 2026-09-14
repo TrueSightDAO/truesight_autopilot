@@ -124,22 +124,47 @@ def _generate_code() -> tuple[str, str]:
 
 # ── Google Sheets helpers ──────────────────────────────────────────────────
 
+_SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-def _get_sheets_service():
-    """Get an authenticated Google Sheets service."""
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
 
+def _resolve_sheets_credentials():
+    """Resolve Sheets credentials (read/write scope), or ``None``.
+
+    Precedence:
+    1. Optional JSON-in-env override ``GOOGLE_SHEETS_CREDENTIALS`` (portability).
+    2. The shared loader in ``app.tools.google_creds`` — the working default,
+       identical to every other Sheets call in the app.
+
+    Never raises: any error degrades to ``None``.
+    """
     creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
-    if not creds_json:
-        logger.warning("GOOGLE_SHEETS_CREDENTIALS not set — sheets operations disabled")
+    if creds_json:
+        try:
+            from google.oauth2 import service_account  # type: ignore
+
+            creds_dict = json.loads(creds_json)
+            return service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=_SHEETS_SCOPES
+            )
+        except Exception as exc:  # noqa: BLE001 -- fall back to the shared loader
+            logger.warning("GOOGLE_SHEETS_CREDENTIALS override invalid: %s", exc)
+    try:
+        from .tools.google_creds import load_credentials
+
+        return load_credentials(None, _SHEETS_SCOPES)
+    except Exception as exc:  # noqa: BLE001 -- never raise out of credential lookup
+        logger.error("Shared Google credential loader failed: %s", exc)
         return None
 
-    creds_dict = json.loads(creds_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
-    )
+
+def _get_sheets_service():
+    """Get an authenticated Google Sheets service, or ``None``."""
+    from googleapiclient.discovery import build
+
+    credentials = _resolve_sheets_credentials()
+    if credentials is None:
+        logger.warning("Google Sheets credentials unavailable — sheets operations disabled")
+        return None
     return build("sheets", "v4", credentials=credentials)
 
 
