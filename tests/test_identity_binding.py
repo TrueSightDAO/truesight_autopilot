@@ -244,3 +244,48 @@ class TestCheckBindingStatus:
             }
             result = check_binding_status(12345)
             assert result["bound"] is False
+
+
+# ── Credential resolution (shared loader) ──────────────────────────────────
+
+
+class TestCredentialResolution:
+    def test_resolve_sheets_credentials_uses_shared_loader(self, monkeypatch):
+        # No JSON-in-env override -> the shared google_creds loader is default.
+        monkeypatch.delenv("GOOGLE_SHEETS_CREDENTIALS", raising=False)
+        from app.tools import google_creds
+
+        sentinel = object()
+        seen = {}
+
+        def fake_load(service_account_name=None, scopes=None):
+            seen["scopes"] = scopes
+            return sentinel
+
+        monkeypatch.setattr(google_creds, "load_credentials", fake_load)
+        assert identity_binding._resolve_sheets_credentials() is sentinel
+        assert seen["scopes"] == identity_binding._SHEETS_SCOPES
+
+    def test_get_sheets_service_none_when_creds_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            identity_binding, "_resolve_sheets_credentials", lambda: None
+        )
+        assert identity_binding._get_sheets_service() is None
+
+    def test_get_sheets_service_uses_resolved_creds(self, monkeypatch):
+        sentinel = object()
+        monkeypatch.setattr(
+            identity_binding, "_resolve_sheets_credentials", lambda: sentinel
+        )
+        fake_service = object()
+        with patch(
+            "googleapiclient.discovery.build", return_value=fake_service
+        ) as build_mock:
+            assert identity_binding._get_sheets_service() is fake_service
+        assert build_mock.call_args[1]["credentials"] is sentinel
+
+    def test_find_contributor_row_none_when_creds_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            identity_binding, "_resolve_sheets_credentials", lambda: None
+        )
+        assert identity_binding._find_contributor_row("gary@test.com") is None
