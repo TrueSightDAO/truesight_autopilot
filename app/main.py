@@ -2325,6 +2325,17 @@ def _run_tool_sync(
             return "Error: pr_number is required."
         gh = GitHubClient()
         result = gh.merge_pr(repo_name, int(pr_number), merge_method)
+        try:
+            from .repo_access_audit import record_repo_access
+
+            record_repo_access(
+                repo=repo_name,
+                action="merge_pr",
+                result="success" if result.get("merged") else "failure",
+                detail=f"pr={pr_number} method={merge_method}",
+            )
+        except Exception:  # fail-soft: never break the merge over an audit hiccup
+            pass
         if result["merged"]:
             return f"✅ PR #{pr_number} on {repo_name} merged successfully (sha: {result['sha']}). {result['message']}"
         return f"❌ Failed to merge PR #{pr_number} on {repo_name}: {result['message']}"

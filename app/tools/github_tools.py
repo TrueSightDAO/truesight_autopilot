@@ -216,7 +216,20 @@ def create_repo(repo: str, private: bool = True, description: str = "") -> dict[
         )
         resp.raise_for_status()
         data = resp.json()
-        return {"status": "success", "repo": repo, "org": org, "url": data.get("html_url", "")}
+        _url = data.get("html_url", "")
+        try:
+            from ..repo_access_audit import record_repo_access
+
+            record_repo_access(
+                repo=repo,
+                action="create_repo",
+                result="success",
+                evidence_url=_url,
+                detail=f"org={org} private={private}",
+            )
+        except Exception:  # fail-soft
+            pass
+        return {"status": "success", "repo": repo, "org": org, "url": _url}
     except httpx.HTTPStatusError as exc:
         return {
             "status": "error",
@@ -307,6 +320,17 @@ def _merge_pr_handler(args: dict, ctx: dict) -> str:
         return "Error: pr_number is required."
     gh = GitHubClient()
     result = gh.merge_pr(repo_name, int(pr_number), merge_method)
+    try:
+        from ..repo_access_audit import record_repo_access
+
+        record_repo_access(
+            repo=repo_name,
+            action="merge_pr",
+            result="success" if result.get("merged") else "failure",
+            detail=f"pr={pr_number} method={merge_method}",
+        )
+    except Exception:  # fail-soft
+        pass
     if result["merged"]:
         return f"✅ PR #{pr_number} on {repo_name} merged successfully (sha: {result['sha']}). {result['message']}"
     return f"❌ Failed to merge PR #{pr_number} on {repo_name}: {result['message']}"
@@ -327,6 +351,17 @@ def _mark_pr_ready_handler(args: dict, ctx: dict) -> str:
         return _json.dumps({"status": "error", "reason": "pr_number is required"})
     gh = GitHubClient()
     result = gh.mark_pr_ready_for_review(repo_name, int(pr_number))
+    try:
+        from ..repo_access_audit import record_repo_access
+
+        record_repo_access(
+            repo=repo_name,
+            action="mark_pr_ready",
+            result="success",
+            detail=f"pr={pr_number}",
+        )
+    except Exception:  # fail-soft
+        pass
     return _json.dumps(result, indent=2)
 
 

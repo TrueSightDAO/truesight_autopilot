@@ -118,6 +118,17 @@ def ship_pr(repo: str, pr_number: int) -> dict:
     if not green:
         return {"ok": False, "message": f"Not shipping {repo}#{pr_number} — {summary}."}
     res = GitHubClient().merge_pr(repo, pr_number, merge_method="squash")
+    try:
+        from .repo_access_audit import record_repo_access
+
+        record_repo_access(
+            repo=repo,
+            action="merge_pr",
+            result="success" if res.get("merged") else "failure",
+            detail=f"pr={pr_number} beta-ship",
+        )
+    except Exception:  # fail-soft
+        pass
     if res.get("merged"):
         return {
             "ok": True,
