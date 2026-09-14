@@ -47,6 +47,7 @@ from typing import Any, Callable
 
 import httpx
 
+from . import discord_resume_registry
 from .auth import create_jwt
 from .config import settings
 from .governor_registry import load_governors
@@ -72,12 +73,14 @@ _ATTACH_DIR = "/tmp/discord_attachments"  # adapter + autopilot share the EC2 bo
 _INTENT_GUILDS = 1 << 0
 _INTENT_GUILD_MEMBERS = 1 << 1
 _INTENT_GUILD_MESSAGES = 1 << 9
+_INTENT_GUILD_MESSAGE_REACTIONS = 1 << 10  # MESSAGE_REACTION_ADD (go-signal)
 _INTENT_DIRECT_MESSAGES = 1 << 12
 _INTENT_MESSAGE_CONTENT = 1 << 15
 GATEWAY_INTENTS = (
     _INTENT_GUILDS
     | _INTENT_GUILD_MEMBERS
     | _INTENT_GUILD_MESSAGES
+    | _INTENT_GUILD_MESSAGE_REACTIONS
     | _INTENT_DIRECT_MESSAGES
     | _INTENT_MESSAGE_CONTENT
 )
@@ -436,6 +439,9 @@ def send_message(channel_id: str | int, text: str) -> list[str]:
         result = _api("POST", f"/channels/{channel_id}/messages", {"content": chunk})
         if result and result.get("id"):
             ids.append(result["id"])
+            # Flag the posted reply as resume-awaiting so a later standard-emoji
+            # reaction from an authorized governor acts as a go-signal (Tier-2 #6).
+            discord_resume_registry.mark_resume_awaiting(result["id"], channel_id, body)
     return ids
 
 
@@ -849,6 +855,13 @@ def edit_message_text(channel_id: str | int, message_id: str | int, text: str) -
         f"/channels/{channel_id}/messages/{message_id}",
         {"content": (text or "")[:_MESSAGE_LIMIT]},
     )
+    if result is not None:
+        # An edited message KEEPS its id, so when the final reply is delivered by
+        # editing the status message, flag that id for the reaction go-signal
+        # (the send_message hook alone would miss the edit path -- mirrors the
+        # Telegram PR #336 fix).  Unconditional, as on Telegram: any positive
+        # emoji reaction on any of her messages means "continue".
+        discord_resume_registry.mark_resume_awaiting(message_id, channel_id, text)
     return result is not None
 
 
@@ -1178,6 +1191,166 @@ def handle_message(
         remove_reaction(channel_id, message_id)
 
 
+# ── Emoji-reaction go-signal (Tier-2 parity #6) ─────────────────────────────────
+# A standard-emoji reaction from an AUTHORIZED governor on a reply we flagged
+# resume-awaiting acts as a go-signal, exactly as if it had been typed. Direct
+# port of app/telegram_adapter.py's reaction path; Discord delivers the same
+# gateway event shape ({"user_id", "channel_id", "message_id", "emoji"}).
+def discord_reaction_verdict(
+    emoji: dict[str, Any] | None,
+    blocked: list[str] | None = None,
+) -> str:
+    """Classify a Discord reaction emoji object.
+
+    Returns one of:
+      "go"      -- a standard (unicode) emoji present and not on the block list
+      "blocked" -- a blocked emoji (default: thumbs-down) is present
+      "custom"  -- a custom server emoji (ignored, never a go)
+      "none"    -- empty / missing / unparseable emoji
+
+    Discord shape: ``{"id": null, "name": "👍"}`` for a unicode emoji (id
+    is null); a custom emoji carries a non-null ``id`` and is ignored.
+    """
+    if not isinstance(emoji, dict):
+        return "none"
+    if blocked is None:
+        blocked = settings.emoji_go_blocked
+    if emoji.get("id"):
+        return "custom"  # custom emoji -- never a go
+    name = emoji.get("name")
+    if not isinstance(name, str) or not name:
+        return "none"
+    if name in blocked:
+        return "blocked"
+    return "go"
+
+
+def _reaction_reactor_authorized(user_id: str | int, allowed: set[str]) -> bool:
+    """The same security gate a text go-signal sender must pass: env allowlist
+    membership, or a verified governor via the sheet binding -> Governors cache."""
+    try:
+        return author_role(user_id, allowed) == "governor"
+    except Exception:  # noqa: BLE001 -- never let an error open the gate
+        return False
+
+
+def handle_reaction(
+    data: dict[str, Any],
+    allowed: set[str],
+    public_key: str | None,
+    guild_id: str,
+    bot_id: str,
+) -> None:
+    """Process one MESSAGE_REACTION_ADD event.
+
+    Logs the reaction + the authorized/go verdict, and -- when an AUTHORIZED
+    governor gives a "go" verdict on a resume-awaiting message -- dispatches a
+    synthesized go-signal through the SAME message-turn path a typed go-signal
+    uses. Reactions from bots (including our own hourglass ack) are ignored.
+    """
+    user_id = str(data.get("user_id") or "")
+    channel_id = str(data.get("channel_id") or "")
+    message_id = str(data.get("message_id") or "")
+    emoji = data.get("emoji") or {}
+    if not user_id or not channel_id or not message_id:
+        logger.info("MESSAGE_REACTION_ADD ignored: incomplete event %s", data)
+        return
+    if bot_id and user_id == str(bot_id):
+        return  # our own hourglass ack -- never a go-signal
+    emoji_name = emoji.get("name") or ""
+    verdict = discord_reaction_verdict(emoji)
+    authorized = _reaction_reactor_authorized(user_id, allowed)
+    logger.info(
+        "MESSAGE_REACTION_ADD channel=%s msg=%s user=%s emoji=%r verdict=%s "
+        "authorized=%s",
+        channel_id,
+        message_id,
+        user_id,
+        emoji_name,
+        verdict,
+        authorized,
+    )
+    if authorized and verdict == "go":
+        _maybe_resume_from_reaction(
+            channel_id,
+            message_id,
+            user_id,
+            emoji_name,
+            allowed,
+            public_key,
+            guild_id,
+            bot_id,
+        )
+
+
+def _maybe_resume_from_reaction(
+    channel_id: str,
+    message_id: str,
+    user_id: str,
+    emoji: str,
+    allowed: set[str],
+    public_key: str | None,
+    guild_id: str,
+    bot_id: str,
+) -> None:
+    """Turn an authorized "go" reaction on a resume-awaiting message into a
+    synthesized go-signal, exactly as if the governor had typed it.
+
+    The registry lookup is CONSUMING -- a successful resume marks the entry used,
+    so one reaction can never trigger two turns. No resume happens when the
+    message is not resume-awaiting, or no governor identity is configured.
+    """
+    entry = discord_resume_registry.lookup(message_id)
+    if not entry:
+        return  # not resume-awaiting -> never a resume trigger
+    resumed_channel = str(entry.get("channel_id") or channel_id)
+    if public_key is None:
+        send_message(
+            resumed_channel, "⚠️ No governor identity configured — cannot resume."
+        )
+        return
+    resume_text = (entry.get("text") or "").strip()
+    suffix = f" — original resume text: {resume_text[:200]}" if resume_text else ""
+    go_text = f"[emoji-go: {emoji} from user {user_id}] go for it{suffix}"
+    logger.info(
+        "emoji go-signal: msg=%s channel=%s emoji=%r -> dispatching turn",
+        message_id,
+        resumed_channel,
+        emoji,
+    )
+    # Reuse the exact per-message turn path (same gate, ack, typing + progress
+    # streaming) by handing handle_message a synthesized governor payload. The
+    # reacting user already passed the authorization gate above.
+    synthetic = {
+        "id": message_id,
+        "channel_id": resumed_channel,
+        "content": go_text,
+        "author": {"id": user_id, "username": user_id, "bot": False},
+    }
+    try:
+        handle_message(synthetic, allowed, public_key, guild_id, bot_id)
+    except Exception:  # noqa: BLE001 -- never let a reaction crash the loop
+        logger.exception("emoji go-signal dispatch failed")
+        send_message(
+            resumed_channel,
+            "⚠️ Failed to resume after your reaction — please retype the go-signal.",
+        )
+
+
+def _handle_reaction_safe(
+    data: dict[str, Any],
+    allowed: set[str],
+    public_key: str | None,
+    guild_id: str,
+    bot_id: str,
+) -> None:
+    """Wrap handle_reaction for background-thread dispatch."""
+    try:
+        handle_reaction(data, allowed, public_key, guild_id, bot_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("handle_reaction crashed")
+
+
 def _handle_message_safe(
     data: dict[str, Any],
     allowed: set[str],
@@ -1214,6 +1387,7 @@ async def _gateway_once(
     guild_id: str,
     bot_id: str,
     dispatch: Callable[[dict[str, Any]], None],
+    dispatch_reaction: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     import websockets
 
@@ -1240,8 +1414,11 @@ async def _gateway_once(
                 event = json.loads(raw)
                 if event.get("s") is not None:
                     seq["n"] = event["s"]
-                if event.get("t") == "MESSAGE_CREATE":
+                etype = event.get("t")
+                if etype == "MESSAGE_CREATE":
                     dispatch(event["d"])
+                elif etype == "MESSAGE_REACTION_ADD" and dispatch_reaction is not None:
+                    dispatch_reaction(event["d"])
         finally:
             hb.cancel()
 
@@ -1252,12 +1429,15 @@ async def _gateway_loop(
     guild_id: str,
     bot_id: str,
     dispatch: Callable[[dict[str, Any]], None],
+    dispatch_reaction: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     backoff = 5.0
     while True:
         try:
             url = _gateway_url()
-            await _gateway_once(url, allowed, public_key, guild_id, bot_id, dispatch)
+            await _gateway_once(
+                url, allowed, public_key, guild_id, bot_id, dispatch, dispatch_reaction
+            )
             logger.warning("Discord gateway closed; reconnecting in %.0fs", backoff)
         except Exception as exc:  # noqa: BLE001 -- reconnect on any failure
             logger.warning(
@@ -1317,7 +1497,20 @@ def run() -> None:
                 _handle_message_safe, payload, allowed, public_key, gid, bot_id
             )
 
-        asyncio.run(_gateway_loop(allowed, public_key, guild_id, bot_id, dispatch))
+        def dispatch_reaction(payload: dict[str, Any]) -> None:
+            # A reaction event may omit guild_id; default to the configured guild.
+            gid = str(payload.get("guild_id") or guild_id)
+            if guild_id and gid != guild_id:
+                return  # ignore other guilds
+            executor.submit(
+                _handle_reaction_safe, payload, allowed, public_key, gid, bot_id
+            )
+
+        asyncio.run(
+            _gateway_loop(
+                allowed, public_key, guild_id, bot_id, dispatch, dispatch_reaction
+            )
+        )
 
 
 def main() -> None:
