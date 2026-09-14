@@ -462,7 +462,8 @@ def _start_email_watch_if_enabled() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global email_poller, aws_monitor
+    global email_poller, aws_monitor, _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
     logger.info(
         "LIFECYCLE: Autopilot starting up — pid=%d ppid=%d", os.getpid(), os.getppid()
     )
@@ -3529,6 +3530,12 @@ def _auto_name_session(
         _save_session_index(public_key, sid, name)
 
 
+# The main asyncio loop running the FastAPI app, captured at startup so
+# background helpers can schedule coroutines thread-safely (see
+# _schedule_pending_sync). ``None`` until lifespan() runs (tests / CLI).
+_MAIN_LOOP: asyncio.AbstractEventLoop | None = None
+
+
 def _pending_file(public_key: str) -> Path:
     import hashlib
 
@@ -3558,11 +3565,47 @@ def _load_pending(public_key: str) -> list[dict]:
     return []
 
 
+def _schedule_pending_sync(public_key: str, items: list[dict]) -> None:
+    """Best-effort, non-blocking mirror of pending approvals to GitHub.
+
+    Safe from ANY thread. ``_save_pending`` is reachable from a worker thread
+    (``_run_tool_sync`` runs under ``asyncio.to_thread``), where a bare
+    ``asyncio.create_task()`` raises ``RuntimeError: no running event loop``
+    because there is no loop in that thread. So we dispatch the coroutine onto
+    the main app loop via ``run_coroutine_threadsafe`` when off-loop, fall back
+    to the loop running in this thread, and finally to a one-shot loop so the
+    coroutine still executes under tests / CLI. The coroutine itself
+    (``_sync_pending_to_github``) is best-effort and swallows its own errors.
+    """
+    coro = _sync_pending_to_github(public_key, items)
+    main_loop = _MAIN_LOOP
+    if main_loop is not None and main_loop.is_running():
+        try:
+            if asyncio.get_running_loop() is main_loop:
+                main_loop.create_task(coro)
+                return
+        except RuntimeError:
+            pass  # no loop in THIS thread -> schedule cross-thread below
+        asyncio.run_coroutine_threadsafe(coro, main_loop)
+        return
+    # No captured main loop (tests / CLI): use this thread's loop if there is
+    # one, else run the coroutine to completion on a throwaway loop.
+    try:
+        asyncio.create_task(coro)
+        return
+    except RuntimeError:
+        pass
+    try:
+        asyncio.run(coro)
+    except Exception:
+        pass
+
+
 def _save_pending(public_key: str, items: list[dict]) -> None:
     pf = _pending_file(public_key)
     pf.write_text(json.dumps(items, indent=2), encoding="utf-8")
-    # Mirror to GitHub for durability
-    asyncio.create_task(_sync_pending_to_github(public_key, items))
+    # Mirror to GitHub for durability (thread-safe; see _schedule_pending_sync)
+    _schedule_pending_sync(public_key, items)
 
 
 def _add_pending(public_key: str, proposal: dict) -> None:
