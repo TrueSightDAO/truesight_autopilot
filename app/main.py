@@ -4714,6 +4714,16 @@ async def _chat_blocking_turn(
             # Sanitise after each tool round — catches corruption from
             # concurrent session saves during the round
             _sanitise_tool_messages(history)
+            # Write-through after each full tool round (Discord memory fix
+            # 2026-09-14): the streaming path (_stream_chat) persists every
+            # turn, but this blocking path only wrote at role-selection time,
+            # so a tool-heavy `/chat-blocking` turn (the Discord adapter's
+            # path) never landed on disk. On any adapter restart the next
+            # message reloaded a transcript containing only the role line and
+            # the turn was forgotten — the "missing memory between messages
+            # in the same Discord channel" symptom. Persisting per round keeps
+            # disk == RAM so continuity survives a restart.
+            _log_session(session_id, history)
 
             # Graceful convergence backstop — same decision helpers the
             # streaming path uses, once per turn. Winds the turn down BEFORE
@@ -4778,6 +4788,12 @@ async def _chat_blocking_turn(
 
     history.append({"role": "assistant", "content": assistant_text})
     _sessions[session_id] = history
+    # Persist to disk (Discord memory fix 2026-09-14): parity with the
+    # streaming path's `_log_session` after its final assistant append. Without
+    # this the blocking path's in-memory history was never written, so a
+    # Discord channel's transcript stayed at message_count=1 (just the role
+    # line) and every subsequent message arrived with no prior context.
+    _log_session(session_id, history)
 
     response_data: dict[str, Any] = {"response": assistant_text}
     if proposal:
