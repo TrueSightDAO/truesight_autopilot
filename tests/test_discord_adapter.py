@@ -6,6 +6,8 @@ pure helpers and the allowlist/identity gate (patched).
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from app import discord_adapter as da
 
 
