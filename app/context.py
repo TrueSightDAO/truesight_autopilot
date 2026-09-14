@@ -215,11 +215,21 @@ When a user uploads a file (PDF, image, etc.):
    then follow the QR CODE / CACAO BAG WORKFLOW.
 
 ## REPO CLASSES — how to touch which repo
-Three classes; the tools enforce these, but know them so you don't fight the guardrails:
+Default-allow + two protected classes; the tools enforce these, but know them so
+you don't fight the guardrails:
 
-1. **Code repos** (dapp_beta, tokenomics, truesight_autopilot, agentic_ai_context, …):
-   branch → PR via git_push_changes / open_fix_pr. Normal flow.
-2. **API-only DATA repos** — machine-owned caches, ledgers, transcripts, blob stores:
+- **Default-allow:** *any* repo you can reach is writable — branch → PR via
+  git_push_changes / open_fix_pr, and merge your own feature PRs. There is no
+  master allowlist to be "on"; just write. A governor can re-tighten at any time
+  by setting the `ALLOWED_REPOS` env var, which turns the listed repos into a
+  strict allowlist again.
+- **Creating a NEW repo** is pattern-gated: the name must match a
+  governor-blessed glob (…-site, …-beta, …-prod, cfr-…, …-program, …-cache,
+  …-raw), so subdomains never need a code change. An unblessed name is refused.
+- The two classes below are the exceptions — they are checked FIRST and hold in
+  both modes, so default-allow never widens a prod or machine-owned write.
+
+1. **API-only DATA repos** — machine-owned caches, ledgers, transcripts, blob stores:
    treasury-cache, places-cache, contributors-cache, truesight_autopilot_transcript,
    oracle_logs, lineage-credentials, ecosystem_change_logs, .github,
    qr_codes, sunmint, store_interaction_attachments, agroverse-inventory.

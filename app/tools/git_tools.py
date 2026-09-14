@@ -339,7 +339,7 @@ TOOL_SPEC = ToolSpec(
         "properties": {
             "repo": {
                 "type": "string",
-                "description": "Repo name under TrueSightDAO (must be in the allowed list).",
+                "description": "Repo name under TrueSightDAO (default-allow; PRODUCTION and API-only machine-owned repos are refused).",
             },
             "branch": {
                 "type": "string",
