@@ -51,3 +51,12 @@ media_archive_daemon_config.yaml
 # Hand-rolled backup of the media-archive daemon config (untracked + unignored
 # = git clean -fd deletes it on deploy). Same class as the 2026-06-15 vault wipe.
 media_archive_daemon_config.yaml.bak-sr
+
+# Follow-up monitor runtime state. Written by the running loop on the box, so
+# it must SURVIVE a deploy (`git reset --hard` / `git clean -fd` respect
+# .gitignore). It lived at followups/state.json -- *tracked* -- until
+# 2026-09-14, so every deploy reset it to a stale snapshot and re-fired
+# resolved follow-ups (the warmup re-strike storm). Same class as the
+# 2026-06-15 vault wipe: a machine-owned file inside the deploy tree.
+data/followups_state.json
+followups/state.json

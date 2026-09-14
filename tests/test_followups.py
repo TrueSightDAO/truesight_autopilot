@@ -27,6 +27,11 @@ def _isolate_state_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     """
     monkeypatch.setattr("app.followups._STATE_DIR", tmp_path)
     monkeypatch.setattr("app.followups._STATE_FILE", tmp_path / "state.json")
+    # Neutralise the legacy (pre-migration) fallback too, so a stray
+    # followups/state.json in the working tree can't leak into a test.
+    monkeypatch.setattr(
+        "app.followups._LEGACY_STATE_FILE", tmp_path / "legacy-state.json"
+    )
 
 
 @pytest.fixture
@@ -278,6 +283,48 @@ class TestListOpen:
 
 
 # ── state sidecar tests ──────────────────────────────────────────────────
+
+
+class TestStateDirLocations:
+    """The sidecar must live OUTSIDE the tracked deploy tree (2026-09-14 fix)."""
+
+    def test_default_dir_is_not_the_tracked_legacy_dir(self, monkeypatch):
+        monkeypatch.delenv("TRUESIGHT_FOLLOWUP_STATE_DIR", raising=False)
+        from app.followups import _resolve_state_dir, _REPO_ROOT
+
+        resolved = _resolve_state_dir()
+        # Never the old tracked location -- a deploy reset would clobber it.
+        assert resolved != _REPO_ROOT / "followups"
+        assert resolved == _REPO_ROOT / "data"
+
+    def test_env_override_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRUESIGHT_FOLLOWUP_STATE_DIR", str(tmp_path / "state"))
+        from app.followups import _resolve_state_dir
+
+        assert _resolve_state_dir() == tmp_path / "state"
+
+    def test_load_state_falls_back_to_legacy(self, tmp_path, monkeypatch):
+        """A box mid-migration (durable file absent, legacy present) still loads."""
+        from app.followups import _load_state
+
+        monkeypatch.setattr("app.followups._STATE_FILE", tmp_path / "missing.json")
+        legacy = tmp_path / "legacy.json"
+        legacy.write_text('{"x": {"status": "resolved"}}')
+        monkeypatch.setattr("app.followups._LEGACY_STATE_FILE", legacy)
+
+        assert _load_state() == {"x": {"status": "resolved"}}
+
+    def test_durable_file_wins_over_legacy(self, tmp_path, monkeypatch):
+        from app.followups import _load_state
+
+        durable = tmp_path / "durable.json"
+        durable.write_text('{"a": 1}')
+        legacy = tmp_path / "legacy.json"
+        legacy.write_text('{"a": 2}')
+        monkeypatch.setattr("app.followups._STATE_FILE", durable)
+        monkeypatch.setattr("app.followups._LEGACY_STATE_FILE", legacy)
+
+        assert _load_state() == {"a": 1}
 
 
 class TestStateSidecar:

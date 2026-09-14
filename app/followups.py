@@ -2,7 +2,9 @@
 Durable follow-up registry — parser + state sidecar.
 
 Parses ```followup blocks from OPEN_FOLLOWUPS.md (leaves all prose
-untouched), manages mutable scheduling state in followups/state.json,
+untouched), manages mutable scheduling state in a git-ignored, non-deploy
+sidecar (`data/followups_state.json`; the legacy `followups/state.json`
+is still read as a migration fallback),
 and provides atomic read/write access for the follow-up comb loop.
 
 Schema (the fenced block in .md):
@@ -73,8 +75,32 @@ def _resolve_followups_md() -> Path:
 
 
 _FOLLOWUPS_MD = _resolve_followups_md()
-_STATE_DIR = _REPO_ROOT / "followups"
-_STATE_FILE = _STATE_DIR / "state.json"
+
+
+def _resolve_state_dir() -> Path:
+    """Directory that holds the mutable follow-up state sidecar.
+
+    Runtime state must live OUTSIDE the tracked deploy tree: the box's deploy
+    runs ``git reset --hard`` + ``git clean -fd``, so a *tracked* state file is
+    reset to its stale committed snapshot on every deploy -- silently
+    un-resolving follow-ups and re-firing them each hourly pass (the 2026-09-14
+    ``warmup-conversion-30day-readout`` re-strike storm). ``data/`` is
+    git-ignored for this file and survives both reset and clean (same class as
+    ``data/attention_watchdog_state.json``). Override with
+    ``TRUESIGHT_FOLLOWUP_STATE_DIR`` (e.g. a non-deploy volume).
+    """
+    override = os.getenv("TRUESIGHT_FOLLOWUP_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
+    return _REPO_ROOT / "data"
+
+
+_STATE_DIR = _resolve_state_dir()
+_STATE_FILE = _STATE_DIR / "followups_state.json"
+# Pre-2026-09-14 location -- a *tracked* file that each deploy reset to its
+# stale committed content. Read-only fallback so a box mid-migration still sees
+# its state; never written.
+_LEGACY_STATE_FILE = _REPO_ROOT / "followups" / "state.json"
 
 # ── regex ────────────────────────────────────────────────────────────────
 
@@ -88,21 +114,27 @@ _FOLLOWUP_BLOCK_RE = re.compile(
 
 
 def _ensure_state_dir() -> None:
-    """Create followups/ directory if it doesn't exist."""
+    """Create the sidecar state directory if it doesn't exist."""
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_state() -> dict[str, Any]:
-    """Load mutable scheduling state from disk. Returns {} on first run."""
-    if not _STATE_FILE.exists():
-        return {}
-    raw = _STATE_FILE.read_text(encoding="utf-8")
-    if not raw.strip():
-        return {}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+    """Load mutable scheduling state from disk. Returns {} on first run.
+
+    Reads the durable, non-deploy location first, then the legacy tracked path
+    (pre-2026-09-14) as a migration fallback.
+    """
+    for path in (_STATE_FILE, _LEGACY_STATE_FILE):
+        if not path.exists():
+            continue
+        raw = path.read_text(encoding="utf-8")
+        if not raw.strip():
+            continue
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+    return {}
 
 
 def _write_state(state: dict[str, Any]) -> None:
@@ -251,7 +283,7 @@ def _is_terminally_closed(entry: Any) -> bool:
 def list_open() -> list[dict[str, Any]]:
     """Return follow-ups open in BOTH the .md and the state sidecar.
 
-    The sidecar (``followups/state.json``) is authoritative for terminal
+    The sidecar (``data/followups_state.json``) is authoritative for terminal
     status: an entry whose sidecar records ``resolved``/``aborted`` is
     excluded even when its .md block still reads ``status: open``. Without
     this, a resync that restores the .md to ``open`` re-fires the follow-up
