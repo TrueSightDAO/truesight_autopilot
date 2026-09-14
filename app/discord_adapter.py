@@ -69,6 +69,27 @@ _TYPING_REFRESH_SECONDS = 8.0  # Discord's typing bubble expires after ~10s
 _USER_AGENT = "TrueSightDAO-Sophia (https://truesight.me, 1.0)"
 _ATTACH_DIR = "/tmp/discord_attachments"  # adapter + autopilot share the EC2 box / user
 
+# Per-channel dispatch locks (parity with Telegram's `_thread_dispatch_lock`).
+# Serialize the *turn* within one (guild, channel) so two governor messages or
+# two reactions can never run overlapping turns on the same session id. Message
+# text extraction and attachment ingest run BEFORE the lock, so they still
+# parallelize -- only the turn is serialized. See app/telegram_adapter.py
+# (`_thread_dispatch_lock`) and SOPHIA_THREAD_CONCURRENCY_PLAN.md.
+_channel_dispatch_locks: dict[str, threading.Lock] = {}
+_channel_dispatch_guard = threading.Lock()
+
+
+def _channel_dispatch_lock(channel_id: str | int) -> threading.Lock:
+    """Return the stable, per-channel turn lock for ``channel_id``."""
+    key = str(channel_id)
+    with _channel_dispatch_guard:
+        lock = _channel_dispatch_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _channel_dispatch_locks[key] = lock
+        return lock
+
+
 # Gateway intents (bit flags). We only ask for what we use.
 _INTENT_GUILDS = 1 << 0
 _INTENT_GUILD_MEMBERS = 1 << 1
@@ -1181,10 +1202,15 @@ def handle_message(
         prompt = text
         if attachments:
             prompt = _ingest_attachments(attachments, channel_id, session_id, text)
-        with TypingIndicator(channel_id):
-            reply, shown = call_chat_with_progress(
-                channel_id, prompt, session_id, public_key
-            )
+        # Serialize the TURN per channel (parity with Telegram's
+        # `_thread_dispatch_lock`): the hourglass ack above already fired, so a
+        # queued turn still reads as "received", but two governor messages in
+        # one channel can never run overlapping turns on the same session.
+        with _channel_dispatch_lock(channel_id):
+            with TypingIndicator(channel_id):
+                reply, shown = call_chat_with_progress(
+                    channel_id, prompt, session_id, public_key
+                )
         if not shown:
             send_message(channel_id, reply)
     finally:

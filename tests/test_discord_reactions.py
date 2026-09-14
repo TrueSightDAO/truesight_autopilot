@@ -184,3 +184,149 @@ def test_edit_message_text_flags_resume_awaiting(tmp_path, monkeypatch):
     monkeypatch.setattr(da, "_api", lambda m, p, payload=None: {"id": "EDITED"})
     assert da.edit_message_text("c1", "EDITED", "final answer") is True
     assert drr.is_resume_awaiting("EDITED") is True
+
+
+# ── per-channel dispatch lock (parity with Telegram _thread_dispatch_lock) ────
+
+
+def test_channel_dispatch_lock_is_stable_and_per_channel():
+    """Same channel -> same Lock object; different channel -> different Lock."""
+    a1 = da._channel_dispatch_lock("c1")
+    a2 = da._channel_dispatch_lock("c1")
+    b = da._channel_dispatch_lock("c2")
+    assert a1 is a2  # stable identity across calls
+    assert a1 is not b  # isolated per channel
+    # str/int for the same id resolve to the same lock (same session key)
+    assert da._channel_dispatch_lock(555) is da._channel_dispatch_lock("555")
+
+
+def test_handle_message_serializes_turns_same_channel(monkeypatch):
+    """Two governor messages in ONE channel must never run overlapping turns.
+
+    Regression guard for the divergence found 2026-09-14: without the lock the
+    ThreadPoolExecutor (max_workers=8) ran 4 concurrent turns on the same
+    ``dc:{guild}:{channel}`` session. Telegram serializes per (chat, thread);
+    Discord must match.
+    """
+    import threading
+    import time
+
+    state = {"active": 0, "peak": 0}
+    guard = threading.Lock()
+
+    def slow_turn(*_a, **_k):
+        with guard:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.15)  # long enough that an unguarded overlap is certain
+        with guard:
+            state["active"] -= 1
+        return "reply", True
+
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
+    monkeypatch.setattr(da, "call_chat_with_progress", slow_turn)
+    monkeypatch.setattr(da, "add_reaction", lambda *a, **k: None)
+    monkeypatch.setattr(da, "remove_reaction", lambda *a, **k: None)
+    monkeypatch.setattr(da, "send_message", lambda *a, **k: None)
+    monkeypatch.setattr(da.settings, "discord_dry_run", False)
+
+    class _NoTyping:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(da, "TypingIndicator", _NoTyping)
+
+    def one(i):
+        da.handle_message(
+            {
+                "id": f"m{i}",
+                "channel_id": "CHAN",
+                "content": f"<@42> go {i}",
+                "author": {"id": "999", "username": "gary", "bot": False},
+            },
+            {"999"},
+            "KEY",
+            "1",
+            "42",
+        )
+
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["peak"] == 1, f"turns overlapped (peak={state['peak']})"
+
+
+def test_handle_message_parallel_across_channels(monkeypatch):
+    """Lock is per channel: distinct channels still run concurrently."""
+    import threading
+    import time
+
+    state = {"active": 0, "peak": 0}
+    guard = threading.Lock()
+    barrier = threading.Barrier(2, timeout=5)
+
+    def slow_turn(*_a, **_k):
+        with guard:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        try:
+            barrier.wait()  # both must be inside at once, or this raises
+        except threading.BrokenBarrierError:
+            pass
+        time.sleep(0.1)
+        with guard:
+            state["active"] -= 1
+        return "reply", True
+
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
+    monkeypatch.setattr(da, "call_chat_with_progress", slow_turn)
+    monkeypatch.setattr(da, "add_reaction", lambda *a, **k: None)
+    monkeypatch.setattr(da, "remove_reaction", lambda *a, **k: None)
+    monkeypatch.setattr(da, "send_message", lambda *a, **k: None)
+    monkeypatch.setattr(da.settings, "discord_dry_run", False)
+
+    class _NoTyping:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(da, "TypingIndicator", _NoTyping)
+
+    def one(i, chan):
+        da.handle_message(
+            {
+                "id": f"m{i}",
+                "channel_id": chan,
+                "content": f"<@42> go {i}",
+                "author": {"id": "999", "username": "gary", "bot": False},
+            },
+            {"999"},
+            "KEY",
+            "1",
+            "42",
+        )
+
+    threads = [
+        threading.Thread(target=one, args=(0, "C_A")),
+        threading.Thread(target=one, args=(1, "C_B")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["peak"] == 2, "distinct channels should NOT serialize each other"
