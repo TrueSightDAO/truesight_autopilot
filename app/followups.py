@@ -234,9 +234,36 @@ def get(id: str) -> dict[str, Any] | None:
     return None
 
 
+# Statuses that permanently close a follow-up. The state sidecar is the
+# authority for these: OPEN_FOLLOWUPS.md is a context mirror that gets reset
+# by checkout/resync, so a follow-up resolved in the sidecar but still reading
+# `status: open` in the .md must stay closed.
+_TERMINAL_STATUSES = frozenset({"resolved", "aborted"})
+
+
+def _is_terminally_closed(entry: Any) -> bool:
+    """True iff a sidecar state entry records a terminal (closed) status."""
+    if not isinstance(entry, dict):
+        return False
+    return str(entry.get("status") or "").strip().lower() in _TERMINAL_STATUSES
+
+
 def list_open() -> list[dict[str, Any]]:
-    """Return all follow-ups with status=open."""
-    return [f for f in parse_all() if f.get("status") == "open"]
+    """Return follow-ups open in BOTH the .md and the state sidecar.
+
+    The sidecar (``followups/state.json``) is authoritative for terminal
+    status: an entry whose sidecar records ``resolved``/``aborted`` is
+    excluded even when its .md block still reads ``status: open``. Without
+    this, a resync that restores the .md to ``open`` re-fires the follow-up
+    on every hourly pass -- re-spinning a Sophia turn forever (the
+    2026-09-14 ``warmup-conversion-30day-readout`` storm).
+    """
+    state = _load_state()
+    return [
+        f
+        for f in parse_all()
+        if f.get("status") == "open" and not _is_terminally_closed(state.get(f["id"]))
+    ]
 
 
 # ── state sidecar ────────────────────────────────────────────────────────
@@ -358,10 +385,13 @@ def set_status(id: str, new_status: str) -> bool:
                 + "\n"
             )
 
-    _write_md(new_content)
-
-    # Update state sidecar
+    # Record the transition in the sidecar FIRST. list_open()/next_due() treat
+    # a terminal sidecar status as authoritative, so the closure must land in
+    # durable local state even if the .md rewrite below is discarded by a
+    # read-only mirror or checkout resync (the 2026-09-14 re-strike storm).
     upsert_state(id, status=new_status)
+
+    _write_md(new_content)
 
     return True
 

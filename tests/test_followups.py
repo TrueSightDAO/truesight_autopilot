@@ -13,6 +13,22 @@ import pytest
 # ── fixtures ─────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every test in this module hermetic w.r.t. the state sidecar.
+
+    ``_load_state``/``_write_state`` touch ``app.followups._STATE_FILE``
+    directly via ``Path.exists()``/``read_text()``/``os.replace()``. The older
+    tests tried to redirect this with ``patch.object(Path, "resolve", ...)`` --
+    a no-op for those direct calls -- so they read AND overwrote the real,
+    committed ``followups/state.json``. That leaked a real ``status: resolved``
+    entry into ``TestNextDue`` (making ``list_open()`` drop it once the sidecar
+    became authoritative) and let other tests mutate the committed state.
+    """
+    monkeypatch.setattr("app.followups._STATE_DIR", tmp_path)
+    monkeypatch.setattr("app.followups._STATE_FILE", tmp_path / "state.json")
+
+
 @pytest.fixture
 def sample_md() -> str:
     """A realistic OPEN_FOLLOWUPS.md with prose + followup blocks."""
