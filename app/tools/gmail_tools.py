@@ -6,10 +6,13 @@ Six operations exposed to the model:
   snippets matching a Gmail search query.
 - ``gmail_read_message(message_id, account=None, format="text")`` — fetch a
   single message: headers + plain-text body.
-- ``gmail_send(to, subject, body, account=None, cc=None, bcc=None)`` — send a
-  plain-text email as the authenticated mailbox.
-- ``gmail_create_draft(to, subject, body, account=None, cc=None, bcc=None)`` —
-  create a draft (no send).
+- ``gmail_send(to, subject, body, account=None, cc=None, bcc=None,
+  in_reply_to=None, references=None, thread_id=None)`` — send a plain-text email
+  as the authenticated mailbox. The threading kwargs set the RFC-5322
+  ``In-Reply-To`` / ``References`` headers and the Gmail ``threadId`` so a reply
+  nests in the original conversation.
+- ``gmail_create_draft(..., in_reply_to=None, references=None, thread_id=None)``
+  — create a draft (no send), with the same threading support.
 - ``gmail_list_labels(account=None)`` — list label id/name/type for the
   mailbox.
 - ``gmail_apply_label(message_id, add_labels=None, remove_labels=None,
@@ -272,6 +275,7 @@ def gmail_read_message(
                 "subject": headers.get("Subject"),
                 "date": headers.get("Date"),
                 "message_id": headers.get("Message-ID"),
+                "references": headers.get("References"),
             },
             "body": body,
             "truncated": truncated,
@@ -290,6 +294,8 @@ def _build_raw_message(
     cc: str | None = None,
     bcc: str | None = None,
     attachment_path: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
 ) -> str:
     if attachment_path:
         msg = MIMEMultipart()
@@ -320,6 +326,11 @@ def _build_raw_message(
         msg["Cc"] = cc
     if bcc:
         msg["Bcc"] = bcc
+    # Threading headers (RFC 5322) so replies nest on the right conversation.
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
     return base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
 
@@ -331,6 +342,9 @@ def gmail_send(
     cc: str | None = None,
     bcc: str | None = None,
     attachment_path: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
+    thread_id: str | None = None,
 ) -> str:
     if not to or not subject:
         return _err("to and subject are required")
@@ -345,13 +359,18 @@ def gmail_send(
             cc=cc,
             bcc=bcc,
             attachment_path=attachment_path,
+            in_reply_to=in_reply_to,
+            references=references,
         )
     except FileNotFoundError as e:
         return _err(str(e), to=to, subject=subject)
     except Exception as e:
         return _err(str(e), to=to, subject=subject)
     try:
-        sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        send_body: dict = {"raw": raw}
+        if thread_id:
+            send_body["threadId"] = thread_id
+        sent = service.users().messages().send(userId="me", body=send_body).execute()
     except Exception as e:
         return _err(str(e), to=to, subject=subject)
     logger.info(
@@ -380,6 +399,9 @@ def gmail_create_draft(
     cc: str | None = None,
     bcc: str | None = None,
     attachment_path: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
+    thread_id: str | None = None,
 ) -> str:
     if not to or not subject:
         return _err("to and subject are required")
@@ -394,18 +416,23 @@ def gmail_create_draft(
             cc=cc,
             bcc=bcc,
             attachment_path=attachment_path,
+            in_reply_to=in_reply_to,
+            references=references,
         )
     except FileNotFoundError as e:
         return _err(str(e), to=to, subject=subject)
     except Exception as e:
         return _err(str(e), to=to, subject=subject)
     try:
+        msg_body: dict = {"raw": raw}
+        if thread_id:
+            msg_body["threadId"] = thread_id
         draft = (
             service.users()
             .drafts()
             .create(
                 userId="me",
-                body={"message": {"raw": raw}},
+                body={"message": msg_body},
             )
             .execute()
         )
@@ -564,6 +591,18 @@ TOOL_SPECS = [
                 },
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                "in_reply_to": {
+                    "type": "string",
+                    "description": "Message-ID of the email being replied to (sets the In-Reply-To header so the reply threads correctly).",
+                },
+                "references": {
+                    "type": "string",
+                    "description": "Space-separated Message-ID chain for the References header (keeps the reply in the same thread).",
+                },
+                "thread_id": {
+                    "type": "string",
+                    "description": "Gmail threadId to file the message under, so the sent mail nests in the existing conversation.",
+                },
                 "attachment_path": {
                     "type": "string",
                     "description": "Optional path to a file to attach (PDF, image, etc.). The filename is derived from the path.",
@@ -579,6 +618,9 @@ TOOL_SPECS = [
             cc=args.get("cc"),
             bcc=args.get("bcc"),
             attachment_path=args.get("attachment_path"),
+            in_reply_to=args.get("in_reply_to"),
+            references=args.get("references"),
+            thread_id=args.get("thread_id"),
         ),
     ),
     ToolSpec(
@@ -600,6 +642,18 @@ TOOL_SPECS = [
                 },
                 "cc": {"type": "string", "description": "Comma-separated CC list."},
                 "bcc": {"type": "string", "description": "Comma-separated BCC list."},
+                "in_reply_to": {
+                    "type": "string",
+                    "description": "Message-ID of the email being replied to (sets the In-Reply-To header so the reply threads correctly).",
+                },
+                "references": {
+                    "type": "string",
+                    "description": "Space-separated Message-ID chain for the References header (keeps the reply in the same thread).",
+                },
+                "thread_id": {
+                    "type": "string",
+                    "description": "Gmail threadId to file the message under, so the sent mail nests in the existing conversation.",
+                },
                 "attachment_path": {
                     "type": "string",
                     "description": "Optional path to a file to attach (PDF, image, etc.). The filename is derived from the path.",
@@ -615,6 +669,9 @@ TOOL_SPECS = [
             cc=args.get("cc"),
             bcc=args.get("bcc"),
             attachment_path=args.get("attachment_path"),
+            in_reply_to=args.get("in_reply_to"),
+            references=args.get("references"),
+            thread_id=args.get("thread_id"),
         ),
     ),
     ToolSpec(
