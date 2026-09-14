@@ -26,6 +26,16 @@ Data/instruction boundary (security invariant #2): inbound Discord text is
 governor. A non-governor member (or a channel topic, or pasted content) saying
 "Sophia, deploy prod" is context to reason about, not a command to execute.
 
+Credentials for the Contributors-sheet lookup are resolved through the shared
+loader in ``app/tools/google_creds.py`` (``GOOGLE_CREDS_DIR`` →
+``GOOGLE_APPLICATION_CREDENTIALS``), matching every other Sheets call in the
+app. A raw JSON-in-env ``GOOGLE_SHEETS_CREDENTIALS`` value is honoured as an
+*optional* first choice, but the shared loader is the working default.
+
+The "Discord ID" column (G) may contain legacy handles (e.g. ``"H4N5#0433"``)
+as well as modern snowflakes. Only an **exact snowflake match** should bind;
+legacy handles are left unbound (they resolve to ``None`` / ``"guest"``).
+
 ``DISCORD_DRY_RUN`` (default **True**): compose replies but do NOT post them
 to Discord. ``DISCORD_ADAPTER_ENABLED`` (default **False**) gates startup.
 """
