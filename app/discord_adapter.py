@@ -56,6 +56,8 @@ logger = logging.getLogger("autopilot.discord")
 _DISCORD_API = "https://discord.com/api/v10"
 _GATEWAY_QUERY = "?v=10&encoding=json"
 _MESSAGE_LIMIT = 2000  # Discord hard cap per message
+_DEPLOY_MARKER = "/tmp/.autopilot_deployed"
+_LAST_BRAIN_PROBE_ERROR = ""
 # /chat-blocking can run tools + multiple LLM calls; tool-heavy turns routinely
 # exceed three minutes, so give them headroom before the ADAPTER stops waiting.
 # This is a client-side wait ceiling, not a brain limit.
@@ -538,6 +540,90 @@ def log_observed_message(
         logger.warning("log_observed_message failed: %s", exc)
 
 
+def delete_message(channel_id: str | int, message_id: str | int) -> bool:
+    """Delete a message the bot posted. True on success."""
+    if not message_id or message_id == "dry-run":
+        return False
+    if settings.discord_dry_run:
+        return False
+    return _api("DELETE", f"/channels/{channel_id}/messages/{message_id}") is not None
+
+
+def _wait_for_brain(max_attempts: int = 5, backoff: float = 2.5) -> bool:
+    """Wait for the brain to be reachable (it may be mid deploy-restart), so a
+    brief restart is invisible instead of surfacing a connection-refused error.
+    Returns fast when the brain is already up."""
+    global _LAST_BRAIN_PROBE_ERROR
+    url = f"{settings.autopilot_chat_url.rstrip('/')}/health"
+    for attempt in range(max_attempts):
+        try:
+            resp = httpx.get(url, timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            _LAST_BRAIN_PROBE_ERROR = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "brain health probe attempt %d/%d failed: %s against %s",
+                attempt + 1,
+                max_attempts,
+                _LAST_BRAIN_PROBE_ERROR,
+                url,
+            )
+        else:
+            if resp.status_code == 200:
+                _LAST_BRAIN_PROBE_ERROR = ""
+                return True
+            _LAST_BRAIN_PROBE_ERROR = f"HTTP {resp.status_code} from /health"
+            logger.warning(
+                "brain health probe attempt %d/%d returned HTTP %d against %s",
+                attempt + 1,
+                max_attempts,
+                resp.status_code,
+                url,
+            )
+        if attempt < max_attempts - 1:
+            time.sleep(backoff)
+    return False
+
+
+def _brain_unavailable_message() -> str:
+    """A clear indicator instead of a raw Errno -- names a redeploy when one is
+    underway, a DOWN brain (connection refused), or a BUSY brain (probe timeout)."""
+    if os.path.exists(_DEPLOY_MARKER):
+        return (
+            "\U0001f680 Sophia is redeploying \u2014 back in a few seconds. "
+            "Please resend your message shortly."
+        )
+    err = _LAST_BRAIN_PROBE_ERROR.lower()
+    if any(
+        k in err
+        for k in (
+            "connection refused",
+            "errno 111",
+            "errno 8",
+            "connecterror",
+            "name resolution",
+            "nodename nor servname",
+        )
+    ):
+        logger.warning(
+            "brain unavailable: classified DOWN (%s)", _LAST_BRAIN_PROBE_ERROR
+        )
+        return (
+            "\u26a0\ufe0f Sophia's brain is DOWN (connection refused on the health "
+            "probe) \u2014 not just restarting. A deploy or service start should bring "
+            "it back; please resend shortly."
+        )
+    if "timeout" in err or "timed out" in err or err.startswith("http 5"):
+        logger.warning(
+            "brain unavailable: classified BUSY (%s)", _LAST_BRAIN_PROBE_ERROR
+        )
+        return (
+            "\u23f3 Sophia's brain is up but BUSY/unresponsive (health probe timed out "
+            "or unhealthy) \u2014 a long tool call may be running. Please wait a moment "
+            "and resend."
+        )
+    return "\u23f3 Sophia is briefly restarting \u2014 please resend in a few seconds."
+
+
 def call_chat(message: str, session_id: str, public_key: str) -> str:
     """POST to /chat-blocking as the governor; return the assistant text."""
     token = create_jwt(public_key)
@@ -572,6 +658,174 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
 
 
 # ── Message dispatch ────────────────────────────────────────────────────
+
+
+def call_chat_with_progress(
+    channel_id: str | int,
+    message: str,
+    session_id: str,
+    public_key: str,
+) -> tuple[str, bool]:
+    """POST to /chat (SSE) and edit ONE status message in place as the turn runs.
+
+    Mirrors ``telegram_adapter.call_chat_with_progress`` (Tier-1 parity #1).
+    Discord previously showed nothing between "dispatching turn" and the final
+    reply -- a long turn looked like silence.
+
+    Flow:
+      1. Post a status message and keep its id.
+      2. Stream SSE, editing the status with the current round / active tool.
+      3. On 'done', edit the status into the answer (or delete + post it when the
+         answer is too long for one Discord message).
+
+    Returns ``(response_text, text_already_displayed)``. The bool is False only on
+    the blocking fallback, where the caller must post the text itself (avoids the
+    duplicate-text bug).
+    """
+    token = create_jwt(public_key)
+    headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
+
+    ids = send_message(channel_id, "\U0001f504 Thinking\u2026")
+    status_id: str | None = ids[0] if ids else None
+    if status_id is None:
+        logger.warning("Could not send status message -- falling back to blocking chat")
+        return call_chat(message, session_id, public_key), False
+
+    # Ride out a brain restart (e.g. a redeploy) before streaming, so a brief
+    # redeploy shows a clear indicator instead of a Connection-refused error.
+    if not _wait_for_brain():
+        msg = _brain_unavailable_message()
+        edit_message_text(channel_id, status_id, msg)
+        return msg, True
+
+    tool_emoji: dict[str, str] = {
+        "web_search": "\U0001f50d",
+        "web_extract": "\U0001f4c4",
+        "read_context_file": "\U0001f4da",
+        "read_repo_file": "\U0001f4d6",
+        "read_local_file": "\U0001f4c2",
+        "list_directory": "\U0001f4c1",
+        "list_org_repos": "\U0001f5c2",
+        "list_prs": "\U0001f4cb",
+        "scan_qr_from_file": "\U0001f4f8",
+        "scan_qr_batch": "\U0001f4f8",
+        "lookup_qr_code": "\U0001f50e",
+        "lookup_qr_batch": "\U0001f50e",
+        "submit_contribution": "\U0001f4dd",
+        "open_fix_pr": "\U0001f527",
+        "create_dao_submission": "\U0001f4dd",
+        "upload_file_to_github": "\U0001f4e4",
+        "merge_pr": "\u2705",
+        "register_identity": "\U0001f194",
+        "deploy_autopilot": "\U0001f680",
+        "read_oracle_logs": "\U0001f52e",
+    }
+
+    def _label_tool(name: str) -> str:
+        label = name.replace("_", " ")
+        emoji = tool_emoji.get(name, "\u2699\ufe0f")
+        return f"{emoji} {label} \u2026"
+
+    round_num = 0
+    tool_active: str | None = None
+    last_edit = 0.0
+
+    def _edit(text: str) -> None:
+        nonlocal last_edit
+        edit_message_text(channel_id, status_id, text)
+        last_edit = time.time()
+
+    try:
+        with httpx.stream(
+            "POST",
+            f"{settings.autopilot_chat_url.rstrip('/')}/chat",
+            json={"message": message},
+            headers=headers,
+            timeout=_CHAT_TIMEOUT,
+        ) as resp:
+            if resp.status_code != 200:
+                msg = f"\u26a0\ufe0f Autopilot returned HTTP {resp.status_code}."
+                _edit(msg)
+                return msg, True
+
+            final_response = ""
+            for line in resp.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    event = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type", "")
+
+                if etype == "heartbeat":
+                    r = event.get("round", 0)
+                    if r != round_num:
+                        round_num = r
+                        tool_active = None
+                    if tool_active is None and round_num > 0:
+                        _msg = f"\U0001f504 Thinking\u2026 (round {round_num})"
+                    else:
+                        _msg = "\U0001f504 Thinking\u2026"
+                    if time.time() - last_edit > 3:
+                        _edit(_msg)
+
+                elif etype == "tool":
+                    tool_name = event.get("tool", "")
+                    status = event.get("status", "")
+                    if status == "calling":
+                        tool_active = tool_name
+                        _edit(_label_tool(tool_name))
+                    elif status == "done":
+                        tool_active = None
+
+                elif etype == "wanted_more_rounds":
+                    _edit(
+                        "\u26a0\ufe0f Hit round limit \u2014 forcing final response\u2026"
+                    )
+
+                elif etype == "error":
+                    err = (
+                        event.get("content") or "the LLM rejected the request"
+                    ).strip()
+                    if len(err) > 300:
+                        err = err[:300] + "\u2026"
+                    final_response = (
+                        "\u26a0\ufe0f Autopilot hit an error (the thread self-heals "
+                        f"\u2014 please resend): {err}"
+                    )
+                    break
+
+                elif etype == "done":
+                    final_response = (event.get("response") or "").strip()
+                    if event.get("proposal"):
+                        final_response += (
+                            "\n\n\u26a0\ufe0f This action needs approval \u2014 open "
+                            "the DApp chat to approve/reject."
+                        )
+                    break
+
+            if final_response:
+                if len(final_response) <= _MESSAGE_LIMIT and edit_message_text(
+                    channel_id, status_id, final_response
+                ):
+                    return final_response, True
+                delete_message(channel_id, status_id)
+                send_message(channel_id, final_response)
+                return final_response, True
+            _edit("\u26a0\ufe0f Autopilot produced an empty response.")
+            return "\u26a0\ufe0f Autopilot produced an empty response.", True
+
+    except httpx.ReadTimeout:
+        msg = "\u26a0\ufe0f Autopilot timed out \u2014 the LLM or a tool took too long."
+        _edit(msg)
+        return msg, True
+    except Exception as e:  # noqa: BLE001
+        logger.exception("call_chat_with_progress failed")
+        msg = f"\u26a0\ufe0f Error: {e}"
+        _edit(msg)
+        return msg, True
 
 
 def edit_message_text(channel_id: str | int, message_id: str | int, text: str) -> bool:
@@ -910,13 +1164,18 @@ def handle_message(
     # silent, and show Discord's native "typing..." bubble refreshed for the
     # duration of the turn.
     add_reaction(channel_id, message_id)
-    with TypingIndicator(channel_id):
+    try:
         prompt = text
         if attachments:
             prompt = _ingest_attachments(attachments, channel_id, session_id, text)
-        reply = call_chat(prompt, session_id, public_key)
-        send_message(channel_id, reply)
-    remove_reaction(channel_id, message_id)
+        with TypingIndicator(channel_id):
+            reply, shown = call_chat_with_progress(
+                channel_id, prompt, session_id, public_key
+            )
+        if not shown:
+            send_message(channel_id, reply)
+    finally:
+        remove_reaction(channel_id, message_id)
 
 
 def _handle_message_safe(

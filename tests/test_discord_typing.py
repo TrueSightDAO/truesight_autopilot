@@ -90,7 +90,9 @@ def test_turn_wraps_call_chat_with_typing(monkeypatch):
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
     monkeypatch.setattr(da, "resolve_governor_public_key", lambda: "pk")
     monkeypatch.setattr(
-        da, "call_chat", lambda *a, **k: (events.append("chat"), "hi")[1]
+        da,
+        "call_chat_with_progress",
+        lambda *a, **k: (events.append("chat"), ("hi", True))[1],
     )
     monkeypatch.setattr(da, "send_message", lambda *a, **k: events.append("send") or [])
 
@@ -113,4 +115,7 @@ def test_turn_wraps_call_chat_with_typing(monkeypatch):
     }
     da.handle_message(data, {"849324553221832794"}, "pk", "guild", "bot")
 
-    assert events == ["typing-start", "chat", "send", "typing-stop"]
+    # The turn now streams via call_chat_with_progress, which renders the reply
+    # itself (edit-in-place) -> `shown=True`, so handle_message does NOT re-post.
+    # `send_message` is not called on this path.
+    assert events == ["typing-start", "chat", "typing-stop"]
