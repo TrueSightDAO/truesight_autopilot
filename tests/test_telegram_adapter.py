@@ -1252,3 +1252,32 @@ def test_reaction_no_governor_identity_notifies(monkeypatch):
     ta.handle_message_reaction(_reaction("👍"), allowed={111})
     assert ran == []
     assert any("No governor identity configured" in t for _, t, _ in sent)
+
+
+# ── stale removed-approval-gate suffix (regression) ──────────────────────────
+# See tests/test_discord_progress.py. The approval gate was removed 2026-06-18;
+# the Telegram adapter must not append the "open the DApp chat to approve/reject"
+# prompt even when the payload carries a ``proposal`` object.
+
+
+def test_call_chat_does_not_append_stale_approval_prompt(monkeypatch):
+    from app import telegram_adapter as ta
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"response": "submitted", "proposal": {"x": 1}}
+
+    # call_chat() first does a live brain-health probe (_wait_for_brain) before the
+    # POST; neutralise it so the test is hermetic (CI has no listener on :8001).
+    monkeypatch.setattr(ta, "_wait_for_brain", lambda *a, **k: True)
+    # Non-hermetic guard: call_chat() probes the brain (/health) before POSTing.
+    # Pin the probe up so the test is deterministic regardless of a live brain.
+    monkeypatch.setattr(ta, "_wait_for_brain", lambda *a, **k: True)
+    monkeypatch.setattr(ta.httpx, "post", lambda *a, **k: _Resp())
+    out = ta.call_chat("hello", "s1", "pk")
+    assert out == "submitted"
+    assert "approve" not in out.lower()
+    assert "DApp" not in out

@@ -260,3 +260,33 @@ def test_handle_message_uses_progress_and_removes_reaction(monkeypatch):
     assert events["add"] == ("c1", "m1")
     assert events["rm"] == ("c1", "m1")  # always removed, even on success
     assert posted == []  # text already shown via edit -> not re-posted
+
+
+# ── stale removed-approval-gate suffix (regression) ──────────────────────────
+# The DAO approval gate was REMOVED 2026-06-18: a signed submission IS the
+# authorization. The adapter must NOT append "open the DApp chat to
+# approve/reject" to a response just because the brain still emits a
+# ``proposal`` object -- that strand a governor on a button that does nothing.
+
+
+def test_proposal_does_not_append_stale_approval_prompt(monkeypatch):
+    monkeypatch.setattr(da, "settings", _Settings(dry=False))
+    monkeypatch.setattr(da, "_wait_for_brain", lambda *a, **k: True)
+    monkeypatch.setattr(da, "create_jwt", lambda pk: "jwt")
+    monkeypatch.setattr(da, "send_message", lambda c, t: ["status-1"])
+    edited = []
+    monkeypatch.setattr(
+        da, "edit_message_text", lambda c, m, t: edited.append(t) or True
+    )
+    monkeypatch.setattr(
+        da.httpx,
+        "stream",
+        lambda *a, **k: _sse(
+            {"type": "done", "response": "submitted", "proposal": {"x": 1}},
+        ),
+    )
+    resp, shown = da.call_chat_with_progress("c1", "hi", "s1", "pk")
+    assert resp == "submitted"
+    assert "approve" not in resp.lower()
+    assert "DApp" not in resp
+    assert "needs approval" not in resp
