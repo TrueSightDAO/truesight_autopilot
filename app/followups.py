@@ -269,9 +269,6 @@ def list_open() -> list[dict[str, Any]]:
     ]
 
 
-# ── state sidecar ────────────────────────────────────────────────────────
-
-
 def upsert_state(id: str, **kwargs: Any) -> dict[str, Any]:
     """
     Update mutable scheduling state for a follow-up.
