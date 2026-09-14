@@ -504,15 +504,16 @@ class Settings(BaseSettings):
     )
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    # "deepseek-chat"/"deepseek-reasoner" were deprecated 2026-07-24 in favor of
-    # deepseek-v4-pro / deepseek-v4-flash. deepseek-chat was an ALIAS for
-    # deepseek-v4-flash (non-thinking mode) per DeepSeek's own migration notes —
-    # v4-flash is the correct like-for-like replacement, not v4-pro.
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    # "deepseek-chat"/"deepseek-reasoner" (deprecated 2026-07-24) and
+    # "deepseek-v4-flash"/"deepseek-v4-pro" (v4-flash retired 2026-09-10; v4-pro
+    # being phased out) are all superseded by the V4.1 generation. Use the
+    # canonical "deepseek-flash" (DeepSeek-V4.1-Flash) name — the legacy names
+    # transparently route to it for now but are not a stable target.
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
     deepseek_temperature: float = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3"))
     # LiteLLM (replaces the homegrown HTTP transport when LLM_PROVIDER=litellm)
-    litellm_model: str = os.getenv("LITELLM_MODEL", "deepseek/deepseek-v4-flash")
+    litellm_model: str = os.getenv("LITELLM_MODEL", "deepseek/deepseek-flash")
 
     # BigModel (ZhipuAI / GLM)
     bigmodel_api_key: str = Field(default="", validation_alias="BIGMODEL_CN_API")

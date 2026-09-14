@@ -1,6 +1,6 @@
 """DeepSeek provider with XML/DSML tool-call fallback.
 
-DeepSeek-chat sometimes emits tool calls as XML in the content field
+DeepSeek sometimes emits tool calls as XML in the content field
 instead of in the standard tool_calls array. This provider handles both
 variants transparently.
 """
@@ -20,11 +20,13 @@ logger = logging.getLogger("autopilot.llm.deepseek")
 
 class DeepSeekProvider(OpenAICompatibleProvider):
     name = "deepseek"
-    # deepseek-chat deprecated 2026-07-24; deepseek-v4-flash is its like-for-like
-    # successor (deepseek-chat was an alias for v4-flash's non-thinking mode).
+    # deepseek-chat (deprecated 2026-07-24) and deepseek-v4-flash (retired
+    # 2026-09-10) both route to the V4.1 generation — use the canonical
+    # "deepseek-flash" name. Prices are (input, output) USD per 1M tokens at the
+    # off-peak cache-miss rate, per api-docs.deepseek.com/quick_start/pricing.
     pricing = {
-        "deepseek-v4-flash": (0.14, 0.28),  # input, output USD per million tokens
-        "deepseek-v4-pro": (0.435, 0.87),
+        "deepseek-flash": (0.15, 0.6),
+        "deepseek-v4-pro": (0.435, 0.87),  # phasing out (V4.1-Pro TBD)
     }
 
     def __init__(
