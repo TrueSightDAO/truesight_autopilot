@@ -382,10 +382,14 @@ def set_status(id: str, new_status: str) -> bool:
                 + "\n"
             )
 
-    _write_md(new_content)
+    # Record the transition in the sidecar FIRST. list_open()/next_due() treat
+    # a terminal sidecar status as authoritative, so the closure must land in
+    # local durable state even if the .md rewrite below is discarded (read-only
+    # mirror / checkout resync) — exactly how warmup-conversion-30day-readout
+    # kept re-striking every hourly pass on 2026-09-14.
+    upsert_state(id, status=new_status)
 
-    # NOTE: the sidecar is written by the caller below *before* the .md is
-    # rewritten (see set_status); keep it durable-first there.
+    _write_md(new_content)
 
     return True
 
