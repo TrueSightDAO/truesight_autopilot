@@ -4959,7 +4959,7 @@ def _history_token_count(messages: list[dict]) -> int:
         import litellm
 
         return litellm.token_counter(
-            model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-v4-flash"),
+            model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-flash"),
             messages=messages,
         )
     except Exception:

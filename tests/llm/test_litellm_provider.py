@@ -67,5 +67,5 @@ def test_pricing_includes_claude_models():
         assert inp > 0 and out > 0
 
 
-def test_default_model_is_deepseek_v4_flash():
-    assert LiteLLMProvider.default_model.endswith("deepseek-v4-flash")
+def test_default_model_is_deepseek_flash():
+    assert LiteLLMProvider.default_model.endswith("deepseek-flash")

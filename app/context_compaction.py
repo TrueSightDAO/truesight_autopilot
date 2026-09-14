@@ -133,7 +133,7 @@ def count_tokens(messages: list[dict], model: Optional[str] = None) -> int:
 
         return int(
             litellm.token_counter(
-                model=model or "deepseek/deepseek-v4-flash", messages=messages
+                model=model or "deepseek/deepseek-flash", messages=messages
             )
         )
     except Exception:  # noqa: BLE001 — offline/absent litellm; cheap fallback

@@ -5,10 +5,10 @@ with litellm's battle-tested provider abstraction.  Tool calls come back as
 standard OpenAI tool_calls arrays; no XML leak, no DSML shenanigans.
 
 Model naming follows litellm's convention:
-    deepseek/deepseek-v4-flash  →  DeepSeek V4 Flash (fast/economical; replaces
-                                    the deprecated deepseek-chat, 2026-07-24)
-    deepseek/deepseek-v4-pro    →  DeepSeek V4 Pro (flagship; replaces the
-                                    deprecated deepseek-reasoner)
+    deepseek/deepseek-flash     →  DeepSeek V4.1 Flash (current flagship;
+                                    replaces the deprecated deepseek-chat and
+                                    the retired deepseek-v4-flash)
+    deepseek/deepseek-v4-pro    →  DeepSeek V4 Pro (being phased out; V4.1-Pro TBD)
     anthropic/claude-sonnet-4-20250514  →  Claude (RETIRED on live API 2026-09;
                                     use claude-haiku-4-5 / claude-sonnet-4-6 below)
     openai/gpt-4o            →  OpenAI
@@ -28,14 +28,15 @@ from .base import LLMError, LLMProvider, LLMResponse, LLMUsage
 
 logger = logging.getLogger("autopilot.llm.litellm")
 
-LITELLM_MODEL = os.getenv("LITELLM_MODEL", "deepseek/deepseek-v4-flash")
+LITELLM_MODEL = os.getenv("LITELLM_MODEL", "deepseek/deepseek-flash")
 
 PRICING: dict[str, tuple[float, float]] = {
-    # deepseek-chat/deepseek-reasoner deprecated 2026-07-24; deepseek-chat was
-    # an alias for deepseek-v4-flash (non-thinking mode), so v4-flash is the
-    # like-for-like successor, not v4-pro. Prices are (input, output) per 1M
-    # tokens at the standard (cache-miss) rate, per api-docs.deepseek.com/quick_start/pricing.
-    "deepseek/deepseek-v4-flash": (0.14, 0.28),
+    # deepseek-chat/deepseek-reasoner (deprecated 2026-07-24) and deepseek-v4-
+    # flash/-pro (v4-flash retired 2026-09-10; v4-pro being phased out) are all
+    # superseded by the V4.1 generation — use "deepseek/deepseek-flash". Prices
+    # are (input, output) per 1M tokens at the off-peak cache-miss rate, per
+    # api-docs.deepseek.com/quick_start/pricing.
+    "deepseek/deepseek-flash": (0.15, 0.6),
     "deepseek/deepseek-v4-pro": (0.435, 0.87),
     "openai/gpt-4o": (2.50, 10.00),
     "openai/gpt-4o-mini": (0.15, 0.60),
@@ -90,10 +91,9 @@ class LiteLLMProvider(LLMProvider):
             "num_retries": 2,
         }
         if model.startswith("deepseek/"):
-            # deepseek-v4-flash/-pro are hybrid reasoning models that emit
-            # reasoning_content (extended "thinking") by default, unlike the
-            # deprecated deepseek-chat alias this migrated from, which was
-            # specifically the non-thinking mode. Without this, every call
+            # DeepSeek V4.1-Flash/-Pro are hybrid reasoning models that emit
+            # reasoning_content (extended "thinking") by default. Without this,
+            # every call
             # silently pays for a hidden reasoning pass before any real
             # content -- a few seconds for a trivial prompt, 90-135+ seconds
             # (observed live on /oracle-advisory) for a large one. Confirmed
