@@ -1,0 +1,292 @@
+{
+ "source": "434b53fd293b (tg thread 27138 / Discord)",
+ "provenance": "434b53fd293b.json.pre-compact-20260914T041348Z.json",
+ "turn_index_span": [
+  57,
+  90
+ ],
+ "rounds": 12,
+ "tokens_cc_estimate": 10388,
+ "messages": [
+  {
+   "role": "user",
+   "content": "[Telegram context: chat_id=-1003919341801, thread_id=27138] Gary flagged: no typing indicator shows during long Discord turns. I checked the live code (discord_adapter.py, commit f5f7001) directly \u2014 there's no typing-indicator implementation at all, no call to Discord's typing-trigger endpoint under any name. This isn't a regression, it was never built. Please add it: call POST /channels/{channel_id}/typing when a turn starts, and re-trigger it every ~8 seconds for the duration of the turn (Discord's typing indicator expires after ~10s and needs periodic refresh) \u2014 stop refreshing once the reply is sent. Should be a small, safe PR."
+  },
+  {
+   "role": "assistant",
+   "content": "Typing indicator it is \u2014 never built, so a genuine feature add. Let me read the live code precisely before patching.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "Box HEAD is `f5f7001` (earlier it was `1e25a5b`) \u2014 so a deploy landed since. Let me confirm what that commit is and where `origin/main` sits, plus see the exact turn dispatch region I'll instrument.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "Let me see how `dispatch` is invoked from the async loop (blocking vs executor) \u2014 that determines the right typing-indicator design.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "Let me see how `dispatch` is wired in `run()` (thread vs inline) \u2014 that decides the design.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "Now I have the complete picture \u2014 `handle_message` runs in a **threadpool worker** (sync), `call_chat` is a blocking POST up to 180s. Let me check the test conventions and confirm the `_api` success-code line.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "Let me see `send_message`'s dry-run handling and the exact insertion region.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "Full picture in hand: `handle_message` runs in a threadpool worker, `call_chat` is a blocking POST (up to 180s), `_api()` currently accepts only 200/201 (Discord's typing endpoint returns **204** \u2014 needs handling). Applying the patch in a clean local clone.\n[1 tool result(s) compacted: ssh_run \u2014 detail in artifacts]"
+  },
+  {
+   "role": "assistant",
+   "content": "All 5 edits landed. Now the tests \u2014 matching the existing style (direct module import + monkeypatch).",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_Fnt7FgvGARAsLZ3VT7ni6064",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"set -e\\ncd /tmp/tc\\ncat > tests/test_discord_typing.py <<'PY'\\n\\\"\\\"\\\"Guard (2026-09-14): the Discord adapter must show a \\\"Sophia is typing...\\\"\\nindicator for the duration of a turn.\\n\\nRoot cause this guards against: the adapter was built without ANY typing\\nindicator -- no call to Discord's ``POST /channels/{id}/typing`` endpoint\\nexisted under any name. So a governor saw total silence during long turns\\n(``/chat-blocking`` can run tools + multiple LLM calls for up to ~180s).\\n\\nTwo invariants:\\n  1. The bubble must be *refreshed* -- Discord clears it after ~10s, so a\\n     single fire-and-forget call would fade mid-turn.\\n  2. It must *stop* when the turn ends, so the bubble clears the moment the\\n     reply lands (and the refresh thread never outlives the turn).\\n\\\"\\\"\\\"\\n\\nfrom __future__ import annotations\\n\\nimport threading\\nimport time\\n\\nfrom app import discord_adapter as da\\n\\n\\ndef _no_dry_run(monkeypatch):\\n    monkeypatch.setattr(da.settings, \\\"discord_dry_run\\\", False)\\n\\n\\ndef test_post_typing_hits_typing_endpoint(monkeypatch):\\n    \\\"\\\"\\\"post_typing must POST the documented typing-trigger route.\\\"\\\"\\\"\\n    calls: list[tuple] = []\\n\\n    def fake_api(method, path, payload=None):\\n        calls.append((method, path, payload))\\n        return {}\\n\\n    monkeypatch.setattr(da, \\\"_api\\\", fake_api)\\n    da.post_typing(\\\"12345\\\")\\n\\n    assert calls == [(\\\"POST\\\", \\\"/channels/12345/typing\\\", None)]\\n\\n\\ndef test_typing_indicator_refreshes_then_stops(monkeypatch):\\n    \\\"\\\"\\\"Bubble must be re-triggered periodically and stop on exit.\\\"\\\"\\\"\\n    _no_dry_run(monkeypatch)\\n    hits: list[str] = []\\n    monkeypatch.setattr(da, \\\"post_typing\\\", lambda cid: hits.append(str(cid)))\\n\\n    with da.TypingIndicator(\\\"999\\\", interval=0.05):\\n        time.sleep(0.18)  # ~3 intervals\\n        assert hits, \\\"indicator posted nothing while the turn ran\\\"\\n\\n    n_at_exit = len(hits)\\n    assert n_at_exit >= 2, f\\\"expected refreshes, saw {n_at_exit}\\\"\\n    time.sleep(0.15)\\n    assert len(hits) == n_at_exit, \\\"indicator kept firing after stop()\\\"\\n\\n\\ndef test_typing_indicator_joins_thread(monkeypatch):\\n    \\\"\\\"\\\"stop() must not leak the refresh thread.\\\"\\\"\\\"\\n    _no_dry_run(monkeypatch)\\n    monkeypatch.setattr(da, \\\"post_typing\\\", lambda cid: None)\\n\\n    before = {t.name for t in threading.enumerate()}\\n    ind = da.TypingIndicator(\\\"1\\\", interval=0.05)\\n    ind.start()\\n    ind.stop()\\n\\n    deadline = time.time() + 1.0\\n    while time.time() < deadline:\\n        if \\\"dc-typing\\\" not in {t.name for t in threading.enumerate()}:\\n            break\\n        time.sleep(0.02)\\n    assert \\\"dc-typing\\\" not in {t.name for t in threading.enumerate()}\\n    assert \\\"dc-typing\\\" not in before or True  # noop guard for thread reuse\\n\\n\\ndef test_typing_indicator_silent_in_dry_run(monkeypatch):\\n    \\\"\\\"\\\"Dry-run posts nothing, so it must show no bubble (and start no thread).\\\"\\\"\\\"\\n    monkeypatch.setattr(da.settings, \\\"discord_dry_run\\\", True)\\n    hits: list[str] = []\\n    monkeypatch.setattr(da, \\\"post_typing\\\", lambda cid: hits.append(str(cid)))\\n\\n    with da.TypingIndicator(\\\"1\\\", interval=0.05):\\n        time.sleep(0.12)\\n    assert hits == [], \\\"dry-run must not trigger the typing endpoint\\\"\\n\\n\\ndef test_turn_wraps_call_chat_with_typing(monkeypatch):\\n    \\\"\\\"\\\"The governor turn must hold the bubble around call_chat + send.\\\"\\\"\\\"\\n    events: list[str] = []\\n\\n    monkeypatch.setattr(da, \\\"author_role\\\", lambda uid, allowed: \\\"governor\\\")\\n    monkeypatch.setattr(da, \\\"resolve_governor_public_key\\\", lambda: \\\"pk\\\")\\n    monkeypatch.setattr(da, \\\"call_chat\\\", lambda *a, **k: (events.append(\\\"chat\\\"), \\\"hi\\\")[1])\\n    monkeypatch.setattr(da, \\\"send_message\\\", lambda *a, **k: events.append(\\\"send\\\") or [])\\n\\n    class _Spy:\\n        def __init__(self, channel_id, *a, **k):\\n            events.append(\\\"typing-start\\\")\\n\\n        def __enter__(self):\\n            return self\\n\\n        def __exit__(self, *exc):\\n            events.append(\\\"typing-stop\\\")\\n\\n    monkeypatch.setattr(da, \\\"TypingIndicator\\\", _Spy)\\n\\n    data = {\\n        \\\"author\\\": {\\\"id\\\": \\\"849324553221832794\\\", \\\"username\\\": \\\"gary\\\"},\\n        \\\"channel_id\\\": \\\"42\\\",\\n        \\\"content\\\": \\\"hello\\\",\\n    }\\n    da.handle_message(data, {\\\"849324553221832794\\\"}, \\\"pk\\\", \\\"guild\\\", \\\"bot\\\")\\n\\n    assert events == [\\\"typing-start\\\", \\\"chat\\\", \\\"send\\\", \\\"typing-stop\\\"]\\nPY\\npython3 -m compileall -q app/discord_adapter.py tests/test_discord_typing.py && echo \\\"compile OK\\\"\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_Fnt7FgvGARAsLZ3VT7ni6064",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"compile OK\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "Now the full 4-check suite (using the box venv).",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_LYiWcNAZ1yV4I7RZ7RKB2011",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /tmp/tc\\nsource /opt/truesight_autopilot/.venv/bin/activate 2>/dev/null || source venv/bin/activate 2>/dev/null || true\\necho \\\"=== 1. compileall ===\\\"; python3 -m compileall -q app scripts tests && echo OK\\necho \\\"=== 2. ruff check ===\\\"; python3 -m ruff check app/discord_adapter.py tests/test_discord_typing.py && echo OK\\necho \\\"=== 3. ruff format --check ===\\\"; python3 -m ruff format --check app/discord_adapter.py tests/test_discord_typing.py && echo OK\\necho \\\"=== 4a. new tests ===\\\"; python3 -m pytest -q tests/test_discord_typing.py 2>&1 | tail -20\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_LYiWcNAZ1yV4I7RZ7RKB2011",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"=== 1. compileall ===\\nOK\\n=== 2. ruff check ===\\nAll checks passed!\\nOK\\n=== 3. ruff format --check ===\\nWould reformat: app/discord_adapter.py\\nWould reformat: tests/test_discord_typing.py\\n2 files would be reformatted\\n=== 4a. new tests ===\\n.....                                                                    [100%]\\n5 passed in 1.17s\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "5/5 new tests pass. Formatting needs a fix (my long lines) \u2014 applying `ruff format`, then re-running.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_7b2GfEn1l0xqanu6zNq76237",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /tmp/tc\\nsource /opt/truesight_autopilot/.venv/bin/activate 2>/dev/null || true\\npython3 -m ruff format app/discord_adapter.py tests/test_discord_typing.py\\necho \\\"=== show what format changed (diff) ===\\\"\\ngit diff --stat\\necho\\necho \\\"=== re-check all 4 ===\\\"\\npython3 -m compileall -q app scripts tests && echo \\\"1 compileall OK\\\"\\npython3 -m ruff check app/discord_adapter.py tests/test_discord_typing.py && echo \\\"2 ruff check OK\\\"\\npython3 -m ruff format --check app/discord_adapter.py tests/test_discord_typing.py && echo \\\"3 format OK\\\"\\npython3 -m pytest -q tests/test_discord_typing.py tests/test_discord_adapter.py 2>&1 | tail -8\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_7b2GfEn1l0xqanu6zNq76237",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"2 files reformatted\\n=== show what format changed (diff) ===\\n app/discord_adapter.py | 62 +++++++++++++++++++++++++++++++++++++++++++++++---\\n 1 file changed, 59 insertions(+), 3 deletions(-)\\n\\n=== re-check all 4 ===\\n1 compileall OK\\nAll checks passed!\\n2 ruff check OK\\n2 files already formatted\\n3 format OK\\n...........................                                              [100%]\\n27 passed in 1.27s\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "Full suite + grab the formatted block text so I can push via the sanctioned tool.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_Jd9xHkcs9javiyhjCDVQ3074",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /tmp/tc\\nsource /opt/truesight_autopilot/.venv/bin/activate 2>/dev/null || true\\necho \\\"=== FULL SUITE (expect only the known pre-existing env failure) ===\\\"\\npython3 -m pytest -q 2>&1 | tail -6\\necho\\necho \\\"=== final diff of adapter ===\\\"\\ngit diff app/discord_adapter.py\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_Jd9xHkcs9javiyhjCDVQ3074",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"=== FULL SUITE (expect only the known pre-existing env failure) ===\\n\\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\\n=========================== short test summary info ============================\\nFAILED tests/test_config_own_data_repos.py::test_defaults_match_sophias_existing_hardcoded_repos\\nFAILED tests/test_email_inbox_watch.py::test_email_watch_enabled_defaults_false\\n2 failed, 1067 passed, 1 skipped, 4 xfailed, 3 xpassed, 1 warning in 28.23s\\n\\n=== final diff of adapter ===\\ndiff --git a/app/discord_adapter.py b/app/discord_adapter.py\\nindex 0ea6676..7964557 100644\\n--- a/app/discord_adapter.py\\n+++ b/app/discord_adapter.py\\n@@ -36,6 +36,7 @@ import asyncio\\n import json\\n import logging\\n import os\\n+import threading\\n import time\\n from typing import Any, Callable\\n \\n@@ -51,6 +52,7 @@ _DISCORD_API = \\\"https://discord.com/api/v10\\\"\\n _GATEWAY_QUERY = \\\"?v=10&encoding=json\\\"\\n _MESSAGE_LIMIT = 2000  # Discord hard cap per message\\n _CHAT_TIMEOUT = 180.0  # /chat-blocking can run tools + multiple LLM calls\\n+_TYPING_REFRESH_SECONDS = 8.0  # Discord's typing bubble expires after ~10s\\n _USER_AGENT = \\\"TrueSightDAO-Sophia (https://truesight.me, 1.0)\\\"\\n _ATTACH_DIR = \\\"/tmp/discord_attachments\\\"  # adapter + autopilot share the EC2 box / user\\n \\n@@ -303,7 +305,7 @@ def _api(method: str, path: str, payload: dict[str, Any] | None = None) -> dict\\n             resp = httpx.request(\\n                 method, url, headers=_headers(), json=payload, timeout=20.0\\n             )\\n-            if resp.status_code in (200, 201):\\n+            if resp.status_code in (200, 201, 204):\\n                 return resp.json() if resp.content else {}\\n             if resp.status_code == 429:\\n                 retry_after = 1.0\\n@@ -359,6 +361,57 @@ def send_message(channel_id: str | int, text: str) -> list[str]:\\n     return ids\\n \\n \\n+def post_typing(channel_id: str | int) -> None:\\n+    \\\"\\\"\\\"Trigger Discord's typing indicator in a channel (best-effort).\\n+\\n+    Discord clears the typing state after ~10s, so this is called repeatedly\\n+    for the duration of a turn. Failures are swallowed: a missing bubble must\\n+    never affect the reply.\\n+    \\\"\\\"\\\"\\n+    _api(\\\"POST\\\", f\\\"/channels/{channel_id}/typing\\\")\\n+\\n+\\n+class TypingIndicator:\\n+    \\\"\\\"\\\"Show Discord's \\\"Sophia is typing...\\\" bubble while a turn runs.\\n+\\n+    Refreshes every ``_TYPING_REFRESH_SECONDS`` (the bubble expires after ~10s)\\n+    and stops as soon as the turn ends, so the indicator clears the moment the\\n+    reply is posted. No bubble is shown in dry-run (nothing is posted anyway).\\n+    \\\"\\\"\\\"\\n+\\n+    def __init__(\\n+        self, channel_id: str | int, interval: float = _TYPING_REFRESH_SECONDS\\n+    ) -> None:\\n+        self._channel_id = channel_id\\n+        self._interval = interval\\n+        self._stop = threading.Event()\\n+        self._thread: threading.Thread | None = None\\n+\\n+    def start(self) -> None:\\n+        if settings.discord_dry_run:\\n+            return  # nothing is posted in dry-run; no bubble to show\\n+        self._thread = threading.Thread(target=self._run, name=\\\"dc-typing\\\", daemon=True)\\n+        self._thread.start()\\n+\\n+    def _run(self) -> None:\\n+        while not self._stop.is_set():\\n+            post_typing(self._channel_id)\\n+            self._stop.wait(self._interval)\\n+\\n+    def stop(self) -> None:\\n+        self._stop.set()\\n+        thread = self._thread\\n+        if thread is not None and thread.is_alive():\\n+            thread.join(timeout=1.0)\\n+\\n+    def __enter__(self) -> \\\"TypingIndicator\\\":\\n+        self.start()\\n+        return self\\n+\\n+    def __exit__(self, *exc: object) -> None:\\n+        self.stop()\\n+\\n+\\n def log_observed_message(\\n     message: str, session_id: str, public_key: str, sender_name: str\\n ) -> None:\\n@@ -460,8 +513,11 @@ def handle_message(\\n         user_id,\\n         channel_id,\\n     )\\n-    reply = call_chat(text, session_id, public_key)\\n-    send_message(channel_id, reply)\\n+    # Show \\\"Sophia is typing...\\\" for the duration of the turn; the bubble is\\n+    # refreshed every _TYPING_REFRESH_SECONDS and cleared once the reply is sent.\\n+    with TypingIndicator(channel_id):\\n+        reply = call_chat(text, session_id, public_key)\\n+        send_message(channel_id, reply)\\n \\n \\n def _handle_message_safe(\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "Two failures now (the known PAT one + `test_email_inbox_watch`) \u2014 both look env-caused. Verifying they're **pre-existing on clean `main`** before pushing.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_HJALTKtNRxuBw3Xe0Npi0447",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"set -e\\nrm -rf /tmp/clean-main\\ngit clone -q --branch main /opt/truesight_autopilot /tmp/clean-main\\ncd /tmp/clean-main\\nsource /opt/truesight_autopilot/.venv/bin/activate 2>/dev/null || true\\ngit log --oneline -1\\necho \\\"=== do these 2 tests fail on a PRISTINE main (no typing change)? ===\\\"\\npython3 -m pytest -q tests/test_config_own_data_repos.py::test_defaults_match_sophias_existing_hardcoded_repos tests/test_email_inbox_watch.py::test_email_watch_enabled_defaults_false 2>&1 | tail -6\\necho\\necho \\\"=== cause: env overrides on the box ===\\\"\\ngrep -cE '^(GITHUB_READ_PAT|EMAIL_WATCH_ENABLED)=' /opt/truesight_autopilot/.env 2>/dev/null || echo \\\"0\\\"\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_HJALTKtNRxuBw3Xe0Npi0447",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"f5f7001 fix(discord): persist /chat-blocking turns to disk so channel memory survives restarts (#442)\\n=== do these 2 tests fail on a PRISTINE main (no typing change)? ===\\n..                                                                       [100%]\\n2 passed in 0.31s\\n\\n=== cause: env overrides on the box ===\\n2\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "Both pass targeted on pristine `main` \u2014 but they fail in the full-suite run (ordering/env pollution). To prove it's pre-existing, let me run the **full suite on the clean clone**.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_6TP4Hmxevq29I1855oN23809",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /tmp/clean-main\\nsource /opt/truesight_autopilot/.venv/bin/activate 2>/dev/null || true\\necho \\\"=== FULL suite on PRISTINE main (no typing change) ===\\\"\\npython3 -m pytest -q 2>&1 | tail -6\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_6TP4Hmxevq29I1855oN23809",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"=== FULL suite on PRISTINE main (no typing change) ===\\n\\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\\n=========================== short test summary info ============================\\nFAILED tests/test_config_own_data_repos.py::test_defaults_match_sophias_existing_hardcoded_repos\\nFAILED tests/test_email_inbox_watch.py::test_email_watch_enabled_defaults_false\\n2 failed, 1062 passed, 1 skipped, 4 xfailed, 3 xpassed, 1 warning in 37.99s\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "**Confirmed pre-existing:** identical 2 failures on pristine `main` (1062 passed), caused by box `.env` overrides (`GITHUB_READ_PAT`, `EMAIL_WATCH_ENABLED`). My branch adds 5 passing tests and no new failures. Pushing.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_V8QaZ87WFZ5JSyzsNfU90553",
+     "type": "function",
+     "function": {
+      "name": "git_push_changes",
+      "arguments": "{\"repo\": \"truesight_autopilot\", \"branch\": \"feat/discord-typing-indicator\", \"commit_message\": \"feat(discord): show 'Sophia is typing...' for the duration of a turn\", \"pr_title\": \"feat(discord): typing indicator during turns (POST /typing, ~8s refresh)\", \"pr_body\": \"## Why\\nGary flagged that no typing indicator appears during long Discord turns. Verified against live code (`app/discord_adapter.py` @ `f5f7001`): there was **no typing-indicator implementation at all** \u2014 no call to Discord's typing-trigger endpoint under any name. Not a regression; never built.\\n\\n`/chat-blocking` can run tools + multiple LLM calls for up to ~180s, so a governor saw total silence mid-turn.\\n\\n## What\\n- **`post_typing(channel_id)`** \u2014 fires `POST /channels/{channel_id}/typing`, best-effort (failures swallowed; a missing bubble must never affect the reply).\\n- **`TypingIndicator`** context manager \u2014 starts a daemon thread that re-triggers the endpoint every `_TYPING_REFRESH_SECONDS` (**8s**, since Discord clears the bubble after ~10s) and **stops on exit**, so the bubble clears the moment the reply is posted and the thread never outlives the turn.\\n- **Wired into `handle_message`**: the governor turn (`call_chat` + `send_message`) is now wrapped in `with TypingIndicator(channel_id):`.\\n- **`_api` now accepts HTTP 204** \u2014 the typing endpoint returns `204 No Content`; it was only accepting 200/201, so the call would have been logged as a failure.\\n- **Dry-run aware**: no bubble when `DISCORD_DRY_RUN=true` (nothing is posted anyway).\\n\\nDesign note: `handle_message` already runs in the threadpool worker, so the sync `TypingIndicator` (thread) is the right shape here \u2014 no changes to the asyncio gateway loop.\\n\\n## Tests\\nNew `tests/test_discord_typing.py` (5 guards): endpoint/payload shape; refresh-then-stop; thread joined on stop (no leak); silent in dry-run; and that a governor turn is bracketed `typing-start \u2192 chat \u2192 send \u2192 typing-stop`.\\n\\n## Local verification\\n- `compileall` \u2705 \u00b7 `ruff check` \u2705 \u00b7 `ruff format --check` \u2705\\n- New tests **5/5** \u2705; `test_discord_adapter.py` (22) still \u2705\\n- Full suite: **1067 passed**, 2 failed \u2014 both failures (`test_config_own_data_repos`, `test_email_inbox_watch`) reproduce **identically on a pristine `main` clone** (box `.env` sets `GITHUB_READ_PAT` / `EMAIL_WATCH_ENABLED`); they are pre-existing and unrelated to this diff.\", \"edits\": [{\"path\": \"app/discord_adapter.py\", \"search\": \"import logging\\nimport os\\nimport time\\n\", \"replace\": \"import logging\\nimport os\\nimport threading\\nimport time\\n\"}, {\"path\": \"app/discord_adapter.py\", \"search\": \"            if resp.status_code in (200, 201):\\n\", \"replace\": \"            if resp.status_code in (200, 201, 204):\\n\"}, {\"path\": \"app/discord_adapter.py\", \"search\": \"_CHAT_TIMEOUT = 180.0  # /chat-blocking can run tools + multiple LLM calls\\n\", \"replace\": \"_CHAT_TIMEOUT = 180.0  # /chat-blocking can run tools + multiple LLM calls\\n_TYPING_REFRESH_SECONDS = 8.0  # Discord's typing bubble expires after ~10s\\n\"}, {\"path\": \"app/discord_adapter.py\", \"search\": \"def log_observed_message(\\n    message: str, session_id: str, public_key: str, sender_name: str\\n) -> None:\", \"replace\": \"def post_typing(channel_id: str | int) -> None:\\n    \\\"\\\"\\\"Trigger Discord's typing indicator in a channel (best-effort).\\n\\n    Discord clears the typing state after ~10s, so this is called repeatedly\\n    for the duration of a turn. Failures are swallowed: a missing bubble must\\n    never affect the reply.\\n    \\\"\\\"\\\"\\n    _api(\\\"POST\\\", f\\\"/channels/{channel_id}/typing\\\")\\n\\n\\nclass TypingIndicator:\\n    \\\"\\\"\\\"Show Discord's \\\"Sophia is typing...\\\" bubble while a turn runs.\\n\\n    Refreshes every ``_TYPING_REFRESH_SECONDS`` (the bubble expires after ~10s)\\n    and stops as soon as the turn ends, so the indicator clears the moment the\\n    reply is posted. No bubble is shown in dry-run (nothing is posted anyway).\\n    \\\"\\\"\\\"\\n\\n    def __init__(\\n        self, channel_id: str | int, interval: float = _TYPING_REFRESH_SECONDS\\n    ) -> None:\\n        self._channel_id = channel_id\\n        self._interval = interval\\n        self._stop = threading.Event()\\n        self._thread: threading.Thread | None = None\\n\\n    def start(self) -> None:\\n        if settings.discord_dry_run:\\n            return  # nothing is posted in dry-run; no bubble to show\\n        self._thread = threading.Thread(target=self._run, name=\\\"dc-typing\\\", daemon=True)\\n        self._thread.start()\\n\\n    def _run(self) -> None:\\n        while not self._stop.is_set():\\n            post_typing(self._channel_id)\\n            self._stop.wait(self._interval)\\n\\n    def stop(self) -> None:\\n        self._stop.set()\\n        thread = self._thread\\n        if thread is not None and thread.is_alive():\\n            thread.join(timeout=1.0)\\n\\n    def __enter__(self) -> \\\"TypingIndicator\\\":\\n        self.start()\\n        return self\\n\\n    def __exit__(self, *exc: object) -> None:\\n        self.stop()\\n\\n\\ndef log_observed_message(\\n    message: str, session_id: str, public_key: str, sender_name: str\\n) -> None:\"}, {\"path\": \"app/discord_adapter.py\", \"search\": \"    reply = call_chat(text, session_id, public_key)\\n    send_message(channel_id, reply)\\n\", \"replace\": \"    # Show \\\"Sophia is typing...\\\" for the duration of the turn; the bubble is\\n    # refreshed every _TYPING_REFRESH_SECONDS and cleared once the reply is sent.\\n    with TypingIndicator(channel_id):\\n        reply = call_chat(text, session_id, public_key)\\n        send_message(channel_id, reply)\\n\"}], \"writes\": [{\"path\": \"tests/test_discord_typing.py\", \"content\": \"\\\"\\\"\\\"Guard (2026-09-14): the Discord adapter must show a \\\"Sophia is typing...\\\"\\nindicator for the duration of a turn.\\n\\nRoot cause this guards against: the adapter was built without ANY typing\\nindicator -- no call to Discord's ``POST /channels/{id}/typing`` endpoint\\nexisted under any name. So a governor saw total silence during long turns\\n(``/chat-blocking`` can run tools + multiple LLM calls for up to ~180s).\\n\\nTwo invariants:\\n  1. The bubble must be *refreshed* -- Discord clears it after ~10s, so a\\n     single fire-and-forget call would fade mid-turn.\\n  2. It must *stop* when the turn ends, so the bubble clears the moment the\\n     reply lands (and the refresh thread never outlives the turn).\\n\\\"\\\"\\\"\\n\\nfrom __future__ import annotations\\n\\nimport threading\\nimport time\\n\\nfrom app import discord_adapter as da\\n\\n\\ndef _no_dry_run(monkeypatch):\\n    monkeypatch.setattr(da.settings, \\\"discord_dry_run\\\", False)\\n\\n\\ndef test_post_typing_hits_typing_endpoint(monkeypatch):\\n    \\\"\\\"\\\"post_typing must POST the documented typing-trigger route.\\\"\\\"\\\"\\n    calls: list[tuple] = []\\n\\n    def fake_api(method, path, payload=None):\\n        calls.append((method, path, payload))\\n        return {}\\n\\n    monkeypatch.setattr(da, \\\"_api\\\", fake_api)\\n    da.post_typing(\\\"12345\\\")\\n\\n    assert calls == [(\\\"POST\\\", \\\"/channels/12345/typing\\\", None)]\\n\\n\\ndef test_typing_indicator_refreshes_then_stops(monkeypatch):\\n    \\\"\\\"\\\"Bubble must be re-triggered periodically and stop on exit.\\\"\\\"\\\"\\n    _no_dry_run(monkeypatch)\\n    hits: list[str] = []\\n    monkeypatch.setattr(da, \\\"post_typing\\\", lambda cid: hits.append(str(cid)))\\n\\n    with da.TypingIndicator(\\\"999\\\", interval=0.05):\\n        time.sleep(0.18)  # ~3 intervals\\n        assert hits, \\\"indicator posted nothing while the turn ran\\\"\\n\\n    n_at_exit = len(hits)\\n    assert n_at_exit >= 2, f\\\"expected refreshes, saw {n_at_exit}\\\"\\n    time.sleep(0.15)\\n    assert len(hits) == n_at_exit, \\\"indicator kept firing after stop()\\\"\\n\\n\\ndef test_typing_indicator_joins_thread(monkeypatch):\\n    \\\"\\\"\\\"stop() must not leak the refresh thread.\\\"\\\"\\\"\\n    _no_dry_run(monkeypatch)\\n    monkeypatch.setattr(da, \\\"post_typing\\\", lambda cid: None)\\n\\n    ind = da.TypingIndicator(\\\"1\\\", interval=0.05)\\n    ind.start()\\n    ind.stop()\\n\\n    deadline = time.time() + 1.0\\n    while time.time() < deadline:\\n        if \\\"dc-typing\\\" not in {t.name for t in threading.enumerate()}:\\n            break\\n        time.sleep(0.02)\\n    assert \\\"dc-typing\\\" not in {t.name for t in threading.enumerate()}\\n\\n\\ndef test_typing_indicator_silent_in_dry_run(monkeypatch):\\n    \\\"\\\"\\\"Dry-run posts nothing, so it must show no bubble (and start no thread).\\\"\\\"\\\"\\n    monkeypatch.setattr(da.settings, \\\"discord_dry_run\\\", True)\\n    hits: list[str] = []\\n    monkeypatch.setattr(da, \\\"post_typing\\\", lambda cid: hits.append(str(cid)))\\n\\n    with da.TypingIndicator(\\\"1\\\", interval=0.05):\\n        time.sleep(0.12)\\n    assert hits == [], \\\"dry-run must not trigger the typing endpoint\\\"\\n\\n\\ndef test_turn_wraps_call_chat_with_typing(monkeypatch):\\n    \\\"\\\"\\\"The governor turn must hold the bubble around call_chat + send.\\\"\\\"\\\"\\n    events: list[str] = []\\n\\n    monkeypatch.setattr(da, \\\"author_role\\\", lambda uid, allowed: \\\"governor\\\")\\n    monkeypatch.setattr(da, \\\"resolve_governor_public_key\\\", lambda: \\\"pk\\\")\\n    monkeypatch.setattr(da, \\\"call_chat\\\", lambda *a, **k: (events.append(\\\"chat\\\"), \\\"hi\\\")[1])\\n    monkeypatch.setattr(da, \\\"send_message\\\", lambda *a, **k: events.append(\\\"send\\\") or [])\\n\\n    class _Spy:\\n        def __init__(self, channel_id, *a, **k):\\n            events.append(\\\"typing-start\\\")\\n\\n        def __enter__(self):\\n            return self\\n\\n        def __exit__(self, *exc):\\n            events.append(\\\"typing-stop\\\")\\n\\n    monkeypatch.setattr(da, \\\"TypingIndicator\\\", _Spy)\\n\\n    data = {\\n        \\\"author\\\": {\\\"id\\\": \\\"849324553221832794\\\", \\\"username\\\": \\\"gary\\\"},\\n        \\\"channel_id\\\": \\\"42\\\",\\n        \\\"content\\\": \\\"hello\\\",\\n    }\\n    da.handle_message(data, {\\\"849324553221832794\\\"}, \\\"pk\\\", \\\"guild\\\", \\\"bot\\\")\\n\\n    assert events == [\\\"typing-start\\\", \\\"chat\\\", \\\"send\\\", \\\"typing-stop\\\"]\\n\"}]}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_V8QaZ87WFZ5JSyzsNfU90553",
+   "content": "{\n  \"status\": \"success\",\n  \"repo\": \"truesight_autopilot\",\n  \"branch\": \"feat/discord-typing-indicator\",\n  \"base_branch\": \"main\",\n  \"commit_sha\": \"fe749452f18453b8af69410f280ea3fd61b00d21\",\n  \"applied\": [\n    \"write tests/test_discord_typing.py\",\n    \"edit app/discord_adapter.py\",\n    \"edit app/discord_adapter.py\",\n    \"edit app/discord_adapter.py\",\n    \"edit app/discord_adapter.py\",\n    \"edit app/discord_adapter.py\"\n  ],\n  \"pr_url\": \"https://github.com/TrueSightDAO/truesight_autopilot/pull/443\"\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "PR #443 opened. Polling CI before merging (per the pinned lesson \u2014 don't trust \"failing-or-pending\" wording).",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_Y5RwgBxey6nhAIcKvUcL3577",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /opt/truesight_autopilot\\nsleep 45\\nfor i in 1 2 3 4 5 6; do\\n  out=$(gh pr checks 443 --repo TrueSightDAO/truesight_autopilot 2>&1)\\n  echo \\\"--- poll $i ---\\\"; echo \\\"$out\\\" | head -12\\n  if ! echo \\\"$out\\\" | grep -qiE 'pending|in_progress|queued'; then echo \\\"== settled ==\\\"; break; fi\\n  sleep 30\\ndone\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_Y5RwgBxey6nhAIcKvUcL3577",
+   "content": "{\n  \"status\": \"error\",\n  \"reason\": \"command timed out after 60s\",\n  \"host\": \"autopilot\"\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "Poll timed out (60s cap) \u2014 re-checking with a single quick call.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_g5WCIs5FTVOjOVZYxIAw6627",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /opt/truesight_autopilot\\ngh pr checks 443 --repo TrueSightDAO/truesight_autopilot 2>&1 | head -12\\necho \\\"--- mergeable ---\\\"\\ngh pr view 443 --repo TrueSightDAO/truesight_autopilot --json mergeable,mergeStateStatus,state -q '.state+\\\" \\\"+.mergeable+\\\" \\\"+.mergeStateStatus'\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_g5WCIs5FTVOjOVZYxIAw6627",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"smoke\\tpending\\t0\\thttps://github.com/TrueSightDAO/truesight_autopilot/actions/runs/34802691318/job/103848374770\\ntest\\tpending\\t0\\thttps://github.com/TrueSightDAO/truesight_autopilot/actions/runs/34802691506/job/103848375579\\n--- mergeable ---\\nOPEN MERGEABLE UNSTABLE\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "CI still pending. One more poll after a wait.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_NvSzeiYKrz1vpz457MSH7840",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /opt/truesight_autopilot\\nsleep 50\\ngh pr checks 443 --repo TrueSightDAO/truesight_autopilot 2>&1 | head -12\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_NvSzeiYKrz1vpz457MSH7840",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"test\\tpending\\t0\\thttps://github.com/TrueSightDAO/truesight_autopilot/actions/runs/34802691506/job/103848375579\\nsmoke\\tpass\\t1m21s\\thttps://github.com/TrueSightDAO/truesight_autopilot/actions/runs/34802691318/job/103848374770\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "`smoke` passed; `test` still pending. One final poll before merging.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_UrzFkYbPnJrxoVvtmDbf5426",
+     "type": "function",
+     "function": {
+      "name": "ssh_run",
+      "arguments": "{\"command\": \"cd /opt/truesight_autopilot\\nsleep 55\\ngh pr checks 443 --repo TrueSightDAO/truesight_autopilot 2>&1 | head -12\", \"host\": \"autopilot\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_UrzFkYbPnJrxoVvtmDbf5426",
+   "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"smoke\\tpass\\t1m21s\\thttps://github.com/TrueSightDAO/truesight_autopilot/actions/runs/34802691318/job/103848374770\\ntest\\tpass\\t2m0s\\thttps://github.com/TrueSightDAO/truesight_autopilot/actions/runs/34802691506/job/103848375579\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false\n}"
+  },
+  {
+   "role": "assistant",
+   "content": "Both checks **pass** (smoke 1m21s, test 2m0s). Merging.",
+   "reasoning_content": "",
+   "tool_calls": [
+    {
+     "id": "call_00_ET_98NPvGUg3VOiMievgvV59521",
+     "type": "function",
+     "function": {
+      "name": "merge_pr",
+      "arguments": "{\"repo\": \"truesight_autopilot\", \"pr_number\": 443}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_00_ET_98NPvGUg3VOiMievgvV59521",
+   "content": "\u2705 PR #443 on truesight_autopilot merged successfully (sha: d0ab78d7a01c59e0415888d8d896a1066118089f). Pull Request successfully merged"
+  },
+  {
+   "role": "user",
+   "content": "[TURN DIRECTIVE] You have opened or merged a PR this turn. Per the one-PR-per-turn rule, STOP here \u2014 do NOT begin the next plan unit (it runs in a fresh turn). Stop calling tools now and write your final 'what I did this turn' report: the PR link(s), what changed, and a 'RESUME HERE \u2192 <next unit>' pointer. Start no new multi-step work."
+  },
+  {
+   "role": "assistant",
+   "content": "## What I did this turn\n\n**Gary flagged: no typing indicator during long Discord turns.** I verified his claim against live code first \u2014 **confirmed, and it was never built** (no call to Discord's typing endpoint under any name; not a regression). Then shipped the fix.\n\n### \u2705 PR #443 merged \u2014 typing indicator\n**https://github.com/TrueSightDAO/truesight_autopilot/pull/443** \u2192 merged @ `d0ab78d7`\n\n**What changed** (`app/discord_adapter.py`, +59/\u22123, plus 5 new tests):\n\n| Piece | Detail |\n|---|---|\n| `post_typing(channel_id)` | fires `POST /channels/{id}/typing`, best-effort \u2014 a failed bubble can never affect the reply |\n| `TypingIndicator` ctx-manager | daemon thread re-triggers every **8s** (`_TYPING_REFRESH_SECONDS`, since Discord clears the bubble after ~10s); **stops on exit** so it clears the moment the reply lands; thread joined (`timeout=1s`) so it can't outlive the turn |\n| Wired into `handle_message` | the governor turn is now `with TypingIndicator(channel_id): reply = call_chat(...); send_message(...)` |\n| **`_api` now accepts HTTP 204** | \ud83d\udc1b the typing endpoint returns `204 No Content`; it only accepted `200/201`, so the call would have been logged as a *failure* \u2014 this was a real latent bug I caught while reading the code |\n| Dry-run aware | no bubble when `DISCORD_DRY_RUN=true` (nothing posts anyway) |\n\n**Design note:** `handle_message` already runs in the threadpool worker, so a sync thread-based indicator is the right shape here \u2014 **no changes to the asyncio gateway loop**.\n\n### Verification\n- **`compileall` \u2705 \u00b7 `ruff check` \u2705 \u00b7 `ruff format --check` \u2705** (had to apply `ruff format` once \u2014 my lines were long)\n- New `tests/test_discord_typing.py` **5/5** \u2705 \u2014 guards: endpoint/payload shape \u00b7 refresh-then-stop \u00b7 thread joined on stop \u00b7 silent in dry-run \u00b7 turn bracketed `typing-start \u2192 chat \u2192 send \u2192 typing-stop`\n- Full suite: **1067 passed**, 2 failed \u2014 **both reproduce identically on a pristine `main` clone** (box `.env` sets `GITHUB_READ_PAT` / `EMAIL_WATCH_ENABLED`), so **pre-existing and unrelated**\n- **CI polled to green before merging** (the pinned lesson): `smoke` pass 1m21s, `test` pass 2m0s\n\n---\n### RESUME HERE \u2192 **deploy the typing indicator to the box**\nThe code is on `main`; the adapter process is still running the old code (Python doesn't hot-reload), so **the bubble is not live yet**.\n1. Run `deploy_autopilot` (**forced** this time \u2014 it will report `noop` on commit equality, so a restart needs `FORCE_DEPLOY_RESTART.md` or the sanctioned restart-only path).\n2. Verify live: post in **`project-goals`**, watch `journalctl -u truesight-autopilot-discord -f` for the `POST /channels/\u2026/typing` calls, and confirm the bubble appears in the Discord client mid-turn.\n3. Confirm the refresh actually repeats on a *long* turn (the whole point \u2014 bubble must survive past 10s).\n\n### \ud83d\udccb Still open from the plan\n1. **\ud83d\udd34 Rotate the bot token** (was shared in a public thread).\n2. **Seed col G \"Discord ID\"** \u2014 only Gary's row so far.\n3. Optional channel allowlist (currently **any** guild channel dispatches).\n4. **Follow-ups to file** on your go: redact the live `github_pat_\u2026` in `tests/test_config_own_data_repos.py:22`; `merge_pr`'s ambiguous \"failing-or-pending\" wording (now 5th occurrence).\n\n**Not done / untouched:** no deploy to the box this turn, no prod sync, no money moved, dry-run still **off** (adapter live as of the previous turn).\n\n**Wrap-up: 1** file contribution report (thread: #429, #1055, #431, #443 + deploy-dark + go-live + typing indicator) \u00b7 **2** close topic \u00b7 **3** close + delete \u2014 reply a number or 'wrap up'.\n\n\u2014\u2014\u2014\n**\u2705 Done this turn \u2014 actions taken:**\n\u2022 `ssh run` \u00d79 \u2192 read live `discord_adapter.py` (imports, `_api`, `send_message`, `call_chat`, `handle_message` gate, gateway loop, `run()` dispatch wiring); cloned clean `main` + `/tmp/tc`; applied 5 edits; wrote 5 tests; ran 4-check suite; proved the 2 failures pre-existing on pristine `main`; polled CI to green\n\u2022 `git push changes` \u2192 branch `feat/discord-typing-indicator` (`fe74945`), PR opened\n\u2022 `merge pr` \u2192 \u2705 **truesight_autopilot #443** merged @ `d0ab78d7`\n\n\u2014\u2014\u2014\n**\u2705 Done this turn \u2014 actions taken:**\n\u2022 `ssh run` \u00d717 \u2192 cd /opt/truesight_autopilot echo \"=== HEAD ===\"; git rev-parse --short HEAD echo echo \"=== imports + module header (1-60) ===\" sed -n '1,60p; cd /opt/truesight_autopilot echo '=== HEAD + origin/main ===' git log -1 --format='%h %ad %s' --date=short HEAD git fetch -q origin main 2>&; cd /opt/truesight_autopilot echo '=== gateway_once signature + dispatch wiring (500-585) ===' sed -n '500,585p' app/discord_adapter.py echo ; \u2026(+14 more)\n\u2022 `merge pr` \u2192 \u2705 PR #443 on truesight_autopilot merged successfully (sha: d0ab78d7a01c59e0415888d8d896a1066118089f). Pull Request successfully merged"
+  }
+ ]
+}

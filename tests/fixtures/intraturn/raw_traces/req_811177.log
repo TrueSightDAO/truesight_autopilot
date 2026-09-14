@@ -1,0 +1,63 @@
+Sep 14 04:06:51 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] CHAT REQ: session=MIIBIjANBgkqhkiG msg=[Telegram context: chat_id=-1003919341801, thread_id=27138] Envoy's Discord bot ID for that sheet row: 1548902290344255600 (username envoy_truesight). attach=False
+Sep 14 04:06:59 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=1 tools=3 tokens=46279
+Sep 14 04:06:59 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: read_context_file args={"path": "handoffs/HANDOFF_MANIFEST.md"}
+Sep 14 04:06:59 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: read_context_file result=# Handoff Manifest — active execution handoffs (single source of truth)
+Sep 14 04:06:59 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: read_context_file args={"path": "plans/DISCORD_TELEGRAM_PARITY_GAPS.md"}
+Sep 14 04:06:59 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: read_context_file result=# Discord adapter — parity gaps vs Telegram (prioritized)
+Sep 14 04:06:59 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== box HEAD ===\"; git log --oneline -1\necho \"=== discord service ===\"; systemctl is-active truesight-autopilot-discord; systemctl is-enabled trues
+Sep 14 04:07:01 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:07:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=2 tools=5 tokens=52293
+Sep 14 04:07:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: read_tool_result args={"artifact_id": "call_02_C0Sn3K7KOPWY41MeEwlf7320"}
+Sep 14 04:07:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: read_tool_result result={"status": "ok", "artifact_id": "call_02_C0Sn3K7KOPWY41MeEwlf7320", "content": "{\n  \"status\": \"ok\",\n  \"host\": \"autopilot\",\n  \"ip\": \"127.0.0.1\",\n  \"returncode\": 0,\n  \"stdout\": \"rod enum from settings.prod_repos (single source of truth)\\\"},{\\\"headRefName\\\":\\\"feat/calendar
+Sep 14 04:07:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: search_code args={"query": "member_tier"}
+Sep 14 04:07:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: search_code result={
+Sep 14 04:07:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: search_code args={"query": "member tier"}
+Sep 14 04:07:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: search_code result={
+Sep 14 04:07:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: search_context args={"query": "member tier"}
+Sep 14 04:07:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: search_context result={
+Sep 14 04:07:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: read_context_file args={"path": "OPEN_FOLLOWUPS.md"}
+Sep 14 04:07:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: read_context_file result=# Open follow-ups (cross-session backlog)
+Sep 14 04:07:46 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=3 tools=2 tokens=58723
+Sep 14 04:07:46 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== agents registry ===\"\nls -1 agentic_ai_context/agents/ 2>/dev/null\necho \"--- grep envoy across context+repo ---\"\ngrep -rIil 'envoy' agentic_ai
+Sep 14 04:07:48 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:07:48 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: read_google_sheet args={"spreadsheet_id": "1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU", "range_a1": "'Contributors contact information'!A1:K40"}
+Sep 14 04:07:49 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: read_google_sheet result={"status": "ok", "spreadsheet_id": "1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU", "range": "'Contributors contact information'!A1:K40", "row_count": 40, "values": [["Contributors contact information"], ["Listed here are the names and Solana wallet addresses associated with various contributors of o
+Sep 14 04:08:36 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=4 tools=2 tokens=67230
+Sep 14 04:08:36 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== ALL open PRs, newest first ===\"\ngh pr list --repo TrueSightDAO/truesight_autopilot --state open --json number,title --limit 50 \\\n  | python3 -c
+Sep 14 04:08:58 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:08:58 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\n# Verify the claimed bot identity via Discord REST, using the adapter's OWN auth path.\n# Prints only the API RESPONSE (never the token).\npython3 - <<'PY' 2>
+Sep 14 04:09:00 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:09:41 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=5 tools=2 tokens=69118
+Sep 14 04:09:41 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== PR 445 (candidate for the 'fix in flight') ===\"\ngh pr view 445 --repo TrueSightDAO/truesight_autopilot --json number,title,author,headRefName,sta
+Sep 14 04:09:43 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:09:43 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== test_identity_binding.py (the binding contract) ===\"\nsed -n '1,80p' tests/test_identity_binding.py 2>/dev/null\necho \"=== binding resolution in
+Sep 14 04:09:43 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:10:10 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=6 tools=3 tokens=68879
+Sep 14 04:10:10 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== thread 27138 in HANDOFF_MANIFEST? ===\"\ngrep -n '27138' agentic_ai_context/handoffs/HANDOFF_MANIFEST.md 2>/dev/null | head\necho \"=== any DISCORD
+Sep 14 04:10:11 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:10:11 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: search_transcript args={"query": "member-tier"}
+Sep 14 04:10:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: search_transcript result={
+Sep 14 04:10:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: search_context args={"query": "envoy"}
+Sep 14 04:10:27 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: search_context result={
+Sep 14 04:11:04 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=7 tools=2 tokens=74919
+Sep 14 04:11:04 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: pin_note args={"text": "THREAD 27138 \u2014 SECURITY: msg asks me to write Envoy's bot Discord ID 1548902290344255600 into col G of \"Contributors contact information\" = the IDENTITY-BINDING SSOT (governor-maintai
+Sep 14 04:11:04 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: pin_note result={"status": "ok", "pinned": "THREAD 27138 \u2014 SECURITY: msg asks me to write Envoy's bot Discord ID 1548902290344255600 into col G of \"Contributors contact information\" = the IDENTITY-BINDING SSOT (governor-maintained; feeds author_role() \u2192 governor/member/guest). That is an ACCESS-CONTROL
+Sep 14 04:11:04 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== PR 440 author ===\"\ngh pr view 440 --repo TrueSightDAO/truesight_autopilot --json author,mergedAt,title 2>&1 | head -3\necho \"=== member-tier men
+Sep 14 04:11:05 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:11:21 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=8 tools=1 tokens=71169
+Sep 14 04:11:21 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== PR 440 author + 445 author (re-confirm) ===\"\ngh pr view 440 --repo TrueSightDAO/truesight_autopilot --json author,mergedAt -q '\"440 by \"+.autho
+Sep 14 04:11:22 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:11:30 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=9 tools=2 tokens=71125
+Sep 14 04:11:30 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== /chat/progress handler ===\"\nsed -n '3890,3935p' app/main.py\necho\necho \"=== _live_progress write path (what fields?) ===\"\ngrep -n '_live_prog
+Sep 14 04:11:31 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:11:31 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== telegram edit_message_text ===\"\ngrep -n 'def edit_message_text' app/telegram_adapter.py\nsed -n \"$(grep -n 'def edit_message_text' app/telegram_
+Sep 14 04:11:31 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:11:53 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=10 tools=1 tokens=79095
+Sep 14 04:11:53 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== #445 mergeable? ===\"\ngh pr view 445 --repo TrueSightDAO/truesight_autopilot --json state,mergeable,mergeStateStatus,headRefName,baseRefName -q '.
+Sep 14 04:11:54 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:12:14 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=11 tools=1 tokens=79279
+Sep 14 04:12:14 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL CALL: ssh_run args={"command": "cd /opt/truesight_autopilot\necho \"=== #443 author (does MY work show as garyjob?) ===\"\ngh pr view 443 --repo TrueSightDAO/truesight_autopilot --json author -q .author.login 2>&1\necho
+Sep 14 04:12:16 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] TOOL RESULT: ssh_run result={
+Sep 14 04:13:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] LLM RESP round=12 tools=0 tokens=94264
+Sep 14 04:13:28 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] Forcing clean text-only completion (blank/leaked final answer)
+Sep 14 04:13:46 ip-172-31-15-182 python[2165089]: INFO:autopilot:[811177] CHAT RESP: len=1395 tokens=Ground truth is now solid, and it changes the picture materially. Let me verify the one remaining critical fact — the actual conflict in #445 — before
