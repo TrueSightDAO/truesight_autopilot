@@ -185,6 +185,38 @@ def resolve_governor_public_key() -> str | None:
 
 # ── Identity binding: Discord user id -> DAO contributor ────────────────
 
+_SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+
+def _resolve_sheets_credentials():
+    """Resolve read-only Sheets credentials, or ``None``.
+
+    Precedence:
+    1. Optional JSON-in-env override ``GOOGLE_SHEETS_CREDENTIALS`` (portability).
+    2. The shared loader in ``app.tools.google_creds`` — the working default,
+       identical to every other Sheets call in the app.
+
+    Never raises: any error degrades to ``None`` (fail-closed).
+    """
+    creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
+    if creds_json:
+        try:
+            from google.oauth2 import service_account  # type: ignore
+
+            creds_dict = json.loads(creds_json)
+            return service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=_SHEETS_SCOPES
+            )
+        except Exception as exc:  # noqa: BLE001 -- fall back to the shared loader
+            logger.warning("GOOGLE_SHEETS_CREDENTIALS override invalid: %s", exc)
+    try:
+        from .tools.google_creds import load_credentials
+
+        return load_credentials(None, _SHEETS_SCOPES)
+    except Exception as exc:  # noqa: BLE001 -- never raise out of credential lookup
+        logger.warning("Shared Google credential loader failed: %s", exc)
+        return None
+
 
 def _fetch_discord_id_email(discord_id: str) -> str | None:
     """Look up the email bound to this Discord id in the Contributors sheet.
@@ -192,20 +224,14 @@ def _fetch_discord_id_email(discord_id: str) -> str | None:
     Returns the email string, or None if unbound. Never raises.
     """
     try:
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
-    except Exception:  # noqa: BLE001 -- google libs optional at call time
+    except Exception:  # noqa: BLE001 -- google lib optional at call time
         return None
 
-    creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
-    if not creds_json:
+    credentials = _resolve_sheets_credentials()
+    if credentials is None:
         return None
     try:
-        creds_dict = json.loads(creds_json)
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-        )
         service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
         rows = (
             service.spreadsheets()
