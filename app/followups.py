@@ -384,8 +384,8 @@ def set_status(id: str, new_status: str) -> bool:
 
     _write_md(new_content)
 
-    # Update state sidecar
-    upsert_state(id, status=new_status)
+    # NOTE: the sidecar is written by the caller below *before* the .md is
+    # rewritten (see set_status); keep it durable-first there.
 
     return True
 
