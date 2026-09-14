@@ -42,6 +42,7 @@ import os
 import threading
 import time
 import urllib.parse
+import uuid
 from typing import Any, Callable
 
 import httpx
@@ -158,6 +159,71 @@ def is_mention(content: str, bot_id: str) -> bool:
 def _extract_message_text(data: dict[str, Any]) -> str:
     """Best-effort plain text from a MESSAGE_CREATE event payload."""
     return (data.get("content") or "").strip()
+
+
+def extract_attachments(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the message's attachment descriptors (files uploaded with it).
+
+    Discord puts uploaded files in a top-level ``attachments`` array:
+    ``[{id, filename, size, url, content_type, proxy_url}, ...]``. Only entries
+    that actually carry a CDN ``url`` are returned (the url is what we fetch).
+    """
+    atts = data.get("attachments")
+    if not isinstance(atts, list):
+        return []
+    return [a for a in atts if isinstance(a, dict) and a.get("url")]
+
+
+def attachment_names(data: dict[str, Any]) -> str:
+    """Comma-joined display names for a message's attachments (for logging).
+
+    Used on the data-only path: a non-governor's file is *named* in the session
+    log but NEVER downloaded -- an attachment can never become an instruction.
+    """
+    return ", ".join(
+        a.get("filename") or a.get("id") or "file" for a in extract_attachments(data)
+    )
+
+
+# Extension -> MIME fallback, for when a CDN filename has no usable suffix.
+_CT_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "application/pdf": ".pdf",
+}
+
+
+def download_discord_file(att: dict[str, Any]) -> str | None:
+    """Download one Discord attachment to a local path the brain can read.
+
+    Discord CDN urls are **pre-signed**, so NO ``Authorization`` header is sent
+    -- the bot token must never leave ``discord.com``. Returns the absolute
+    path, or None on failure.
+    """
+    url = att.get("url")
+    if not url:
+        return None
+    try:
+        filename = att.get("filename") or ""
+        ext = os.path.splitext(filename)[1].lower()
+        if not ext:
+            ext = _CT_EXT.get((att.get("content_type") or "").lower(), "")
+        ext = ext or ".bin"
+        os.makedirs(_ATTACH_DIR, exist_ok=True)
+        dest = os.path.join(_ATTACH_DIR, f"{uuid.uuid4().hex}{ext}")
+        with httpx.stream("GET", url, timeout=120.0) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as fh:
+                for chunk in resp.iter_bytes():
+                    fh.write(chunk)
+        logger.info("downloaded Discord attachment -> %s", dest)
+        return dest
+    except Exception as exc:  # noqa: BLE001 -- one bad file must not kill the turn
+        logger.warning("Discord attachment download failed (%s): %s", url, exc)
+        return None
 
 
 # ── Vault / config ──────────────────────────────────────────────────────
@@ -508,6 +574,274 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
 # ── Message dispatch ────────────────────────────────────────────────────
 
 
+def edit_message_text(channel_id: str | int, message_id: str | int, text: str) -> bool:
+    """Edit a message the bot already posted (PATCH). True on success.
+
+    Needs its own message id, so it pairs with ``send_message``. Used to keep a
+    single status message updated in place during long attachment processing.
+    """
+    if not message_id or message_id == "dry-run":
+        return False
+    if settings.discord_dry_run:
+        logger.info(
+            "[DRY_RUN] would edit message %s in %s: %.120s",
+            message_id,
+            channel_id,
+            text,
+        )
+        return False
+    result = _api(
+        "PATCH",
+        f"/channels/{channel_id}/messages/{message_id}",
+        {"content": (text or "")[:_MESSAGE_LIMIT]},
+    )
+    return result is not None
+
+
+def _auto_process_attachment(
+    local_path: str, channel_id: str | int, session_id: str
+) -> str | None:
+    """Auto-detect a downloaded file, extract its content, return a summary.
+
+    Mirrors ``telegram_adapter._auto_process_attachment``: PDF (with OCR
+    fallback for scans), image (OCR + EXIF/GPS), and Word (.docx) are handled.
+    Returns a summary string for the LLM, or None on failure/unknown type.
+
+    The caller puts the returned text INLINE in the dispatched message -- we do
+    NOT write the transcript from here. A separate process writing the session
+    file while a turn holds the history in memory clobbers it (the cross-process
+    race that bricked Telegram threads 3 and 780); the turn is the single writer
+    and appends under the per-session lock.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+    ext = Path(local_path).suffix.lower()
+    pdf_exts = {".pdf"}
+    image_exts = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".tiff",
+        ".tif",
+        ".bmp",
+        ".webp",
+        ".heic",
+        ".heif",
+    }
+    docx_exts = {".docx"}
+
+    ids = send_message(channel_id, "\U0001f4c4 Processing attachment\u2026")
+    status_id = ids[0] if ids else None
+
+    def _update_status(msg: str) -> None:
+        if status_id:
+            edit_message_text(channel_id, status_id, msg)
+
+    def _run_script(script_name: str, *args: str, timeout: int = 120) -> dict:
+        script_path = SCRIPTS_DIR / script_name
+        if not script_path.exists():
+            return {"status": "error", "message": f"Script not found: {script_path}"}
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script_path), *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "message": f"Script exited {result.returncode}: {result.stderr[:500]}",
+                }
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "Script output was not valid JSON"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "Script timed out"}
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "message": str(exc)}
+
+    filename = Path(local_path).name
+
+    # --- PDF -------------------------------------------------------------
+    if ext in pdf_exts:
+        _update_status("\U0001f4c4 Extracting PDF text\u2026")
+        pdf_result = _run_script("extract_pdf_text.py", local_path)
+        if pdf_result.get("status") != "success":
+            _update_status(
+                f"\u26a0\ufe0f PDF extraction failed: "
+                f"{pdf_result.get('message', 'unknown error')}"
+            )
+            return None
+
+        page_count = pdf_result.get("page_count", 0)
+        total_chars = pdf_result.get("total_chars", 0)
+        is_scanned = pdf_result.get("likely_scanned_pdf", False)
+
+        pages_text = []
+        for pg in pdf_result.get("pages", []):
+            t = (pg.get("text") or "").strip()
+            if t:
+                pages_text.append(f"--- Page {pg['page']} ---\n{t}")
+        extracted_text = "\n\n".join(pages_text)
+
+        ocr_text = ""
+        if is_scanned:
+            _update_status("\U0001f4c4 PDF appears scanned \u2014 running OCR\u2026")
+            ocr_result = _run_script("ocr_image.py", local_path, "eng")
+            if ocr_result.get("status") == "success":
+                ocr_text = ocr_result.get("text", "")
+                extracted_text += f"\n\n--- OCR of scanned PDF ---\n{ocr_text}"
+
+        summary = (
+            f"[Attachment auto-processed: **{filename}**]\n"
+            f"- Type: PDF ({page_count} page{'s' if page_count != 1 else ''}, "
+            f"{total_chars} chars)\n"
+        )
+        if is_scanned:
+            summary += (
+                f"- Scanned PDF: OCR also applied ({len(ocr_text)} chars extracted)\n"
+            )
+        summary += f"\nExtracted content:\n```\n{extracted_text[:45000]}\n```\n"
+        if len(extracted_text) > 45000:
+            summary += "\n*(content truncated to 45000 chars)*\n"
+        _update_status(
+            f"\u2705 Extracted {page_count} page{'s' if page_count != 1 else ''} from PDF"
+        )
+        return summary
+
+    # --- Image -----------------------------------------------------------
+    if ext in image_exts:
+        ocr_path = local_path
+        converted_from_heic = False
+        if ext in (".heic", ".heif"):
+            _update_status("\U0001f5bc\ufe0f Converting HEIC to JPEG\u2026")
+            from .tools.qr_scanner import convert_heic_to_jpg
+
+            jpg_path = convert_heic_to_jpg(local_path)
+            if not jpg_path:
+                _update_status(
+                    "\u26a0\ufe0f HEIC conversion failed \u2014 image not OCR-able"
+                )
+                return None
+            ocr_path = jpg_path
+            converted_from_heic = True
+
+        _update_status("\U0001f4f8 Running OCR on image\u2026")
+        ocr_result = _run_script("ocr_image.py", ocr_path, "eng")
+        if ocr_result.get("status") != "success":
+            _update_status(
+                f"\u26a0\ufe0f OCR failed: {ocr_result.get('message', 'unknown error')}"
+            )
+            return None
+
+        extracted_text = ocr_result.get("text", "")
+        confidence = ocr_result.get("avg_confidence", 0)
+        quality = ocr_result.get("quality", "unknown")
+
+        summary = (
+            f"[Attachment auto-processed: **{filename}**]\n"
+            f"- Type: Image (OCR confidence: {confidence}%, quality: {quality})\n"
+        )
+        if converted_from_heic:
+            summary += "- Note: HEIC converted to JPEG (EXIF/GPS preserved)\n"
+
+        # Surface GPS when present (phone photos of farms / cacao bags).
+        try:
+            from .tools.qr_scanner import extract_gps_from_image
+
+            gps = extract_gps_from_image(ocr_path)
+            if gps:
+                summary += (
+                    f"- \U0001f4cd GPS: {gps['lat']}, {gps['lon']}"
+                    + (f" (alt {gps['alt']} m)" if gps.get("alt") is not None else "")
+                    + "\n"
+                )
+                if gps.get("timestamp"):
+                    summary += f"- \U0001f550 Captured: {gps['timestamp']}\n"
+        except Exception:  # noqa: BLE001 -- GPS is a bonus, never fatal
+            pass
+
+        if extracted_text:
+            summary += f"\nExtracted text:\n```\n{extracted_text[:45000]}\n```\n"
+        else:
+            summary += "\n*(No text detected in image)*\n"
+        _update_status(f"\u2705 OCR complete (confidence: {confidence}%)")
+        return summary
+
+    # --- Word (.docx) ----------------------------------------------------
+    if ext in docx_exts:
+        _update_status("\U0001f4c4 Extracting Word document text\u2026")
+        docx_result = _run_script("extract_docx_text.py", local_path)
+        if docx_result.get("status") != "success":
+            _update_status(
+                f"\u26a0\ufe0f Word extraction failed: "
+                f"{docx_result.get('message', 'unknown error')}"
+            )
+            return None
+
+        extracted_text = docx_result.get("text", "")
+        paragraph_count = docx_result.get("paragraph_count", 0)
+        table_count = docx_result.get("table_count", 0)
+        summary = (
+            f"[Attachment auto-processed: **{filename}**]\n"
+            f"- Type: Word document ({paragraph_count} paragraph"
+            f"{'s' if paragraph_count != 1 else ''}, {table_count} table"
+            f"{'s' if table_count != 1 else ''})\n"
+        )
+        if extracted_text:
+            summary += f"\nExtracted content:\n```\n{extracted_text[:45000]}\n```\n"
+            if len(extracted_text) > 45000:
+                summary += "\n*(content truncated to 45000 chars)*\n"
+        else:
+            summary += "\n*(No text detected in document)*\n"
+        _update_status(
+            f"\u2705 Extracted {paragraph_count} paragraph"
+            f"{'s' if paragraph_count != 1 else ''} from Word document"
+        )
+        return summary
+
+    _update_status(f"\u26a0\ufe0f Unknown file type: {ext}")
+    return None
+
+
+def _ingest_attachments(
+    attachments: list[dict[str, Any]],
+    channel_id: str | int,
+    session_id: str,
+    text: str,
+) -> str:
+    """Download + auto-process a governor's attachments; build the brain prompt.
+
+    Extracted content rides INLINE in the dispatched message (see
+    ``_auto_process_attachment`` for why we never write the transcript here).
+    """
+    parts = [text or "Please inspect the attached file."]
+    for att in attachments:
+        name = att.get("filename") or "attachment"
+        local_path = download_discord_file(att)
+        if not local_path:
+            parts.append(
+                f"\n\n\u26a0\ufe0f Couldn't download attachment **{name}** from Discord."
+            )
+            continue
+        summary = _auto_process_attachment(local_path, channel_id, session_id)
+        if summary:
+            parts.append(f"\n\n{summary}")
+        else:
+            parts.append(
+                f"\n\n[Attachment **{name}** saved at {local_path} \u2014 use "
+                f"scan_qr_from_file / scan_qr_batch for QR images, extract_pdf_text "
+                f"for PDFs, ocr_image for text from images, or read_local_file for "
+                f"text. After processing, use append_to_transcript to persist the "
+                f"extracted content.]"
+            )
+    return "".join(parts)
+
+
 def handle_message(
     data: dict[str, Any],
     allowed: set[str],
@@ -526,7 +860,8 @@ def handle_message(
     message_id = str(data.get("id") or "")
     raw = _extract_message_text(data)
     text = strip_bot_mention(raw, bot_id)
-    if not text:
+    attachments = extract_attachments(data)
+    if not text and not attachments:
         return
 
     session_id = build_session_id(guild_id, channel_id)
@@ -548,7 +883,11 @@ def handle_message(
             channel_id,
         )
         if public_key:
-            log_observed_message(text, session_id, public_key, username)
+            observed = text
+            names = attachment_names(data)
+            if names:
+                observed = f"{observed}\n[attachments: {names}]".strip()
+            log_observed_message(observed, session_id, public_key, username)
         return
 
     if not public_key:
@@ -572,7 +911,10 @@ def handle_message(
     # duration of the turn.
     add_reaction(channel_id, message_id)
     with TypingIndicator(channel_id):
-        reply = call_chat(text, session_id, public_key)
+        prompt = text
+        if attachments:
+            prompt = _ingest_attachments(attachments, channel_id, session_id, text)
+        reply = call_chat(prompt, session_id, public_key)
         send_message(channel_id, reply)
     remove_reaction(channel_id, message_id)
 
