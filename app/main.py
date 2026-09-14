@@ -5542,8 +5542,9 @@ async def _context_sync_loop():
 
 async def _branch_janitor_loop():
     """Periodic janitor that prunes orphan `autopilot/fix-*` branches >30 days
-    old across all allowed repos. Runs once at startup (after a short delay)
-    and then every 24h. Skipped under DRY_RUN."""
+    old across every writable repo (default-allow; excludes prod / API-only).
+    Runs once at startup (after a short delay) and then every 24h. Skipped
+    under DRY_RUN."""
     if settings.dry_run:
         logger.info("Janitor: DRY_RUN=true — skipping branch janitor loop")
         return
@@ -5585,7 +5586,7 @@ async def _branch_janitor_loop():
                         total_deleted += 1
             if total_deleted:
                 logger.info(
-                    "Janitor: pruned %d stale autopilot branches across allowed repos",
+                    "Janitor: pruned %d stale autopilot branches across writable repos",
                     total_deleted,
                 )
         except Exception as e:
