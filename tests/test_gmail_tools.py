@@ -220,3 +220,146 @@ def test_legacy_env_fallback_for_admin(monkeypatch, tmp_path):
 
     # gary has no env fallback.
     assert gt._token_data("gary") is None
+
+
+# ── threading params (In-Reply-To / References / threadId) ──────────────────
+
+
+def test_send_sets_threading_headers_and_thread_id(tmp_path):
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    captured = {}
+
+    def capture_send(userId, body):
+        captured["body"] = body
+        exec_mock = MagicMock()
+        exec_mock.execute.return_value = {
+            "id": "sent-2",
+            "threadId": "t99",
+            "labelIds": ["SENT"],
+        }
+        return exec_mock
+
+    service.users.return_value.messages.return_value.send.side_effect = capture_send
+
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        out = json.loads(
+            gt.gmail_send(
+                to="p@q.com",
+                subject="Re: hi",
+                body="threaded reply",
+                account="admin",
+                in_reply_to="<orig-1@mail.gmail.com>",
+                references="<root-0@mail.gmail.com> <orig-1@mail.gmail.com>",
+                thread_id="t99",
+            )
+        )
+
+    assert out["status"] == "ok"
+    assert out["thread_id"] == "t99"
+    # the threadId is forwarded in the API call so the reply nests
+    assert captured["body"]["threadId"] == "t99"
+    raw = base64.urlsafe_b64decode(captured["body"]["raw"].encode("ascii")).decode(
+        "utf-8"
+    )
+    assert "In-Reply-To: <orig-1@mail.gmail.com>" in raw
+    assert "References: <root-0@mail.gmail.com> <orig-1@mail.gmail.com>" in raw
+
+
+def test_send_without_threading_omits_headers_and_thread_id(tmp_path):
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    captured = {}
+
+    def capture_send(userId, body):
+        captured["body"] = body
+        exec_mock = MagicMock()
+        exec_mock.execute.return_value = {"id": "s3", "threadId": "t1"}
+        return exec_mock
+
+    service.users.return_value.messages.return_value.send.side_effect = capture_send
+
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        gt.gmail_send(to="p@q.com", subject="hi", body="plain", account="admin")
+
+    # no threadId key when not requested → normal top-level send
+    assert "threadId" not in captured["body"]
+    raw = base64.urlsafe_b64decode(captured["body"]["raw"].encode("ascii")).decode(
+        "utf-8"
+    )
+    assert "In-Reply-To:" not in raw
+    assert "References:" not in raw
+
+
+def test_create_draft_threads_under_thread_id(tmp_path):
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    captured = {}
+
+    def capture_create(userId, body):
+        captured["body"] = body
+        exec_mock = MagicMock()
+        exec_mock.execute.return_value = {"id": "d2", "message": {"id": "m2"}}
+        return exec_mock
+
+    service.users.return_value.drafts.return_value.create.side_effect = capture_create
+
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        out = json.loads(
+            gt.gmail_create_draft(
+                to="p@q.com",
+                subject="Re: hi",
+                body="draft reply",
+                account="admin",
+                in_reply_to="<orig-2@mail.gmail.com>",
+                thread_id="t42",
+            )
+        )
+
+    assert out["status"] == "ok"
+    assert captured["body"]["message"]["threadId"] == "t42"
+    raw = base64.urlsafe_b64decode(
+        captured["body"]["message"]["raw"].encode("ascii")
+    ).decode("utf-8")
+    assert "In-Reply-To: <orig-2@mail.gmail.com>" in raw
+
+
+def test_read_message_surfaces_references_header(tmp_path):
+    _write_token(tmp_path, "admin")
+    service = _mock_service()
+    service.users.return_value.messages.return_value.get.return_value.execute.return_value = {
+        "id": "m1",
+        "threadId": "t1",
+        "snippet": "hello",
+        "labelIds": ["INBOX"],
+        "payload": {
+            "headers": [
+                {"name": "From", "value": "a@b.com"},
+                {"name": "To", "value": "admin+sophia@truesight.me"},
+                {"name": "Subject", "value": "Re: budget"},
+                {"name": "Message-ID", "value": "<orig-3@mail.gmail.com>"},
+                {"name": "References", "value": "<root-3@mail.gmail.com>"},
+            ],
+            "mimeType": "text/plain",
+            "body": {"data": base64.urlsafe_b64encode(b"hi").decode("ascii")},
+        },
+    }
+
+    with patch.object(gt, "_build_service", return_value=(service, None)):
+        out = json.loads(gt.gmail_read_message("m1", account="admin"))
+
+    assert out["status"] == "ok"
+    assert out["headers"]["message_id"] == "<orig-3@mail.gmail.com>"
+    assert out["headers"]["references"] == "<root-3@mail.gmail.com>"
+
+
+def test_tool_specs_expose_threading_params():
+    """The model must be able to see + pass the threading kwargs."""
+    by_name = {s.name: s for s in gt.TOOL_SPECS}
+    for tool in ("gmail_send", "gmail_create_draft"):
+        props = by_name[tool].parameters["properties"]
+        assert "in_reply_to" in props
+        assert "references" in props
+        assert "thread_id" in props
+        # required stayed minimal — threading params are optional
+        assert by_name[tool].parameters["required"] == ["to", "subject", "body"]

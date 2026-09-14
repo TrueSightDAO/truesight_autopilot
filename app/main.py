@@ -2589,6 +2589,9 @@ def _run_tool_sync(
             cc=func_args.get("cc"),
             bcc=func_args.get("bcc"),
             attachment_path=func_args.get("attachment_path"),
+            in_reply_to=func_args.get("in_reply_to"),
+            references=func_args.get("references"),
+            thread_id=func_args.get("thread_id"),
         )
     if func_name == "gmail_create_draft":
         from .tools.gmail_tools import gmail_create_draft as _gmail_create_draft
@@ -2601,6 +2604,9 @@ def _run_tool_sync(
             cc=func_args.get("cc"),
             bcc=func_args.get("bcc"),
             attachment_path=func_args.get("attachment_path"),
+            in_reply_to=func_args.get("in_reply_to"),
+            references=func_args.get("references"),
+            thread_id=func_args.get("thread_id"),
         )
     if func_name == "gmail_list_labels":
         from .tools.gmail_tools import gmail_list_labels as _gmail_list_labels

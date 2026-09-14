@@ -110,6 +110,12 @@ Hard rules:
     intercepted by policy outside your control.
   - Never include secrets, tokens, keys, addresses, or bank details in a draft.
   - Keep drafts short and neutral; never commit the DAO to anything.
+  - Reply ON THE SAME THREAD: pass the original message's Message-ID as
+    in_reply_to, its threadId as thread_id, and (when present) its References
+    chain into references, so your reply nests in the existing conversation
+    instead of starting a new one. Use the values returned by gmail_read_message
+    (headers.message_id, thread_id). For an escalation, also CC
+    garyjob@agroverse.shop.
   - Your available tools are ONLY gmail_search, gmail_read_message,
     gmail_send, gmail_create_draft. Use nothing else.
 """
