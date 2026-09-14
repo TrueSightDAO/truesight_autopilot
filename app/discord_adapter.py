@@ -218,19 +218,22 @@ def _resolve_sheets_credentials():
         return None
 
 
-def _fetch_discord_id_email(discord_id: str) -> str | None:
-    """Look up the email bound to this Discord id in the Contributors sheet.
+def _lookup_discord_id_email(discord_id: str) -> tuple[bool, str | None]:
+    """Perform the sheet lookup, distinguishing failure from "unbound".
 
-    Returns the email string, or None if unbound. Never raises.
+    Returns ``(resolved, email)`` where ``resolved`` is False when the lookup
+    could not be completed (credentials missing/invalid, or a Sheets error) and
+    True when the sheet was read successfully (``email`` is then the bound email
+    or None for an unbound id). Never raises.
     """
     try:
         from googleapiclient.discovery import build
     except Exception:  # noqa: BLE001 -- google lib optional at call time
-        return None
+        return False, None
 
     credentials = _resolve_sheets_credentials()
     if credentials is None:
-        return None
+        return False, None
     try:
         service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
         rows = (
@@ -245,24 +248,41 @@ def _fetch_discord_id_email(discord_id: str) -> str | None:
         )
     except Exception as exc:  # noqa: BLE001 -- degrade to unbound
         logger.warning("Discord binding sheet read failed: %s", exc)
-        return None
+        return False, None
 
     want = str(discord_id).strip()
     for row in rows:
+        # Exact-match only: column G may hold legacy handles (e.g. "H4N5#0433")
+        # which must never bind; only a modern snowflake equals the user id.
         if len(row) > COL_DISCORD_ID and (row[COL_DISCORD_ID] or "").strip() == want:
             email = (row[3] or "").strip() if len(row) > 3 else ""
-            return email or None
-    return None
+            return True, email or None
+    return True, None
+
+
+def _fetch_discord_id_email(discord_id: str) -> str | None:
+    """Look up the email bound to this Discord id in the Contributors sheet.
+
+    Returns the email string, or None if unbound (or unavailable). Never raises.
+    """
+    return _lookup_discord_id_email(discord_id)[1]
 
 
 def discord_email(discord_id: str) -> str | None:
-    """Cached wrapper around :func:`_fetch_discord_id_email`."""
+    """Cached wrapper around :func:`_fetch_discord_id_email`.
+
+    Successful lookups (including an unbound id → None) are cached for a short
+    TTL. Failures (credentials/Sheets errors) are NOT cached, so the binding
+    recovers immediately once credentials become available.
+    """
+    key = str(discord_id)
     now = time.time()
-    cached = _binding_cache.get(str(discord_id))
+    cached = _binding_cache.get(key)
     if cached is not None and (now - cached[0]) < _BINDING_CACHE_TTL:
         return cached[1]
-    email = _fetch_discord_id_email(str(discord_id))
-    _binding_cache[str(discord_id)] = (now, email)
+    resolved, email = _lookup_discord_id_email(key)
+    if resolved:
+        _binding_cache[key] = (now, email)
     return email
 
 
