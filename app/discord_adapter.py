@@ -825,12 +825,13 @@ def call_chat_with_progress(
                     break
 
                 elif etype == "done":
+                    # NOTE: the brain may still emit a ``proposal`` object, but the
+                    # DAO approval gate was REMOVED 2026-06-18 -- a signed
+                    # submission IS the authorization, so there is nothing to
+                    # "approve/reject in the DApp". Appending that prompt leaves a
+                    # governor waiting for a button that does nothing, so we no
+                    # longer surface it (mirrors app/context.py's operating rule).
                     final_response = (event.get("response") or "").strip()
-                    if event.get("proposal"):
-                        final_response += (
-                            "\n\n\u26a0\ufe0f This action needs approval \u2014 open "
-                            "the DApp chat to approve/reject."
-                        )
                     break
 
             if final_response:

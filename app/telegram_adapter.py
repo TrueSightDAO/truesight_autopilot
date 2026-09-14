@@ -1153,10 +1153,10 @@ def call_chat(message: str, session_id: str, public_key: str) -> str:
     text = (data.get("response") or "").strip()
     if not text:
         text = "⚠️ Autopilot returned an empty response. Try rephrasing, or break the request into smaller steps."
-    if data.get("proposal"):
-        text += (
-            "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
-        )
+    # The DAO approval gate was REMOVED 2026-06-18 -- a signed submission IS
+    # the authorization. A ``proposal`` in the payload is no longer actionable
+    # via a DApp Approve/Reject button, so we do not append that prompt (it
+    # would strand the governor). See app/context.py's operating rule.
     return text
 
 
@@ -1332,8 +1332,8 @@ def call_chat_with_progress(
                     # sites): the loop in _run_turn_with_auto_advance reads it.
                     if advance_out is not None:
                         advance_out["advance"] = event.get("advance")
-                    if event.get("proposal"):
-                        final_response += "\n\n⚠️ This action needs approval — open the DApp chat to approve/reject."
+                    # No approval prompt: the DAO approval gate was removed
+                    # 2026-06-18 -- a signed submission IS the authorization.
                     break
 
             # Replace status message with final response
