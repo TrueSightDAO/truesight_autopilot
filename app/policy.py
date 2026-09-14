@@ -4,7 +4,7 @@ Resolves (tenant, surface, identity, action) → allow/deny.
 
 Identity resolver:
   telegram_id → env allowlist, OR Column X (Contributors contact
-  information) → Governors cache → {guest, governor}
+  information) → Governors cache → {guest, member, governor}
 
 A telegram_id verified through the Telegram /verify flow is written to
 Column X; if that contributor is in the Governors cache, they resolve to
@@ -35,9 +35,20 @@ logger = logging.getLogger(__name__)
 
 
 class Role(enum.Enum):
-    """Resolved role for a requester."""
+    """Resolved role for a requester.
+
+    Authority order (weakest -> strongest):
+
+    * ``GUEST``    -- unknown / unverified: observed as context only.
+    * ``MEMBER``   -- a verified contributor who is NOT a governor. May
+                      converse with the assistant (ask / research / draft)
+                      but carries **no** governor authority: never signs,
+                      never deploys, never moves money.
+    * ``GOVERNOR`` -- may instruct the assistant and authorize actions.
+    """
 
     GUEST = "guest"
+    MEMBER = "member"
     GOVERNOR = "governor"
 
 
@@ -218,6 +229,15 @@ def resolve_identity(
                     role=Role.GOVERNOR,
                     name=bound_name or display_name or telegram_username,
                 )
+            # Bound to a real contributor, but NOT in the Governors cache:
+            # MEMBER (verified, non-governor). This previously fell through to
+            # GUEST, which made verified members indistinguishable from
+            # anonymous strangers (found 2026-09-16).
+            return Identity(
+                telegram_id=telegram_id,
+                role=Role.MEMBER,
+                name=bound_name or display_name or telegram_username,
+            )
 
     # 3. Display name match (weaker — Telegram display names can be changed)
     if display_name and display_name.strip() in governor_names:

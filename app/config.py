@@ -579,6 +579,15 @@ class Settings(BaseSettings):
     discord_allowed_user_ids: str = Field(
         default="", validation_alias="DISCORD_ALLOWED_USER_IDS"
     )
+    # Comma-separated Discord user ids recognised as MEMBERS (verified
+    # contributors who are NOT governors). Members are attributed and may
+    # converse, but carry no governor authority -- their messages stay
+    # data-only. This is the env half of the member tier; the sheet half
+    # (Contributors contact information, Discord-ID column) resolves
+    # automatically.
+    discord_member_user_ids: str = Field(
+        default="", validation_alias="DISCORD_MEMBER_USER_IDS"
+    )
     # Which governor identity the bot speaks as (resolved to a public key).
     discord_governor_name: str = Field(
         default="Gary Teh", validation_alias="DISCORD_GOVERNOR_NAME"

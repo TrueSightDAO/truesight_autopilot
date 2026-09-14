@@ -259,9 +259,11 @@ class TestBindingResolution:
         assert identity.role == Role.GOVERNOR
         assert identity.name == "Gary Teh"
 
-    def test_bound_member_is_guest_but_keeps_name(self):
-        """A verified non-governor member falls through to GUEST, but the
-        binding name is kept for audit."""
+    def test_bound_member_is_member_and_keeps_name(self):
+        """A verified non-governor member resolves to MEMBER (not GUEST), and
+        the binding name is kept for attribution. Changed 2026-09-16: the
+        member tier was previously indistinguishable from an anonymous
+        guest."""
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USER_IDS": ""}):
             with patch(
                 "app.identity_binding.check_binding_status",
@@ -275,7 +277,7 @@ class TestBindingResolution:
                     "app.governor_registry.load_governors", return_value=_GOV_CACHE
                 ):
                     identity = resolve_identity(telegram_id=55555)
-        assert identity.role == Role.GUEST
+        assert identity.role == Role.MEMBER
         assert identity.name == "Member Person"
 
     def test_unbound_id_is_guest(self):
