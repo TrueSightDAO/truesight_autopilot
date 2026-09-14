@@ -98,7 +98,7 @@ class TestHelpers:
 class TestProcessOne:
     @pytest.mark.asyncio
     async def test_strike_resolves_followup(self, sample_followup: dict):
-        """When probe strikes, follow-up is resolved."""
+        """A strike resolves ONLY when BOTH notify and turn-spin succeeded."""
         from app.followup_loop import _process_one
 
         now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
@@ -111,11 +111,111 @@ class TestProcessOne:
             ),
             patch("app.followup_loop.set_status") as mock_set_status,
             patch("app.followup_loop.upsert_state"),
-            patch("app.followup_loop._post_to_thread", new_callable=AsyncMock),
-            patch("app.followup_loop._spin_sophia_turn", new_callable=AsyncMock),
+            patch(
+                "app.followup_loop._post_to_thread",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "app.followup_loop._spin_sophia_turn",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             await _process_one(sample_followup, now)
             mock_set_status.assert_called_once_with("test-followup", "resolved")
+
+    @pytest.mark.asyncio
+    async def test_strike_not_resolved_when_notify_fails(self, sample_followup: dict):
+        """REGRESSION (#438): a strike whose notification FAILED must stay open,
+        not be silently marked resolved."""
+        from app.followup_loop import _process_one
+
+        now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+        with (
+            patch("app.followup_loop.get_state", return_value={"attempts": 0}),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": True, "evidence": "Struck!"},
+            ),
+            patch("app.followup_loop.set_status") as mock_set_status,
+            patch("app.followup_loop.upsert_state") as mock_upsert,
+            patch(
+                "app.followup_loop._post_to_thread",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.followup_loop._spin_sophia_turn",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await _process_one(sample_followup, now)
+            mock_set_status.assert_not_called()
+            assert _next_check_within_hours(mock_upsert, 2)
+
+    @pytest.mark.asyncio
+    async def test_strike_not_resolved_when_turn_fails(self, sample_followup: dict):
+        """REGRESSION (#438): a strike whose Sophia turn FAILED to dispatch must
+        stay open."""
+        from app.followup_loop import _process_one
+
+        now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+        with (
+            patch("app.followup_loop.get_state", return_value={"attempts": 0}),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": True, "evidence": "Struck!"},
+            ),
+            patch("app.followup_loop.set_status") as mock_set_status,
+            patch("app.followup_loop.upsert_state") as mock_upsert,
+            patch(
+                "app.followup_loop._post_to_thread",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "app.followup_loop._spin_sophia_turn",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            await _process_one(sample_followup, now)
+            mock_set_status.assert_not_called()
+            assert _next_check_within_hours(mock_upsert, 2)
+
+    @pytest.mark.asyncio
+    async def test_strike_total_failure_stays_open(self, sample_followup: dict):
+        """Both notify and turn fail - the exact #438 scenario - item stays open."""
+        from app.followup_loop import _process_one
+
+        now = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+        with (
+            patch("app.followup_loop.get_state", return_value={"attempts": 0}),
+            patch(
+                "app.followup_loop.run_probe",
+                return_value={"struck": True, "evidence": "Struck!"},
+            ),
+            patch("app.followup_loop.set_status") as mock_set_status,
+            patch("app.followup_loop.upsert_state") as mock_upsert,
+            patch(
+                "app.followup_loop._post_to_thread",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.followup_loop._spin_sophia_turn",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            await _process_one(sample_followup, now)
+            mock_set_status.assert_not_called()
+            assert _next_check_within_hours(mock_upsert, 2)
 
     @pytest.mark.asyncio
     async def test_escalation_pings_thread(self, sample_followup: dict):
@@ -338,3 +438,56 @@ class TestPostToThreadDirect:
 
         # Must not raise even without a token configured.
         await _post_to_thread_direct("-1003919341801", "9346", "hello")
+
+
+# ---- regression: the notify path must call the REAL send_message symbol ----
+
+
+def _next_check_within_hours(mock_upsert, hours: float) -> bool:
+    """True iff the LAST upsert_state call set next_check within `hours` from now."""
+    from datetime import datetime, timedelta, timezone
+
+    _args, kwargs = mock_upsert.call_args
+    nxt = kwargs.get("next_check")
+    if not nxt:
+        return False
+    dt = datetime.fromisoformat(nxt)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = dt - datetime.now(timezone.utc)
+    return timedelta(0) < delta <= timedelta(hours=hours)
+
+
+class TestPostToThread:
+    """The 2026-#438 bug: `_post_to_thread` imported a symbol that does not
+    exist (`send_telegram_message`), so every strike notification silently
+    failed. These tests pin the call to the REAL `send_message` symbol and the
+    delivered/undelivered return contract that gates resolution."""
+
+    @pytest.mark.asyncio
+    async def test_calls_real_send_message_symbol(self):
+        from app.followup_loop import _post_to_thread
+
+        with patch("app.telegram_adapter.send_message", return_value=555) as m:
+            ok = await _post_to_thread("-1003919341801", "2622", "hello")
+
+        assert ok is True
+        m.assert_called_once_with(-1003919341801, "hello", 2622)
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_send_yields_no_message_id(self):
+        from app.followup_loop import _post_to_thread
+
+        with patch("app.telegram_adapter.send_message", return_value=None):
+            ok = await _post_to_thread("-1003919341801", "2622", "hello")
+
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_send_raises(self):
+        from app.followup_loop import _post_to_thread
+
+        with patch("app.telegram_adapter.send_message", side_effect=RuntimeError("boom")):
+            ok = await _post_to_thread("-1003919341801", "2622", "hello")
+
+        assert ok is False
