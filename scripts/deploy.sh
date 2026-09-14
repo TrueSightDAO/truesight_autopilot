@@ -208,9 +208,19 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     chmod +x $REMOTE_DIR/scripts/git-credential-sophia.sh
     git config --global user.name 'Sophia (TrueSight Autopilot)'
     git config --global user.email 'sophia@truesight.me'
+    # Idempotently strip any gh-shadowing credential config BEFORE writing the
+    # canonical helper. `gh auth setup-git` (or a hand edit) re-introduces a
+    # [credential \"https://github.com\"] section plus a bare empty
+    # credential.helper *reset* line, which together SHADOW our helper and make
+    # every native git push silently fail (reads like a missing credential).
+    # Stripped on every deploy, so a shadow cannot survive a redeploy.
+    git config --global --remove-section 'credential.https://github.com' 2>/dev/null || true
+    git config --global --unset-all credential.helper 2>/dev/null || true
     git config --global credential.helper '$REMOTE_DIR/scripts/git-credential-sophia.sh'
     git config --global init.defaultBranch main
-    echo 'git identity + credential helper configured'
+    echo 'git identity + credential helper configured (gh-shadow stripped)'
+    echo -n 'credential.helper resolves to: '
+    git config --global --get-all credential.helper
 "
 
 echo "=== Installing tesseract-ocr (attachment processing) ==="
