@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app import identity_binding
 from app.identity_binding import (
     MAX_ATTEMPTS,
     _hash_code,
