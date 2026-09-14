@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, Callable
 
@@ -51,6 +52,7 @@ _DISCORD_API = "https://discord.com/api/v10"
 _GATEWAY_QUERY = "?v=10&encoding=json"
 _MESSAGE_LIMIT = 2000  # Discord hard cap per message
 _CHAT_TIMEOUT = 180.0  # /chat-blocking can run tools + multiple LLM calls
+_TYPING_REFRESH_SECONDS = 8.0  # Discord's typing bubble expires after ~10s
 _USER_AGENT = "TrueSightDAO-Sophia (https://truesight.me, 1.0)"
 _ATTACH_DIR = "/tmp/discord_attachments"  # adapter + autopilot share the EC2 box / user
 
@@ -303,7 +305,7 @@ def _api(method: str, path: str, payload: dict[str, Any] | None = None) -> dict 
             resp = httpx.request(
                 method, url, headers=_headers(), json=payload, timeout=20.0
             )
-            if resp.status_code in (200, 201):
+            if resp.status_code in (200, 201, 204):
                 return resp.json() if resp.content else {}
             if resp.status_code == 429:
                 retry_after = 1.0
@@ -357,6 +359,57 @@ def send_message(channel_id: str | int, text: str) -> list[str]:
         if result and result.get("id"):
             ids.append(result["id"])
     return ids
+
+
+def post_typing(channel_id: str | int) -> None:
+    """Trigger Discord's typing indicator in a channel (best-effort).
+
+    Discord clears the typing state after ~10s, so this is called repeatedly
+    for the duration of a turn. Failures are swallowed: a missing bubble must
+    never affect the reply.
+    """
+    _api("POST", f"/channels/{channel_id}/typing")
+
+
+class TypingIndicator:
+    """Show Discord's "Sophia is typing..." bubble while a turn runs.
+
+    Refreshes every ``_TYPING_REFRESH_SECONDS`` (the bubble expires after ~10s)
+    and stops as soon as the turn ends, so the indicator clears the moment the
+    reply is posted. No bubble is shown in dry-run (nothing is posted anyway).
+    """
+
+    def __init__(
+        self, channel_id: str | int, interval: float = _TYPING_REFRESH_SECONDS
+    ) -> None:
+        self._channel_id = channel_id
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if settings.discord_dry_run:
+            return  # nothing is posted in dry-run; no bubble to show
+        self._thread = threading.Thread(target=self._run, name="dc-typing", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            post_typing(self._channel_id)
+            self._stop.wait(self._interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def __enter__(self) -> "TypingIndicator":
+        self.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop()
 
 
 def log_observed_message(
@@ -460,8 +513,11 @@ def handle_message(
         user_id,
         channel_id,
     )
-    reply = call_chat(text, session_id, public_key)
-    send_message(channel_id, reply)
+    # Show "Sophia is typing..." for the duration of the turn; the bubble is
+    # refreshed every _TYPING_REFRESH_SECONDS and cleared once the reply is sent.
+    with TypingIndicator(channel_id):
+        reply = call_chat(text, session_id, public_key)
+        send_message(channel_id, reply)
 
 
 def _handle_message_safe(
