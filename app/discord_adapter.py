@@ -39,6 +39,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.parse
@@ -51,6 +52,8 @@ from . import discord_resume_registry
 from .auth import create_jwt
 from .config import settings
 from .governor_registry import load_governors
+from .voice import transcribe_voice
+from .voice_output import detect_language, synthesize_voice
 
 logger = logging.getLogger("autopilot.discord")
 
@@ -68,6 +71,51 @@ _WORKING_EMOJI = "\u23f3"  # hourglass
 _TYPING_REFRESH_SECONDS = 8.0  # Discord's typing bubble expires after ~10s
 _USER_AGENT = "TrueSightDAO-Sophia (https://truesight.me, 1.0)"
 _ATTACH_DIR = "/tmp/discord_attachments"  # adapter + autopilot share the EC2 box / user
+
+# Audio extensions that mark a Discord voice note / audio attachment.
+_AUDIO_EXT = {
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".webm",
+    ".mp4",
+    ".aac",
+    ".flac",
+}
+# Matches http(s) URLs (for the links-only voice follow-up).
+_URL_RE = re.compile(r"https?://[^\s<>()]+")
+
+
+def is_voice_attachment(att: dict[str, Any]) -> bool:
+    """True for a Discord voice note / audio attachment.
+
+    A Discord voice message arrives as an ``audio/ogg`` attachment (it carries
+    ``duration_secs``/``waveform``); a plain audio upload matches via its
+    extension. Images and documents do not match.
+    """
+    ct = (att.get("content_type") or "").lower()
+    if ct.startswith("audio/"):
+        return True
+    ext = os.path.splitext(att.get("filename") or "")[1].lower()
+    return ext in _AUDIO_EXT
+
+
+def extract_voice_attachment(
+    attachments: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return the first audio attachment (a voice note), or None."""
+    for att in attachments:
+        if is_voice_attachment(att):
+            return att
+    return None
+
+
+def extract_urls(text: str) -> list[str]:
+    """Return the http(s) URLs in ``text`` (for a links-only follow-up)."""
+    return _URL_RE.findall(text or "")
 
 # Per-channel dispatch locks (parity with Telegram's `_thread_dispatch_lock`).
 # Serialize the *turn* within one (guild, channel) so two governor messages or
@@ -464,6 +512,35 @@ def send_message(channel_id: str | int, text: str) -> list[str]:
             # reaction from an authorized governor acts as a go-signal (Tier-2 #6).
             discord_resume_registry.mark_resume_awaiting(result["id"], channel_id, body)
     return ids
+
+
+def send_voice(channel_id: str | int, file_path: str, caption: str = "") -> bool:
+    """Upload an audio file to a channel as a message attachment. Best-effort.
+
+    Honours DISCORD_DRY_RUN. Returns True when Discord accepted the upload.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return False
+    if settings.discord_dry_run:
+        logger.info("[DRY_RUN] would send voice to %s: %s", channel_id, file_path)
+        return False
+    url = f"{_DISCORD_API}/channels/{channel_id}/messages"
+    headers = {"Authorization": f"Bot {get_token()}", "User-Agent": _USER_AGENT}
+    try:
+        with open(file_path, "rb") as fh:
+            files = {"files[0]": (os.path.basename(file_path), fh, "audio/mpeg")}
+            data = {"content": caption} if caption else {}
+            resp = httpx.post(
+                url, headers=headers, data=data, files=files, timeout=120.0
+            )
+        if resp.status_code in (200, 201):
+            return True
+        logger.warning(
+            "Discord voice upload -> %s: %s", resp.status_code, resp.text[:200]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Discord voice upload failed: %s", exc)
+    return False
 
 
 def add_reaction(
@@ -1131,6 +1208,45 @@ def _ingest_attachments(
     return "".join(parts)
 
 
+def _handle_voice_reply(
+    channel_id: str | int,
+    assistant_response: str,
+    transcribed_text: str | None = None,
+    text_already_sent: bool = True,
+) -> None:
+    """Synthesize + send a voice reply alongside the text reply.
+
+    Parity with ``telegram_adapter._handle_voice_reply``. The text answer is
+    normally already shown (the progress path edits the status message into the
+    final reply), so we must NOT repeat it -- we add only a links-only caption,
+    since the voice note does not read URLs aloud. When ``text_already_sent`` is
+    False (the rare progress fallback) the full text is sent instead.
+
+    Language is detected from the user's transcribed speech when available,
+    otherwise from the assistant's response (mirrors Telegram).
+    """
+    source = transcribed_text if transcribed_text else assistant_response
+    lang = detect_language(source)
+    mp3_path = synthesize_voice(assistant_response, language=lang)
+    if not mp3_path:
+        logger.warning("Voice synthesis failed, skipping voice reply")
+        if not text_already_sent:
+            send_message(channel_id, assistant_response)
+        return
+    urls = extract_urls(assistant_response)
+    caption = ""
+    if urls:
+        caption = "\U0001f517 Links from my response:\n" + "\n".join(
+            f"\u2022 {u}" for u in urls
+        )
+    if text_already_sent:
+        send_voice(channel_id, mp3_path, caption)
+    else:
+        send_message(channel_id, assistant_response)
+        send_voice(channel_id, mp3_path, caption)
+    logger.info("Sent voice reply: lang=%s len=%d", lang, len(assistant_response))
+
+
 def handle_message(
     data: dict[str, Any],
     allowed: set[str],
@@ -1201,7 +1317,20 @@ def handle_message(
     add_reaction(channel_id, message_id)
     try:
         prompt = text
-        if attachments:
+        voice_att = extract_voice_attachment(attachments)
+        if voice_att:
+            # Voice note -> transcribe locally (faster-whisper); the transcript
+            # becomes the prompt and the reply is spoken back (Tier-2 parity #4).
+            local_audio = download_discord_file(voice_att)
+            transcript = transcribe_voice(local_audio) if local_audio else ""
+            if not transcript:
+                send_message(
+                    channel_id,
+                    "\U0001f3a4 Couldn't make out any speech in that voice message.",
+                )
+                return
+            prompt = transcript
+        elif attachments:
             prompt = _ingest_attachments(attachments, channel_id, session_id, text)
         # Serialize the TURN per channel (parity with Telegram's
         # `_thread_dispatch_lock`): the hourglass ack above already fired, so a
@@ -1212,7 +1341,9 @@ def handle_message(
                 reply, shown = call_chat_with_progress(
                     channel_id, prompt, session_id, public_key
                 )
-        if not shown:
+        if voice_att:
+            _handle_voice_reply(channel_id, reply, transcript, shown)
+        elif not shown:
             send_message(channel_id, reply)
     finally:
         remove_reaction(channel_id, message_id)
