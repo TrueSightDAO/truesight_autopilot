@@ -2726,6 +2726,33 @@ _SIDE_EFFECT_TOOLS = {
 }
 
 
+# The three PR tools. pr_opened (one of these fired this turn) still triggers the
+# one-PR-per-turn pr_boundary stop in turn_convergence.py — it is NOT the same
+# signal as made_progress, which also covers PR-less-but-converged turns.
+_PR_TOOLS = {"open_fix_pr", "open_pr", "merge_pr"}
+
+
+# Tools whose side effect is genuine forward progress toward a plan unit — the
+# brain's `made_progress` signal. Every member MUST be classified WRITE by
+# app/policy.py::classify_action (kept honest by
+# test_auto_advance.py::test_make_progress_tools_are_all_write_class). Deliberately
+# EXCLUDED: ssh_run / run_command (read-capable diagnostics, not progress),
+# append_to_transcript (housekeeping memory, not unit progress), and the stale /
+# READ-classified names open_pr, deploy_gas_project, create_branch, commit_and_push.
+_MAKE_PROGRESS_TOOLS = {
+    "open_fix_pr",
+    "merge_pr",
+    "git_push_changes",
+    "upload_file_to_github",
+    "upload_local_file_to_github",
+    "deploy_autopilot",
+    "submit_contribution",
+    "create_dao_submission",
+    "register_identity",
+    "gas_deploy_project",
+}
+
+
 # Tools whose own input (the command) is the useful detail, not their JSON output.
 _COMMAND_TOOLS = {"ssh_run", "run_command"}
 
@@ -2818,29 +2845,33 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
         return None
     try:
         plan_file = _extract_plan_file(history)
-        # "Progress" = this turn opened/merged a PR, or (in run-to-UAT mode) ran
-        # real UAT/test tooling. Read-only lookups (ssh_run, read_*, lookup_*,
-        # search_*) are NOT progress — otherwise any chat turn auto-advances
-        # (cross-thread bleed fix).
-        progress_tools = {"open_fix_pr", "open_pr", "merge_pr"}
-        opened_pr = any(
-            (t or {}).get("name") in progress_tools for t in (tool_trace or [])
-        )
-        if settings.auto_advance_until_uat and not opened_pr:
-            opened_pr = any(
-                (t or {}).get("name") in _UAT_PROGRESS_TOOLS for t in (tool_trace or [])
-            )
+        names = [(t or {}).get("name") for t in (tool_trace or [])]
+        # pr_opened: one of the three PR tools fired. Distinct from made_progress
+        # below because it is what the one-PR-per-turn pr_boundary in
+        # turn_convergence.py keys on — untouched by the PR-less-units fix.
+        pr_opened = any(n in _PR_TOOLS for n in names)
+        # made_progress: the turn did a genuine side-effecting action — a
+        # write/journal tool, or (in run-to-UAT mode) real UAT/test tooling.
+        # Read-only lookups (ssh_run, read_*, lookup_*, search_*) are NOT progress
+        # — otherwise any chat turn auto-advances (cross-thread bleed fix).
+        made_progress = any(n in _MAKE_PROGRESS_TOOLS for n in names)
+        if settings.auto_advance_until_uat and not made_progress:
+            made_progress = any(n in _UAT_PROGRESS_TOOLS for n in names)
         logger.info(
-            "auto-advance: plan_file=%s progress=%s tool_trace_len=%d",
+            "auto-advance: plan_file=%s pr_opened=%s made_progress=%s tool_trace_len=%d",
             plan_file,
-            opened_pr,
+            pr_opened,
+            made_progress,
             len(tool_trace or []),
         )
         if plan_file:
             plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
             plan_text = plan_path.read_text(encoding="utf-8")
             dec = next_action(
-                plan_text, opened_pr, run_to_uat=settings.auto_advance_until_uat
+                plan_text,
+                pr_opened=pr_opened,
+                made_progress=made_progress,
+                run_to_uat=settings.auto_advance_until_uat,
             )
             return {
                 "decision": dec.decision,

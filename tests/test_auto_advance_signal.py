@@ -86,12 +86,36 @@ def test_signal_auto_when_pr_opened_and_next_auto(monkeypatch, tmp_path):
     assert sig["next_unit"].startswith("PR2")
 
 
-def test_signal_gate_when_no_pr_opened(monkeypatch, tmp_path):
+def test_signal_gate_when_no_progress_at_all(monkeypatch, tmp_path):
+    # An EMPTY tool trace = genuinely nothing happened: no PR *and* no
+    # side-effecting action -> still gates (the true non-convergence case).
     monkeypatch.setattr(settings, "auto_advance", True)
     _write_plan(tmp_path)
     monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
-    sig = m._compute_advance_signal([HANDOFF_MSG], [])  # no open_fix_pr
-    assert sig["decision"] == "gate" and "did not open a PR" in sig["gate_reason"]
+    sig = m._compute_advance_signal([HANDOFF_MSG], [])
+    assert sig["decision"] == "gate" and "made no progress" in sig["gate_reason"]
+
+
+def test_signal_auto_when_made_progress_no_pr(monkeypatch, tmp_path):
+    # PR-less unit that did a real side-effecting action -> auto-advance. The
+    # core PR-less-units fix: progress without a PR no longer gate-locks.
+    monkeypatch.setattr(settings, "auto_advance", True)
+    _write_plan(tmp_path)
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    trace = [{"name": "git_push_changes", "result": "pushed"}]
+    sig = m._compute_advance_signal([HANDOFF_MSG], trace)
+    assert sig["decision"] == "auto" and sig["next_unit"].startswith("PR2")
+
+
+def test_signal_read_only_ssh_run_is_not_progress_no_pr(monkeypatch, tmp_path):
+    # ssh_run is read-capable and deliberately excluded: a diagnostics-only turn
+    # with no PR must NOT auto-advance (guards the 2026-08-21 bleed fix).
+    monkeypatch.setattr(settings, "auto_advance", True)
+    _write_plan(tmp_path)
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    trace = [{"name": "ssh_run", "result": "journalctl ..."}]
+    sig = m._compute_advance_signal([HANDOFF_MSG], trace)
+    assert sig["decision"] == "gate" and "made no progress" in sig["gate_reason"]
 
 
 def test_signal_gate_when_next_unit_gated(monkeypatch, tmp_path):
