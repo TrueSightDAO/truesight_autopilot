@@ -539,6 +539,56 @@ def get_context_file(path: str) -> str | None:
     return None
 
 
+def get_context_file_fresh(path: str, timeout: int = 20) -> str | None:
+    """Read a context file from origin's LATEST default branch, bypassing the
+    periodically-synced working-tree clone.
+
+    ``get_context_file`` reads the local clone, which ``_context_sync_loop``
+    refreshes only every ``CONTEXT_SYNC_INTERVAL_SECONDS`` (default 300s). A
+    tracker PR merged mid-turn is therefore invisible to a plan read until the
+    next sync tick -- the root cause of the auto-advance directive repeatedly
+    quoting an already-shipped unit (2026-09-15, thread 30471).
+
+    This runs a best-effort ``git fetch`` and then reads the blob straight out
+    of the git object store (``git show origin/<branch>:<path>``) instead of the
+    working tree. Reading the blob (rather than ``reset --hard``) means we never
+    mutate the tree other readers see, so no lock is needed and no reader can
+    observe a torn file. Falls back to the locked local read on ANY failure, so
+    the result is never worse than the previous behaviour.
+    """
+    # Reject path traversal outright (git would reject it too, but be explicit).
+    parts = Path(path).parts
+    if not path or ".." in parts or Path(path).is_absolute():
+        return None
+    candidates = [
+        settings.context_repos_dir / "agentic_ai_context",
+        Path(__file__).resolve().parent.parent.parent / "agentic_ai_context",
+        Path.home() / "Applications" / "agentic_ai_context",
+    ]
+    repo_dir = next((c for c in candidates if (c / ".git").exists()), None)
+    if repo_dir is not None:
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "fetch", "--quiet", "origin"],
+                check=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            branch = _origin_default_branch(repo_dir)
+            r = subprocess.run(
+                ["git", "-C", str(repo_dir), "show", f"origin/{branch}:{path}"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if r.returncode == 0:
+                return r.stdout
+        except Exception:  # noqa: BLE001 -- best-effort; fall back to local read
+            pass
+    return get_context_file(path)
+
+
 _cached_system_prompt: str | None = None
 
 

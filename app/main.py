@@ -34,7 +34,12 @@ from .auto_advance import next_action
 from .config import settings
 from .context_compaction import backup_session_file, compact_history
 from .turn_convergence import convergence_message, should_converge
-from .context import get_context_file, refresh_context_repos, refresh_system_prompt
+from .context import (
+    get_context_file,
+    get_context_file_fresh,
+    refresh_context_repos,
+    refresh_system_prompt,
+)
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
 from .governor_registry import load_governors, resolve_key
@@ -2865,8 +2870,20 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
             len(tool_trace or []),
         )
         if plan_file:
-            plan_path = settings.context_repos_dir / "agentic_ai_context" / plan_file
-            plan_text = plan_path.read_text(encoding="utf-8")
+            # Read the plan FRESH from origin, not the periodically-synced local
+            # clone: a tracker PR merged mid-turn (or in a prior turn) is invisible
+            # to the local clone until the next _context_sync_loop tick (default
+            # 300s), which made the auto-advance directive repeatedly quote an
+            # already-shipped unit (root cause, 2026-09-15 thread 30471). Falls
+            # back to the local clone on any failure, so behaviour never
+            # regresses below the previous baseline.
+            # The handoff block usually carries the path WITH its ``plans/``
+            # prefix; a bare filename is also accepted as a fallback.
+            plan_text = get_context_file_fresh(plan_file)
+            if plan_text is None and not plan_file.startswith("plans/"):
+                plan_text = get_context_file_fresh(f"plans/{plan_file}")
+            if plan_text is None:
+                raise FileNotFoundError(f"plan not found: {plan_file}")
             dec = next_action(
                 plan_text,
                 pr_opened=pr_opened,

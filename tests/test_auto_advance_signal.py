@@ -193,3 +193,74 @@ def test_signal_uat_tools_are_progress_in_run_to_uat(monkeypatch, tmp_path):
     sig = m._compute_advance_signal([HANDOFF_MSG], trace)
     assert sig is not None and sig["decision"] == "auto"
     assert sig["plan"] == "MY_PLAN.md"
+
+
+# ---- fresh plan read (root cause: stale local clone, 2026-09-15 thread 30471) ----
+
+
+def test_signal_reads_plan_fresh_not_stale_local_clone(monkeypatch, tmp_path):
+    """The auto-advance directive must reflect origin's LATEST plan, not the
+    periodically-synced local clone. Here the local clone holds a STALE marker
+    (next unit is an `auto` unit) while origin already advanced to a `gate`
+    unit; the fresh read must win, so the signal gates instead of re-running a
+    shipped unit."""
+    stale = PLAN.replace("**RESUME HERE:** PR2", "**RESUME HERE:** PR1")
+    fresh = PLAN.replace("**RESUME HERE:** PR2", "**RESUME HERE:** PR3")
+    monkeypatch.setattr(settings, "auto_advance", True)
+    _write_plan(tmp_path, text=stale)  # local clone: stale
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    monkeypatch.setattr(m, "get_context_file_fresh", lambda path, timeout=20: fresh)
+    sig = m._compute_advance_signal([HANDOFF_MSG], OPENED_PR_TRACE)
+    # fresh (PR3 = gate) wins over stale local (PR1 = auto)
+    assert sig["decision"] == "gate" and "deploy" in sig["gate_reason"]
+
+
+def test_signal_fails_closed_when_plan_unreadable(monkeypatch, tmp_path):
+    """`get_context_file_fresh` itself falls back to the locked local read, so a
+    None result means BOTH git and the local clone missed the plan. In that case
+    the signal must fail closed (no auto-advance) -- never guess a next unit."""
+    monkeypatch.setattr(settings, "auto_advance", True)
+    _write_plan(tmp_path)
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    monkeypatch.setattr(m, "get_context_file_fresh", lambda path, timeout=20: None)
+    assert m._compute_advance_signal([HANDOFF_MSG], OPENED_PR_TRACE) is None
+
+
+def test_signal_plan_in_subdir_handles_plans_prefix(monkeypatch, tmp_path):
+    """`_extract_plan_file` yields the path WITH its `plans/` prefix; the fresh
+    reader must resolve it as-is (not double-prefix)."""
+    d = tmp_path / "agentic_ai_context" / "plans"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "MY_PLAN.md").write_text(PLAN, encoding="utf-8")
+    msg = {"role": "user", "content": "active handoff for `plans/MY_PLAN.md`."}
+    seen: list[str] = []
+
+    def _fake(path, timeout=20):  # noqa: ANN001
+        seen.append(path)
+        return PLAN
+
+    monkeypatch.setattr(settings, "auto_advance", True)
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    monkeypatch.setattr(m, "get_context_file_fresh", _fake)
+    sig = m._compute_advance_signal([msg], OPENED_PR_TRACE)
+    assert sig["decision"] == "auto"
+    assert seen and seen[0] == "plans/MY_PLAN.md", seen
+
+
+def test_get_context_file_fresh_rejects_path_traversal(monkeypatch, tmp_path):
+    from app import context as ctx
+
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    assert ctx.get_context_file_fresh("../etc/passwd") is None
+    assert ctx.get_context_file_fresh("/etc/passwd") is None
+
+
+def test_get_context_file_fresh_falls_back_to_local_when_no_git(monkeypatch, tmp_path):
+    from app import context as ctx
+
+    d = tmp_path / "agentic_ai_context"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "NOTE.md").write_text("local-only", encoding="utf-8")
+    monkeypatch.setattr(settings, "context_repos_dir", tmp_path)
+    # no .git -> git path skipped -> falls back to the locked local read
+    assert ctx.get_context_file_fresh("NOTE.md") == "local-only"
