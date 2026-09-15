@@ -21,6 +21,10 @@ import pytest
 os.environ.setdefault("CONTEXT_REPOS_DIR", tempfile.mkdtemp())
 os.environ.setdefault("SESSION_LOG_DIR", tempfile.mkdtemp())
 os.environ["DEPLOY_DRAIN_WAIT_SEC"] = "0"
+# Disable the new cross-process deploy cooldown so it can never short-circuit
+# these hash-precheck assertions on a box where /tmp/.autopilot_last_deploy_epoch
+# happens to exist (would turn "deferred" into "noop").
+os.environ["DEPLOY_NOOP_COOLDOWN_SEC"] = "0"
 
 try:
     import app.main as m
