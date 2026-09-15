@@ -80,10 +80,23 @@ def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock
 # answered immediately from the live-progress record (lock-bypassing) rather
 # than queued as a new instruction.
 _PROGRESS_QUERY_RE = re.compile(
-    r"\b(progress|status|update|how('?s| is| are)\s+(it|things|you|we)|"
-    r"how'?s\s+it\s+going|where\s+(are|r)\s+(you|u|we)|"
-    r"(are|r)\s+(you|u|we)\s+(done|finished|there)|done\s+yet|finished\s+yet|"
-    r"what'?s\s+(happening|going\s+on)|any\s+update)\b",
+    # Anchored to the WHOLE message (^...$) so only a genuine short status ping
+    # matches. The old bare (progress|status|update) alternation matched ANY
+    # <=80-char message merely CONTAINING those words - so a real instruction
+    # ("update the ledger", "please also update the README ...") sent during a
+    # busy turn was misclassified as a status ping and SILENTLY DROPPED (never
+    # queued), violating the plan invariant "never silently drop real work as a
+    # misread status check" (UAT 2026-09-15).
+    r"^\s*(?:"
+    r"(?:any\s+)?(?:progress|status|updates?)(?:\s+(?:update|check|report))?"
+    r"|how(?:'?s|s| is| are)\s+(?:it|things|that|you|we)(?:\s+going)?"
+    r"|how(?:'?s|s| is| are)\s+(?:the\s+)?(?:progress|status|update)"
+    r"|what(?:'?s|s| is)\s+(?:the\s+)?(?:status|update|progress|happening|going\s+on)"
+    r"|where\s+(?:are|r)\s+(?:you|u|we)(?:\s+at)?"
+    r"|(?:are|r)\s+(?:you|u|we)\s+(?:done|finished|there)"
+    r"|(?:done|finished|there)\s+yet"
+    r"|(?:give\s+me\s+)?(?:an?\s+)?(?:progress|status|updates?)\s+(?:update|report)"
+    r")\s*(?:please)?\s*[?!.,:;\u2026]*\s*$",
     re.IGNORECASE,
 )
 
