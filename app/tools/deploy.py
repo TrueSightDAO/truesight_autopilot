@@ -89,6 +89,17 @@ logger = logging.getLogger("autopilot.deploy")
 _PHASE_ENV = "AUTOPILOT_DEPLOY_PHASE"
 _PHASE_TWO = "phase_two_post_pull"
 _LEASE_ENV = "AUTOPILOT_DEPLOY_LEASE"
+_MARKER_FILE = "/tmp/.autopilot_deployed"
+# Caller-thread targeting + cross-process deploy guard (2026-09-14). A deploy
+# restarts the very process serving the turn that called it, so that turn dies
+# before it can report anything (Telegram: a permanent "Thinking..." freeze).
+# Phase one parses the caller chat/thread and stashes it; phase two posts a
+# "deploying now" notice BEFORE firing the restart.
+_NOTIFY_CHAT_ENV = "AUTOPILOT_DEPLOY_NOTIFY_CHAT_ID"
+_NOTIFY_THREAD_ENV = "AUTOPILOT_DEPLOY_NOTIFY_THREAD_ID"
+# Cross-process no-op guard: threads calling deploy seconds apart each used to
+# fire their own restart, killing unrelated threads' in-flight turns.
+_LAST_DEPLOY_FILE = "/tmp/.autopilot_last_deploy_epoch"
 
 
 class DeployError(Exception):
@@ -346,7 +357,90 @@ def _is_process_stale(remote_dir: str) -> bool:
         return False
 
 
-def _write_deploy_marker(commit: str, elapsed: float, lease_id: str = "") -> None:
+def _parse_caller_thread(caller_session: str | None) -> tuple[int | None, int | None]:
+    """Recover (chat_id, thread_id) from a Telegram session key.
+
+    Keys look like ``<pubkey20>:tg:<chat_id>:<thread_id>`` (see
+    ``telegram_adapter.build_session_id``). Returns (None, None) for a
+    non-Telegram session (DApp web chat) so we never try to post a Telegram
+    notice for a session that is not on Telegram.
+    """
+    if not caller_session or "tg:" not in caller_session:
+        return None, None
+    try:
+        tail = caller_session.split("tg:", 1)[1]
+        chat_str, _, thread_str = tail.partition(":")
+        chat_id = int(chat_str)
+        thread_id = int(thread_str) if thread_str else None
+        return chat_id, (thread_id or None)
+    except ValueError:
+        return None, None
+
+
+def _notify_target_from_env() -> tuple[int | None, int | None]:
+    """Read the (chat_id, thread_id) phase one stashed for phase two."""
+    chat_raw = os.environ.get(_NOTIFY_CHAT_ENV, "").strip()
+    thread_raw = os.environ.get(_NOTIFY_THREAD_ENV, "").strip()
+    chat_id = int(chat_raw) if chat_raw.lstrip("-").isdigit() else None
+    thread_id = int(thread_raw) if thread_raw.lstrip("-").isdigit() else None
+    return chat_id, thread_id
+
+
+def _deploy_recently_ran() -> bool:
+    """True if a deploy restarted the service within the cooldown window.
+
+    Cheap cross-process guard: threads calling deploy seconds apart each used
+    to fire their own restart, killing unrelated threads' in-flight turns.
+    """
+    try:
+        cooldown = float(os.getenv("DEPLOY_NOOP_COOLDOWN_SEC", "90"))
+    except ValueError:
+        cooldown = 90.0
+    if cooldown <= 0:
+        return False
+    try:
+        with open(_LAST_DEPLOY_FILE) as f:
+            last = float(f.read().strip())
+    except Exception:
+        return False
+    age = time.time() - last
+    return 0 <= age < cooldown
+
+
+def _record_deploy_epoch() -> None:
+    """Stamp the last-restart time so a near-simultaneous second deploy no-ops."""
+    try:
+        with open(_LAST_DEPLOY_FILE, "w") as f:
+            f.write(str(time.time()))
+    except Exception as e:
+        logger.warning("Failed to record deploy epoch: %s", e)
+
+
+def _notify_deploy_starting() -> None:
+    """Post a "deploying now" notice to the calling thread BEFORE the restart.
+
+    Called immediately before ``systemctl restart`` -- the restart tears down
+    this process tree, so the notice must be decoupled from whatever the LLM's
+    eventual response would have been. Never blocks the deploy.
+    """
+    chat_id, thread_id = _notify_target_from_env()
+    if chat_id is None:
+        return
+    try:
+        from ..telegram_adapter import send_deploy_starting_notification
+
+        send_deploy_starting_notification(chat_id, thread_id)
+    except Exception as e:
+        logger.warning("deploy-start notice failed (non-fatal): %s", e)
+
+
+def _write_deploy_marker(
+    commit: str,
+    elapsed: float,
+    lease_id: str = "",
+    chat_id: int | None = None,
+    thread_id: int | None = None,
+) -> None:
     """Write a marker file so the NEW process can notify the governor on startup.
 
     Written just before systemctl restart so the new process (which starts
@@ -357,13 +451,15 @@ def _write_deploy_marker(commit: str, elapsed: float, lease_id: str = "") -> Non
     import json as _json
     from datetime import datetime, timezone
 
-    marker = "/tmp/.autopilot_deployed"
+    marker = _MARKER_FILE
     try:
         data = {
             "commit": commit,
             "elapsed_seconds": round(elapsed, 1),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "lease_id": lease_id,
+            "chat_id": chat_id,
+            "thread_id": thread_id,
         }
         with open(marker, "w") as f:
             _json.dump(data, f)
@@ -492,7 +588,14 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     # can notify the governor that the deploy completed successfully.
     commit = _get_current_commit(remote_dir)
     elapsed = round(time.time() - start, 1)
-    _write_deploy_marker(commit, elapsed, lease_id=os.environ.get(_LEASE_ENV, ""))
+    _mk_chat, _mk_thread = _notify_target_from_env()
+    _write_deploy_marker(
+        commit,
+        elapsed,
+        lease_id=os.environ.get(_LEASE_ENV, ""),
+        chat_id=_mk_chat,
+        thread_id=_mk_thread,
+    )
     # truesight-autopilot MUST be LAST in this list (2026-08-29 fix): this
     # `systemctl restart` command is itself a child process of
     # truesight-autopilot (spawned via this very subprocess.Popen call from
@@ -516,6 +619,11 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     if _discord_unit_enabled(remote_dir):
         _restart_units.append("truesight-autopilot-discord")
     _restart_units.append("truesight-autopilot")
+    # Post the "deploying now" status to the calling thread while this process
+    # can still run -- the restart below kills it. Then stamp the cooldown so a
+    # second deploy within the window no-ops instead of bouncing the box again.
+    _notify_deploy_starting()
+    _record_deploy_epoch()
     subprocess.Popen(
         [_ELEVATE, "systemctl", "restart", *_restart_units],
         stdout=subprocess.DEVNULL,
@@ -561,6 +669,33 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
     """
     steps: list[dict] = []
     start = time.time()
+
+    # Recover the calling Telegram chat/thread (if any) so phase two can post a
+    # "deploying now" notice straight into the thread that triggered the deploy,
+    # and target the completion notice at the same place.
+    _notify_chat, _notify_thread = _parse_caller_thread(caller_session)
+
+    # -- Recent-deploy no-op guard (phase one, local) --
+    # If a deploy restarted the box within the cooldown window, skip the restart
+    # entirely. Observed 2026-09-14 ~09:24-09:25: two topics called deploy
+    # seconds apart and each fired its own restart. The hash precheck below is
+    # per-call and cannot see a concurrent restart; this timestamp can.
+    if (
+        os.environ.get(_PHASE_ENV) != _PHASE_TWO
+        and _is_local()
+        and _deploy_recently_ran()
+    ):
+        return json.dumps(
+            {
+                "status": "noop",
+                "message": (
+                    "A deploy already restarted the service within the cooldown "
+                    "window -- skipping a redundant restart."
+                ),
+                "steps": steps,
+                "elapsed_seconds": round(time.time() - start, 1),
+            }
+        )
 
     # ── Already-on-latest no-op guard (phase one, local) ─────────────────────
     # If the deployed code already matches origin/main, do NOT restart. A restart
@@ -743,6 +878,10 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
             child_env = {**os.environ, _PHASE_ENV: _PHASE_TWO}
             if lease_id:
                 child_env[_LEASE_ENV] = lease_id
+            if _notify_chat is not None:
+                child_env[_NOTIFY_CHAT_ENV] = str(_notify_chat)
+            if _notify_thread is not None:
+                child_env[_NOTIFY_THREAD_ENV] = str(_notify_thread)
             # Use python -c rather than -m so we work regardless of how the
             # parent was launched (uvicorn module, direct script, REPL).
             child = subprocess.run(

@@ -996,7 +996,72 @@ def resolve_governor_chat_id() -> int | None:
     return None
 
 
-def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
+def send_deploy_starting_notification(
+    chat_id: int, thread_id: int | None = None
+) -> bool:
+    """Post a "deploying now" notice to the calling thread BEFORE the restart.
+
+    The deploy restarts the process serving the calling turn, so that turn dies
+    without ever reporting anything -- Telegram then shows a permanent
+    "Thinking..." freeze. Sending this explicitly (decoupled from the LLM's
+    response) turns that silent freeze into an honest, bounded status message.
+    Falls back to sending without the thread id if the topic is gone.
+    """
+    if not settings.telegram_bot_api_key:
+        logger.warning(
+            "send_deploy_starting_notification: TELEGRAM_BOT_API_KEY not set - skipping"
+        )
+        return False
+    text = (
+        "\U0001f680 <b>Deploying now</b>\n"
+        "\u2022 Service is restarting; the turn that triggered this was interrupted.\n"
+        "\u2022 Back in ~40s - send <b>continue</b> after the \u2705 notice to resume."
+    )
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if thread_id:
+        payload["message_thread_id"] = thread_id
+    try:
+        resp = httpx.post(
+            f"{_TELEGRAM_API}/bot{settings.telegram_bot_api_key}/sendMessage",
+            json=payload,
+            timeout=20.0,
+        )
+        if resp.status_code == 200:
+            logger.info(
+                "Deploy-start notice sent to chat %s thread %s", chat_id, thread_id
+            )
+            return True
+        logger.warning(
+            "send_deploy_starting_notification HTTP %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        if thread_id:
+            # Topic may have been deleted -- retry without the thread id.
+            payload.pop("message_thread_id", None)
+            resp2 = httpx.post(
+                f"{_TELEGRAM_API}/bot{settings.telegram_bot_api_key}/sendMessage",
+                json=payload,
+                timeout=20.0,
+            )
+            return resp2.status_code == 200
+        return False
+    except Exception as e:
+        logger.warning("send_deploy_starting_notification failed: %s", e)
+        return False
+
+
+def send_deploy_notification(
+    commit: str,
+    elapsed_seconds: float,
+    chat_id: int | None = None,
+    thread_id: int | None = None,
+) -> bool:
     """Send a 'deploy complete' notification to the governor's Telegram chat.
 
     Called by the NEW process after startup (from main.py lifespan) when
@@ -1011,7 +1076,10 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
         )
         return False
 
-    chat_id = resolve_governor_chat_id()
+    if chat_id is None:
+        # Fall back to the configured governor chat when the deploy was not
+        # triggered from a Telegram turn (or the caller could not be parsed).
+        chat_id = resolve_governor_chat_id()
     if chat_id is None:
         logger.warning("send_deploy_notification: no chat ID available — skipping")
         return False
@@ -1024,12 +1092,14 @@ def send_deploy_notification(commit: str, elapsed_seconds: float) -> bool:
     )
 
     try:
-        payload = {
+        payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        if thread_id:
+            payload["message_thread_id"] = thread_id
         resp = httpx.post(
             f"{_TELEGRAM_API}/bot{settings.telegram_bot_api_key}/sendMessage",
             json=payload,

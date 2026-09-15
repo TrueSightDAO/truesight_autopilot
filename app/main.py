@@ -339,7 +339,14 @@ def _check_deploy_marker() -> None:
         # it sends directly via the Bot API using the shared settings.
         from .telegram_adapter import send_deploy_notification
 
-        send_deploy_notification(commit, elapsed)
+        # Prefer the originating thread (persisted in the marker by deploy.py)
+        # so the ✅ lands in the topic that triggered the deploy.
+        send_deploy_notification(
+            commit,
+            elapsed,
+            chat_id=data.get("chat_id"),
+            thread_id=data.get("thread_id"),
+        )
 
         # DEPLOY_PUSH_SOP Phase 2: close the deploy lease + append the success
         # record now that the new process is up (the old process was killed
