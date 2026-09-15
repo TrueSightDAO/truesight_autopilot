@@ -77,10 +77,15 @@ FLEET: dict[str, dict[str, str]] = {
         "desc": "THIS autopilot box itself (Sophia's own host) -- loopback self-exec for package installs / sudo on her own machine",
     },
     "krake_nginx": {
-        # No vault pin: trusts server_us and has no dedicated vault key.
+        # Host-local ed25519 pin: krake_nginx trusts ONLY the box autopilot
+        # ed25519 key (verified 2026-09-15 on port 2202 -- server_us /
+        # NELANCO_aws / sophia_infra all get Permission denied). It has no vault
+        # credential, so without this pin the vault-first default handed it
+        # server_us and failed with "no mutual signature supported".
         "ip": "54.226.114.186",
         "user": "ubuntu",
         "port": "2202",
+        "key": "~/.ssh/id_ed25519_truesight_autopilot",
         "desc": "Nginx reverse proxy -- terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
     },
     "seni_ror": {

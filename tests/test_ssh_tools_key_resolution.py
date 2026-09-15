@@ -114,3 +114,31 @@ def test_ssh_run_passes_nelanco_key_for_seni_redis(tmp_path, monkeypatch):
     argv = run.call_args[0][0]
     assert argv[argv.index("-i") + 1] == str(nelanco)
     assert "ubuntu@54.234.59.188" in argv
+
+
+# ---------------------------------------------------------------------------
+# krake_nginx: trusts ONLY the box autopilot ed25519 key (no vault credential).
+# Regression guard for the "no mutual signature supported" failure -- the
+# vault-first default handed it server_us, which the host rejects.
+# ---------------------------------------------------------------------------
+def test_krake_nginx_pins_host_local_ed25519_key():
+    from app.tools.ssh_tools import FLEET
+
+    entry = FLEET["krake_nginx"]
+    assert entry.get("key") == "~/.ssh/id_ed25519_truesight_autopilot"
+    # Must NOT carry a vault_key -- there is no vault credential it trusts.
+    assert "vault_key" not in entry
+
+
+def test_krake_nginx_identity_prefers_pin(tmp_path, monkeypatch):
+    """_identity_for returns the pinned host-local key when it exists."""
+    from app.tools import ssh_tools
+
+    fake = tmp_path / "id_ed25519_truesight_autopilot"
+    fake.write_text("dummy")
+    monkeypatch.setitem(
+        ssh_tools.FLEET,
+        "krake_nginx",
+        {**ssh_tools.FLEET["krake_nginx"], "key": str(fake)},
+    )
+    assert ssh_tools._identity_for("krake_nginx") == fake
