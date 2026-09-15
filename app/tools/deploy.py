@@ -89,6 +89,7 @@ logger = logging.getLogger("autopilot.deploy")
 _PHASE_ENV = "AUTOPILOT_DEPLOY_PHASE"
 _PHASE_TWO = "phase_two_post_pull"
 _LEASE_ENV = "AUTOPILOT_DEPLOY_LEASE"
+_MARKER_FILE = "/tmp/.autopilot_deployed"
 # Caller-thread targeting + cross-process deploy guard (2026-09-14). A deploy
 # restarts the very process serving the turn that called it, so that turn dies
 # before it can report anything (Telegram: a permanent "Thinking..." freeze).
@@ -450,7 +451,7 @@ def _write_deploy_marker(
     import json as _json
     from datetime import datetime, timezone
 
-    marker = "/tmp/.autopilot_deployed"
+    marker = _MARKER_FILE
     try:
         data = {
             "commit": commit,

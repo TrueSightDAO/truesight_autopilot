@@ -1032,7 +1032,9 @@ def send_deploy_starting_notification(
             timeout=20.0,
         )
         if resp.status_code == 200:
-            logger.info("Deploy-start notice sent to chat %s thread %s", chat_id, thread_id)
+            logger.info(
+                "Deploy-start notice sent to chat %s thread %s", chat_id, thread_id
+            )
             return True
         logger.warning(
             "send_deploy_starting_notification HTTP %s: %s",

@@ -36,8 +36,13 @@ except Exception as exc:  # noqa: BLE001
 def _wire_common(monkeypatch, calls: list[str]):
     monkeypatch.setattr(dep, "_get_current_commit", lambda remote_dir: "abc1234")
     monkeypatch.setattr(
-        dep, "_write_deploy_marker", lambda commit, elapsed, lease_id="": None
+        dep, "_write_deploy_marker", lambda commit, elapsed, **kwargs: None
     )
+    # Neutralize side effects that would otherwise touch the REAL /tmp paths on
+    # a live box: recording the cooldown epoch would suppress the next genuine
+    # deploy for 90s, and posting the start notice would ping a real chat.
+    monkeypatch.setattr(dep, "_record_deploy_epoch", lambda: None)
+    monkeypatch.setattr(dep, "_notify_deploy_starting", lambda: None)
 
     class _FakePopen:
         def __init__(self, *a, **k):
