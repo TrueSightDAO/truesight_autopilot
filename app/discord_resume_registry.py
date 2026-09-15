@@ -69,7 +69,12 @@ def _prune(data: dict, now: float | None = None) -> None:
 def mark_resume_awaiting(
     message_id: int | str, channel_id: int | str, text: str = ""
 ) -> None:
-    """Flag a posted message as resume-awaiting. Idempotent; TTL-bounded."""
+    """Flag a posted message as resume-awaiting. Idempotent; TTL-bounded.
+
+    A repeat mark with the same ``channel_id`` and ``text`` is a genuine no-op:
+    it neither rewrites the JSON file nor refreshes ``ts``. Called on every
+    Discord progress edit, so this is a hot path.
+    """
     try:
         mid = str(message_id).strip()
         cid = str(channel_id).strip()
@@ -78,7 +83,21 @@ def mark_resume_awaiting(
         with _lock:
             data = _load()
             _prune(data)
-            data[mid] = {"channel_id": cid, "text": text or "", "ts": time.time()}
+            text = text or ""
+            existing = data.get(mid)
+            # True no-op when nothing changed (same channel, same text). The
+            # Discord progress loop re-marks the SAME message on every edit,
+            # and a blind _save() rewrote the file + logged on every tick
+            # (observed 61 marks across just 7 message ids in ~66 min on
+            # 2026-09-14). ts is refreshed only on a real change, so the TTL
+            # means "last time this message actually changed".
+            if (
+                isinstance(existing, dict)
+                and existing.get("channel_id") == cid
+                and existing.get("text", "") == text
+            ):
+                return
+            data[mid] = {"channel_id": cid, "text": text, "ts": time.time()}
             _save(data)
             logger.info("marked resume-awaiting: message %s -> channel %s", mid, cid)
     except Exception as e:  # never block a turn
