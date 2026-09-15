@@ -11,6 +11,7 @@ Started alongside email_poller and aws_monitor in the main lifespan.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -295,7 +296,9 @@ async def _post_to_thread(chat_id: str | None, thread_id: str, message: str) -> 
     try:
         # send_message is synchronous (httpx.post + retry/backoff); run it off
         # the event loop so a strike can never block the comb loop.
-        msg_id = await asyncio.to_thread(send_message, resolved_chat, message, tid)
+        msg_id = await asyncio.to_thread(
+            send_message, resolved_chat, message, tid, require_thread=True
+        )
     except Exception as e:
         logger.error("Failed to post to thread %s: %s", thread_id, e)
         return False
@@ -343,13 +346,27 @@ async def _post_to_thread_direct(
             resp.status_code,
             resp.text[:200],
         )
-        # Fallback: drop message_thread_id and retry as plain text — mirrors
-        # send_message()'s own 400 recovery (an unknown thread_id 400s with
-        # "message thread not found"; retrying WITH it would 400 again).
-        payload.pop("message_thread_id", None)
-        payload["text"] = message
+        # Fallback: retry as **escaped** plain text. The previous version kept
+        # parse_mode=HTML while swapping in the raw markdown (unescaped '&', '<',
+        # '**'), so the retry 400'd with "can't parse entities" and the ping was
+        # dropped. Escape the entities, and only drop message_thread_id when the
+        # topic itself is gone ("message thread not found") — otherwise keep it so
+        # the notification still lands IN the topic.
+        thread_missing = "thread not found" in (resp.text or "").lower()
+        payload.pop("parse_mode", None)
+        payload["text"] = html.escape(message, quote=False)
+        if thread_missing:
+            payload.pop("message_thread_id", None)
         resp2 = await client.post(url, json=payload, timeout=30)
         if resp2.status_code == 200:
+            if thread_missing:
+                # Landed in the group, NOT the requested topic — report
+                # undelivered so the caller retries instead of resolving.
+                logger.error(
+                    "Telegram fallback landed outside thread %s (topic missing)",
+                    thread_id,
+                )
+                return False
             return True
         logger.error(
             "Telegram API error (fallback): %s %s",
