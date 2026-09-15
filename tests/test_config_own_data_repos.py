@@ -12,7 +12,7 @@ from app.config import Settings
 
 
 def test_defaults_match_sophias_existing_hardcoded_repos():
-    s = Settings()
+    s = Settings(_env_file=None)
     assert s.own_repos == {
         "context": "agentic_ai_context",
         "transcript": "truesight_autopilot_transcript",
@@ -25,7 +25,7 @@ def test_defaults_match_sophias_existing_hardcoded_repos():
 def test_defaults_are_noop_on_api_only_repos():
     """Both defaults are already literal entries in api_only_repos — the
     model_validator must not introduce duplicates for Sophia."""
-    s = Settings()
+    s = Settings(_env_file=None)
     assert s.api_only_repos.count("truesight_autopilot_transcript") == 1
     assert s.api_only_repos.count("store_interaction_attachments") == 1
 
@@ -35,9 +35,10 @@ def test_partial_override_merges_onto_defaults():
     keeps "context" at the shared default — the documented .env.example
     contract (only override what you're changing)."""
     s = Settings(
+        _env_file=None,
         OWN_REPOS='{"transcript":"bionpact_autopilot_transcription",'
         '"attachments":"bionpact_attachments",'
-        '"followups":"bionpact_agentic_ai_context"}'
+        '"followups":"bionpact_agentic_ai_context"}',
     )
     assert s.own_repos["context"] == "agentic_ai_context"
     assert s.own_repos["transcript"] == "bionpact_autopilot_transcription"
@@ -47,8 +48,9 @@ def test_partial_override_merges_onto_defaults():
 
 def test_overriding_transcript_and_attachments_folds_into_api_only_repos():
     s = Settings(
+        _env_file=None,
         OWN_REPOS='{"transcript":"bionpact_autopilot_transcription",'
-        '"attachments":"bionpact_attachments"}'
+        '"attachments":"bionpact_attachments"}',
     )
     assert "bionpact_autopilot_transcription" in s.api_only_repos
     assert "bionpact_attachments" in s.api_only_repos
