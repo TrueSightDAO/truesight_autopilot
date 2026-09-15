@@ -219,10 +219,10 @@ def test_decision_for_unit_deploy_still_gates_in_run_to_uat():
 def test_next_action_run_to_uat_suppresses_uat_gate():
     plan = PLAN.replace("**RESUME HERE:** PR2", "**RESUME HERE:** PR4")
     # default: UAT gates
-    d = next_action(plan, opened_pr=True)
+    d = next_action(plan, pr_opened=True, made_progress=True)
     assert d.decision == "gate" and "UAT" in d.gate_reason
     # run_to_uat: UAT is auto
-    d = next_action(plan, opened_pr=True, run_to_uat=True)
+    d = next_action(plan, pr_opened=True, made_progress=True, run_to_uat=True)
     assert d.decision == "auto"
 
 
@@ -231,24 +231,32 @@ def test_next_action_run_to_uat_suppresses_uat_gate():
 
 def test_next_action_auto_when_pr_opened_and_next_is_auto():
     # RESUME HERE -> PR2 (auto)
-    d = next_action(PLAN, opened_pr=True)
+    d = next_action(PLAN, pr_opened=True, made_progress=True)
     assert d.decision == "auto" and d.next_unit.startswith("PR2")
 
 
-def test_next_action_gate_when_no_pr_opened():
-    d = next_action(PLAN, opened_pr=False)
-    assert d.decision == "gate" and "did not open a PR" in d.gate_reason
+def test_next_action_auto_when_made_progress_no_pr():
+    # A PR-less unit that did real side-effecting work converges — the core
+    # PR-less-units fix (§2.1). No PR, but progress was made.
+    d = next_action(PLAN, pr_opened=False, made_progress=True)
+    assert d.decision == "auto" and d.next_unit.startswith("PR2")
+
+
+def test_next_action_gate_when_no_progress_at_all():
+    # The genuine non-convergence case — still gates, exactly as before.
+    d = next_action(PLAN, pr_opened=False, made_progress=False)
+    assert d.decision == "gate" and "made no progress" in d.gate_reason
 
 
 def test_next_action_gate_when_next_unit_gated():
     plan = PLAN.replace("**RESUME HERE:** PR2", "**RESUME HERE:** PR3")
-    d = next_action(plan, opened_pr=True)
+    d = next_action(plan, pr_opened=True, made_progress=True)
     assert d.decision == "gate" and "deploy" in d.gate_reason
 
 
 def test_next_action_done_when_resume_says_complete():
     plan = PLAN + "\n> **RESUME HERE:** none — all units complete.\n"
-    d = next_action(plan, opened_pr=True)
+    d = next_action(plan, pr_opened=True, made_progress=True)
     assert d.decision == "done"
 
 
@@ -257,10 +265,39 @@ def test_next_action_gate_when_no_resume_pointer():
     plan = "\n".join(
         ln for ln in PLAN.splitlines() if "RESUME HERE" not in ln
     )
-    d = next_action(plan, opened_pr=True)
+    d = next_action(plan, pr_opened=True, made_progress=True)
     assert d.decision == "gate" and "RESUME HERE" in d.gate_reason
 
 
 def test_advance_decision_dataclass_defaults():
     d = AdvanceDecision(decision="auto")
     assert d.gate_reason is None and d.next_unit is None
+
+
+# ── _MAKE_PROGRESS_TOOLS ┄ policy.py consistency (drift guard) ───────────────────────
+
+
+def test_make_progress_tools_are_all_write_class():
+    """Every tool the brain counts as 'made progress' must be classified WRITE by
+    policy.py, so the two sets cannot silently diverge (main.py's opt-in allowlist
+    vs the governor gate's write set)."""
+    from app.main import _MAKE_PROGRESS_TOOLS
+    from app.policy import ActionClass, classify_action
+
+    offenders = sorted(
+        n for n in _MAKE_PROGRESS_TOOLS if classify_action(n) is not ActionClass.WRITE
+    )
+    assert offenders == [], (
+        f"tools counted as progress but not WRITE per policy.py: {offenders} "
+        "— either add them to policy.py's write_tools or drop them here"
+    )
+
+
+def test_make_progress_tools_exclude_read_capable_and_pr_tools_distinct():
+    """ssh_run/run_command/append_to_transcript are deliberately NOT progress (they
+    are read-capable/housekeeping); the three PR tools are a separate signal."""
+    from app.main import _MAKE_PROGRESS_TOOLS, _PR_TOOLS
+
+    for read_capable in ("ssh_run", "run_command", "append_to_transcript"):
+        assert read_capable not in _MAKE_PROGRESS_TOOLS, read_capable
+    assert _PR_TOOLS == {"open_fix_pr", "open_pr", "merge_pr"}

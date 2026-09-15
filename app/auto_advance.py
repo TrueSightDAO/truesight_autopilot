@@ -24,7 +24,8 @@ no / blank / unknown ``Advance`` marker, or a plan with no ``Advance`` column at
 - the next unit is **irreversible / outward-facing** — an always-stop category gated by
   RULE not annotation (deploy / promote / merge-to-main / TDG-or-money issuance / UAT);
 - its marker is an explicit ``gate: <reason>``;
-- the turn opened **no PR** (non-convergence — handled in :func:`next_action`); or
+- the turn **made no progress at all** — neither opened a PR nor did any
+  side-effecting action (non-convergence — handled in :func:`next_action`); or
 - she **cannot locate** the next unit (no ``RESUME HERE`` pointer, or the unit is not
   found in a present tracker). Ambiguity about *where she is* still fails closed;
   ambiguity about *whether a plain unit may run* now resolves to ``auto``.
@@ -266,23 +267,39 @@ def decision_for_unit(plan_text: str, unit: str, *, run_to_uat: bool = False) ->
     return AdvanceDecision(decision="auto", next_unit=next_unit)
 
 
-def next_action(plan_text: str, opened_pr: bool, *, run_to_uat: bool = False) -> AdvanceDecision:
+def next_action(
+    plan_text: str,
+    *,
+    pr_opened: bool,
+    made_progress: bool,
+    run_to_uat: bool = False,
+) -> AdvanceDecision:
     """High-level decision the brain emits at turn-end.
 
-    Fails closed to ``gate`` unless the turn clearly completed a unit (``opened_pr``
-    is True — a PR was opened OR merged, or, in run-to-UAT mode, the turn ran tools)
-    AND the plan's ``RESUME HERE`` points at a next unit marked ``auto``.
+    Fails closed to ``gate`` only when the turn made NO progress at all
+    (``not pr_opened and not made_progress``). A unit whose work is PR-less by
+    design (DNS/Pages verification, a read-only pre-flight, a walk) still
+    converges when it did a real side-effecting action, so it auto-advances
+    instead of demanding a human "go" every time. Genuine non-convergence — a
+    turn that neither opened a PR nor did any useful work — still gates, exactly
+    as before (the case the ``no_progress`` guard exists to catch).
 
     Args:
         plan_text: the active roadmap's full markdown.
-        opened_pr: whether THIS turn made progress (opened/merged a PR, or ran
-            UAT/test work under run-to-UAT).
+        pr_opened: this turn fired one of the three PR tools. Also the signal the
+            one-PR-per-turn ``pr_boundary`` stop keys on — kept separate from
+            ``made_progress`` so that boundary is untouched.
+        made_progress: this turn did a genuine side-effecting action (write/journal
+            tool, or UAT/test tooling under run-to-UAT), even with no PR.
         run_to_uat: suppress the UAT/human-acceptance always-stop.
     """
-    if not opened_pr:
+    if not pr_opened and not made_progress:
         return AdvanceDecision(
             decision="gate",
-            gate_reason="turn did not open a PR — halting auto-advance",
+            gate_reason=(
+                "turn made no progress — no PR opened and no side-effecting "
+                "action — halting auto-advance"
+            ),
         )
     resume = find_resume_here(plan_text)
     if not resume:
