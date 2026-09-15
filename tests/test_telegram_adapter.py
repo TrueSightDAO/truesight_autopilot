@@ -1281,3 +1281,112 @@ def test_call_chat_does_not_append_stale_approval_prompt(monkeypatch):
     assert out == "submitted"
     assert "approve" not in out.lower()
     assert "DApp" not in out
+
+
+# --- progress-query: classify the RAW user text, not the decorated dispatch ---
+# Regression (UAT 2026-09-15): the gate ran _is_progress_query() on dispatch_text
+# AFTER _handoff_prefix() + the "[Telegram context: ...]" header were prepended.
+# In any handoff-registered topic the prefix alone exceeds the 80-char cap, so a
+# short status ping ("progress?") never classified as a progress query and the
+# immediate-answer path was dead. The classifier must see the raw user message.
+
+
+def test_progress_gate_uses_raw_text_in_handoff_topic(monkeypatch):
+    """A short status ping in a handoff-registered topic must classify as a
+    progress query even though the dispatched text is long and decorated."""
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "X" * 300)
+    seen = {}
+    real = ta._is_progress_query
+
+    def spy(t):
+        seen["arg"] = t
+        return real(t)
+
+    monkeypatch.setattr(ta, "_is_progress_query", spy)
+
+    lock = ta._thread_dispatch_lock(555, 7)
+    lock.acquire()  # simulate a turn already running in this topic
+    try:
+        monkeypatch.setattr(ta, "create_jwt", lambda pk: "JWT")
+        monkeypatch.setattr(
+            ta.httpx,
+            "get",
+            lambda *a, **k: type(
+                "R",
+                (),
+                {
+                    "status_code": 200,
+                    "json": staticmethod(lambda: {"running": False, "snapshot": None}),
+                },
+            )(),
+        )
+        sent = []
+        ran = []
+        # If the bug regresses, control falls through to the turn runner; stub it
+        # so the test FAILS FAST (below) instead of hanging on a real network call.
+        monkeypatch.setattr(
+            ta, "_run_turn_with_auto_advance", lambda *a, **k: ran.append(1)
+        )
+        monkeypatch.setattr(
+            ta,
+            "send_message",
+            lambda chat_id, text, thread_id=None, **k: sent.append(text),
+        )
+        ta.handle_message(
+            {
+                "chat": {"id": 555, "type": "supergroup"},
+                "message_thread_id": 7,
+                "is_topic_message": True,
+                "from": {"id": 111, "first_name": "Gary"},
+                "text": "progress?",
+            },
+            allowed={111},
+            public_key="PK",
+        )
+    finally:
+        lock.release()
+
+    assert ran == []  # must NOT have fallen through to the normal turn runner
+    # classifier saw the RAW message, not the 300-char-prefixed dispatch text
+    assert seen["arg"] == "progress?"
+    assert len(seen["arg"]) <= 80
+    # immediate-answer path taken (idle snapshot) rather than the queue ack
+    assert sent and sent[0].startswith("\U0001f4ca")
+    assert "queued" not in sent[0].lower()
+
+
+def test_progress_gate_real_instruction_not_misread(monkeypatch):
+    """A genuine instruction in a handoff topic must NOT be classified as a
+    status ping (must not be silently dropped)."""
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "X" * 300)
+    calls = {}
+    monkeypatch.setattr(
+        ta,
+        "_run_turn_with_auto_advance",
+        lambda *a, **k: calls.setdefault("ran", a[2]),
+    )
+    lock = ta._thread_dispatch_lock(555, 7)
+    lock.acquire()
+    try:
+        sent = []
+        monkeypatch.setattr(
+            ta,
+            "send_message",
+            lambda chat_id, text, thread_id=None, **k: sent.append(text),
+        )
+        ta.handle_message(
+            {
+                "chat": {"id": 555, "type": "supergroup"},
+                "message_thread_id": 7,
+                "is_topic_message": True,
+                "from": {"id": 111, "first_name": "Gary"},
+                "text": "please refactor the deploy script and open a PR",
+            },
+            allowed={111},
+            public_key="PK",
+        )
+    finally:
+        lock.release()
+
+    assert "ran" in calls  # queued + executed, not answered-as-progress
+    assert sent and sent[0].startswith("\U0001f4e5")  # queue ack
