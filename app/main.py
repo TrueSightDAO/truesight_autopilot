@@ -257,6 +257,24 @@ def _session_key(public_key: str, request: Request) -> str:
     return f"{public_key[:20]}:{sid}" if sid else public_key
 
 
+def _thread_from_session(session_id: str) -> int | None:
+    """Extract the Telegram forum-topic id from a session key.
+
+    Telegram sessions are keyed ``tg:<chat_id>:<thread_id>`` (see
+    telegram_adapter.build_session_id); the blocking path prefixes the governor
+    key, so the ``tg:`` component may not be first. Returns None when the key
+    carries no topic (e.g. a DApp/web session). PR4c(a) uses this to resolve a
+    thread's handoff plan for auto-claim.
+    """
+    m = re.search(r"tg:-?\d+:-?\d+", session_id or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(0).rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        return None
+
+
 def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
     """Load session from memory, then from disk if not found."""
     if session_key in _sessions:
@@ -4567,12 +4585,17 @@ async def chat_blocking(request: Request) -> JSONResponse:
     signature = body.get("signature")
     public_key = request.headers.get("X-Public-Key", "")
 
+    plan_file = None
     if payload and signature and public_key:
         verify_payload(payload, signature, public_key)
         user_message = payload.get("message", "")
+        # PR4c(a): ping_sophia may name the handoff plan so the autopilot (single
+        # writer) records the claim -- see dao_client modules/ping_sophia.py.
+        plan_file = payload.get("plan_file")
     else:
         public_key = verify_jwt(request)
         user_message = body.get("message", "")
+        plan_file = body.get("plan_file")
         if not user_message:
             raise HTTPException(status_code=400, detail="message is required.")
 
@@ -4582,11 +4605,16 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # interleaving its writes — the race that bricked threads 3 and 780. Different
     # threads have different locks, so they still run concurrently.
     async with _session_lock(session_id):
-        return await _chat_blocking_turn(session_id, user_message, public_key)
+        return await _chat_blocking_turn(
+            session_id, user_message, public_key, plan_file=plan_file
+        )
 
 
 async def _chat_blocking_turn(
-    session_id: str, user_message: str, public_key: str
+    session_id: str,
+    user_message: str,
+    public_key: str,
+    plan_file: str | None = None,
 ) -> JSONResponse:
     history = _load_or_create_session(session_id)
     role = find_role_in_history(history)
@@ -4664,6 +4692,19 @@ async def _chat_blocking_turn(
     ):
         user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
     history.append({"role": "user", "content": user_message})
+
+    # PR4c(a) auto-claim: refresh Sophia's active-supervision claim for this
+    # thread's handoff plan at turn start (visibility side-effect -- see
+    # app/supervision.py). Fail-soft: never blocks or fails a turn. Released on
+    # natural completion below; a mid-turn crash leaves the claim to age out
+    # (~60 min) rather than lying.
+    _claimed_plan = None
+    try:
+        from .supervision import claim_for_turn
+
+        _claimed_plan = claim_for_turn(_thread_from_session(session_id), plan_file)
+    except Exception:  # never block a turn
+        _claimed_plan = None
 
     system_prompt = get_system_prompt_for_role(role)
     tools = get_tool_schemas_for_role(role)
@@ -4844,6 +4885,16 @@ async def _chat_blocking_turn(
     # Discord channel's transcript stayed at message_count=1 (just the role
     # line) and every subsequent message arrived with no prior context.
     _log_session(session_id, history)
+
+    # PR4c(a): natural completion reached -- release Sophia's claim so the board
+    # stops showing this thread as actively supervised between turns.
+    if _claimed_plan:
+        try:
+            from .supervision import release
+
+            release(_claimed_plan)
+        except Exception:  # never block a turn
+            pass
 
     response_data: dict[str, Any] = {"response": assistant_text}
     if proposal:
