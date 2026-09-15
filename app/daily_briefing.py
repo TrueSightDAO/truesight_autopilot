@@ -22,7 +22,7 @@ import httpx
 from .auth import verify_payload
 from .config import settings
 from .github_client import GitHubClient
-from .governor_registry import load_governors
+from .governor_registry import load_governors, resolve_key
 
 logger = logging.getLogger("autopilot.daily_briefing")
 
@@ -52,7 +52,20 @@ _TERMINAL_STATUS_MARKERS = ("completed", "superseded", "demo · live", "demo·li
 
 
 def _gov_name_for_key(public_key_b64: str) -> str | None:
-    """Look up governor name from public key. Returns name or None."""
+    """Look up the governor name for a public key. Returns name or None.
+
+    Point-lookup first: the content-addressed per-key file (resolve_key) is a
+    ~1 KB O(1) fetch, so we no longer walk the whole dao_members.json monolith
+    just to name one key. Only a *governor* identity is accepted, matching the
+    monolith path's governor-only semantics. Falls back to the monolith
+    enumeration when the per-key file is absent (migration safety, plan §2.3).
+    """
+    try:
+        identity = resolve_key(public_key_b64)
+    except Exception:  # noqa: BLE001 -- registry/network failure => fall back
+        identity = None
+    if identity is not None and identity.get("is_governor"):
+        return identity.get("name") or None
     data = load_governors()
     for g in data.get("governors", []):
         if g.get("public_key") == public_key_b64:

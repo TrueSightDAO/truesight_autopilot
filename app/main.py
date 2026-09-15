@@ -37,7 +37,7 @@ from .turn_convergence import convergence_message, should_converge
 from .context import get_context_file, refresh_context_repos, refresh_system_prompt
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
-from .governor_registry import load_governors
+from .governor_registry import load_governors, resolve_key
 from .governor_registry import refresh_cache as refresh_governor_cache
 from .roles import (
     RESET_CONTEXT_THRESHOLD,
@@ -87,7 +87,20 @@ from .policy import (
 
 
 def _gov_name_for_key(public_key_b64: str) -> str | None:
-    """Look up governor name from public key. Returns name or None."""
+    """Look up the governor name for a public key. Returns name or None.
+
+    Point-lookup first: the content-addressed per-key file (resolve_key) is a
+    ~1 KB O(1) fetch, so we no longer walk the whole dao_members.json monolith
+    just to name one key. Only a *governor* identity is accepted, matching the
+    monolith path's governor-only semantics. Falls back to the monolith
+    enumeration when the per-key file is absent (migration safety, plan §2.3).
+    """
+    try:
+        identity = resolve_key(public_key_b64)
+    except Exception:  # noqa: BLE001 -- registry/network failure => fall back
+        identity = None
+    if identity is not None and identity.get("is_governor"):
+        return identity.get("name") or None
     data = load_governors()
     for g in data.get("governors", []):
         if g.get("public_key") == public_key_b64:
