@@ -1390,3 +1390,101 @@ def test_progress_gate_real_instruction_not_misread(monkeypatch):
 
     assert "ran" in calls  # queued + executed, not answered-as-progress
     assert sent and sent[0].startswith("\U0001f4e5")  # queue ack
+
+
+# Regression (UAT 2026-09-15, deployed HEAD 1254da2): the classifier's bare
+# (progress|status|update) alternation matched ANY <=80-char message merely
+# CONTAINING those words, so a real instruction sent during a busy turn
+# ("please also update the README ...") was misread as a status ping and
+# silently dropped (never queued). The regex is now anchored to the whole
+# message.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "progress?",
+        "status",
+        "update?",
+        "any update",
+        "any updates?",
+        "how's it going",
+        "how's progress?",
+        "what's the status",
+        "what's going on",
+        "where are you",
+        "are you done",
+        "done yet?",
+        "status update",
+        "how are things",
+        "status please",
+    ],
+)
+def test_progress_query_matches_real_status_pings(text):
+    assert ta._is_progress_query(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "update the ledger now",
+        "Please also update the README section 4 with the new flag.",
+        "please refactor the deploy script and open a PR",
+        "add a test for the parser",
+        "update the status field in the sheet to active",
+        "the progress bar on the page should be green",
+        "let's update our pricing",
+        "fix the status badge css",
+    ],
+)
+def test_progress_query_never_matches_real_instructions(text):
+    assert ta._is_progress_query(text) is False
+
+
+def test_progress_gate_instruction_with_trigger_word_not_dropped(monkeypatch):
+    """A real instruction that CONTAINS 'update'/'status' (the old bug) must be
+    queued + executed when a turn is busy, never answered-as-progress."""
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "X" * 300)
+    calls = {}
+    monkeypatch.setattr(
+        ta,
+        "_run_turn_with_auto_advance",
+        lambda *a, **k: calls.setdefault("ran", a[2]),
+    )
+    lock = ta._thread_dispatch_lock(555, 7)
+    lock.acquire()
+    try:
+        sent = []
+        monkeypatch.setattr(
+            ta,
+            "send_message",
+            lambda chat_id, text, thread_id=None, **k: sent.append(text),
+        )
+        monkeypatch.setattr(
+            ta.httpx,
+            "get",
+            lambda *a, **k: type(
+                "R",
+                (),
+                {
+                    "status_code": 200,
+                    "json": staticmethod(
+                        lambda: {"running": True, "snapshot": "x"}
+                    ),
+                },
+            )(),
+        )
+        ta.handle_message(
+            {
+                "chat": {"id": 555, "type": "supergroup"},
+                "message_thread_id": 7,
+                "is_topic_message": True,
+                "from": {"id": 111, "first_name": "Gary"},
+                "text": "please also update the README section 4",
+            },
+            allowed={111},
+            public_key="PK",
+        )
+    finally:
+        lock.release()
+
+    assert "ran" in calls  # queued + executed, NOT dropped as a status ping
+    assert sent and sent[0].startswith("\U0001f4e5")  # queue ack, not the snapshot
