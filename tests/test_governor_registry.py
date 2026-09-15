@@ -201,3 +201,79 @@ def test_is_governor_unknown_key_is_false(monkeypatch):
     monkeypatch.setattr(gr.httpx, "get", fake)
 
     assert gr.is_governor(_KEY) is False
+
+
+# ── resolve_key_fresh: authenticated contents-API path (PR4) ─────────────────
+
+_CONTENTS = "contents/public_keys"
+_RAW = "raw.githubusercontent.com"
+
+
+def test_resolve_key_fresh_reads_contents_api(monkeypatch):
+    """The fresh resolver hits api.github.com (contents API), not the raw CDN."""
+    monkeypatch.setenv("GITHUB_READ_PAT", "tok")
+    fake = FakeHTTP().route(
+        _CONTENTS,
+        _resp(
+            200, {"contributor": "Gary Teh", "roles": ["governor"], "status": "ACTIVE"}
+        ),
+    )
+    monkeypatch.setattr(gr.httpx, "get", fake)
+
+    identity = gr.resolve_key_fresh(_KEY)
+
+    assert identity == {
+        "name": "Gary Teh",
+        "is_governor": True,
+        "email": "",
+        "roles": ["governor"],
+    }
+    assert "api.github.com" in fake.calls[0]
+
+
+def test_resolve_key_fresh_bypasses_stale_cache(monkeypatch):
+    """A key cached as a miss is re-resolved fresh (U2: recognised immediately)."""
+    monkeypatch.setenv("GITHUB_READ_PAT", "tok")
+    gr._per_key_cache[gr._sha256(_KEY)] = (gr._now(), None)  # warm stale miss
+    fake = FakeHTTP().route(
+        _CONTENTS,
+        _resp(
+            200, {"contributor": "Gary Teh", "roles": ["governor"], "status": "ACTIVE"}
+        ),
+    )
+    monkeypatch.setattr(gr.httpx, "get", fake)
+
+    identity = gr.resolve_key_fresh(_KEY)
+
+    assert identity is not None and identity["is_governor"] is True
+
+
+def test_resolve_key_fresh_falls_back_to_raw_on_api_miss(monkeypatch):
+    """No answer from the contents API -> fall back to the raw per-key file."""
+    fake = (
+        FakeHTTP()
+        .route(_CONTENTS, _resp(404, {}))
+        .route(
+            _RAW,
+            _resp(
+                200,
+                {"contributor": "Gary Teh", "roles": ["governor"], "status": "ACTIVE"},
+            ),
+        )
+    )
+    monkeypatch.setattr(gr.httpx, "get", fake)
+
+    identity = gr.resolve_key_fresh(_KEY)
+
+    assert identity is not None and identity["is_governor"] is True
+    assert any(_RAW in c for c in fake.calls)
+
+
+def test_resolve_key_fresh_revoked_returns_none(monkeypatch):
+    fake = FakeHTTP().route(
+        _CONTENTS,
+        _resp(200, {"contributor": "Gary", "roles": ["governor"], "status": "REVOKED"}),
+    )
+    monkeypatch.setattr(gr.httpx, "get", fake)
+
+    assert gr.resolve_key_fresh(_KEY) is None

@@ -25,6 +25,14 @@ _RAW_KEY_BASE = (
 )
 _CACHE_TTL_SECONDS = int(os.getenv("GOVERNORS_CACHE_TTL", "300"))
 
+# Authenticated contents API (NOT CDN-cached) — used by the vault sign-in
+# force-fresh path so a freshly-registered key is granted immediately.
+# raw.githubusercontent.com caches for ~5 min (and caches 404s); the contents
+# API is fresh, and authenticating raises the rate limit to 5000/hr.
+_CONTENTS_KEY_API = (
+    "https://api.github.com/repos/TrueSightDAO/treasury-cache/contents/public_keys"
+)
+
 # Per-key cache: sha256 -> (fetched_at, data_or_None)
 # Short TTL (60s) so a freshly-registered key is recognized quickly.
 _PER_KEY_CACHE_TTL = int(os.getenv("PER_KEY_CACHE_TTL", "60"))
@@ -66,6 +74,54 @@ def _fetch_remote(url: str) -> dict | None:
     except Exception as exc:
         logger.warning("fetch failed for %s: %s", url, exc)
         return None
+
+
+def _github_read_token() -> str:
+    """GitHub token for authenticated reads (contents API). Optional."""
+    return (
+        os.getenv("GITHUB_READ_PAT")
+        or getattr(settings, "github_read_pat", "")
+        or getattr(settings, "github_pat", "")
+        or ""
+    ).strip()
+
+
+def _fetch_contents_api(h: str) -> dict | None:
+    """Fetch public_keys/<h>.json via the authenticated GitHub contents API.
+
+    Unlike raw.githubusercontent.com this is not CDN-cached, so it sees a key
+    written moments ago. Returns None on 404 (genuine miss) or error.
+    """
+    headers = {
+        "Accept": "application/vnd.github.raw+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = _github_read_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = f"{_CONTENTS_KEY_API}/{h}.json"
+    try:
+        resp = httpx.get(url, headers=headers, timeout=15.0, follow_redirects=True)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.warning("contents-API fetch failed for %s: %s", url, exc)
+        return None
+
+
+def _build_identity(key_data: dict) -> dict | None:
+    """Map a per-key file to an identity dict, or None if not ACTIVE."""
+    if (key_data.get("status") or "").upper() != "ACTIVE":
+        return None
+    roles = key_data.get("roles", [])
+    return {
+        "name": key_data.get("contributor", "Unknown"),
+        "is_governor": "governor" in roles,
+        "email": "",  # email omitted from per-key files (privacy decision)
+        "roles": roles,
+    }
 
 
 def _governor_names() -> set[str]:
@@ -122,22 +178,31 @@ def resolve_key(public_key_b64: str) -> dict | None:
         _per_key_cache[h] = (now, None)
         return None
 
-    # 3. Validate status
-    status = (key_data.get("status") or "").upper()
-    if status != "ACTIVE":
-        _per_key_cache[h] = (now, None)
-        return None
-
-    # 4. Build identity
-    roles = key_data.get("roles", [])
-    identity = {
-        "name": key_data.get("contributor", "Unknown"),
-        "is_governor": "governor" in roles,
-        "email": "",  # email omitted from per-key files (privacy decision)
-        "roles": roles,
-    }
-
+    # 3-4. Validate status + build identity
+    identity = _build_identity(key_data)
     _per_key_cache[h] = (now, identity)
+    return identity
+
+
+def resolve_key_fresh(public_key_b64: str) -> dict | None:
+    """Resolve a key bypassing the raw CDN, via the authenticated contents API.
+
+    Used on a DENIED vault sign-in: fetch one fresh copy of the per-key file
+    before refusing, so a governor key registered moments ago is granted on the
+    first attempt (retires the ~5-min raw-CDN cache lag - the 2026-06-16 bug).
+    Falls back to the raw path if the contents API is unavailable, so behaviour
+    is never worse than resolve_key().
+    """
+    h = _sha256(public_key_b64)
+    _per_key_cache.pop(h, None)
+
+    key_data = _fetch_contents_api(h)
+    if key_data is None:
+        # No token / API error / genuine miss - one raw attempt as fallback.
+        key_data = _fetch_remote(f"{_RAW_KEY_BASE}/{h}.json")
+
+    identity = _build_identity(key_data) if key_data else None
+    _per_key_cache[h] = (_now(), identity)
     return identity
 
 

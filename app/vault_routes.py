@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from .auth import verify_jwt
-from .governor_registry import resolve_key
+from .governor_registry import resolve_key, resolve_key_fresh
 from .vault import get_vault
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
 
     # Fallback: try the old monolith (for enumeration callers)
     from .governor_registry import load_governors as _load_govs
+
     data = _load_govs()
     for g in data.get("governors", []):
         if g.get("public_key") == public_key_b64:
@@ -65,6 +66,30 @@ def _resolve_identity_from_jwt(public_key_b64: str) -> dict:
         "is_governor": False,
         "email": "",
     }
+
+
+def _resolve_identity_for_signin(public_key_b64: str) -> dict:
+    """Resolve identity for an INTERACTIVE sign-in, with force-fresh-on-deny.
+
+    Uses the fast point-lookup first (resolves a known governor with no extra
+    network call). If that denies, do ONE fresh contents-API lookup before
+    refusing, so a governor key registered moments ago is granted on the first
+    attempt — this retires the ~5-min raw.github CDN cache lag (the 2026-06-16
+    bug). Only the sign-in path pays this cost; page renders do not.
+    """
+    identity = _resolve_identity_from_jwt(public_key_b64)
+    if identity["is_governor"]:
+        return identity
+
+    fresh = resolve_key_fresh(public_key_b64)
+    if fresh is not None and fresh.get("is_governor"):
+        logger.info("Vault sign-in: governor granted via fresh contents-API lookup")
+        return {
+            "name": fresh.get("name", "Unknown"),
+            "is_governor": True,
+            "email": fresh.get("email", ""),
+        }
+    return identity
 
 
 def _optional_identity(request: Request) -> dict | None:
@@ -253,8 +278,10 @@ async def verify_signature(request: Request):
             detail="Invalid signature. Your DAO Identity key does not match.",
         )
 
-    # Check if this public key belongs to a governor
-    identity = _resolve_identity_from_jwt(public_key)
+    # Check if this public key belongs to a governor. On a deny, do ONE fresh
+    # contents-API lookup (bypasses the raw CDN) before refusing — a key
+    # registered moments ago is then granted on the first attempt.
+    identity = _resolve_identity_for_signin(public_key)
     if not identity["is_governor"]:
         raise HTTPException(
             status_code=403,
@@ -414,7 +441,10 @@ def _git_info() -> dict:
         commit = _os.environ.get("AUTOPILOT_COMMIT", "unknown")
     try:
         branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=remote_dir, text=True, timeout=5
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=remote_dir,
+            text=True,
+            timeout=5,
         ).strip()
     except Exception:
         branch = "main"
