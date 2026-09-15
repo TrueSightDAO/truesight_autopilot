@@ -1,20 +1,21 @@
 """SSH tool: run commands on the TrueSight DAO / Krake EC2 fleet.
 
-Sophia's outbound SSH capability. The host registry mirrors
-``agentic_ai_context/AWS_DIGITAL_INFRASTRUCTURE.md`` §2 (EC2 inventory) and
-§7 (SSH access) — update BOTH when the fleet changes.
+Vault-first: each fleet host resolves the SSH identity it actually trusts.
+Three encrypted vault credentials cover the fleet (see
+SOPHIA_VAULT_CREDENTIAL_MIGRATION_PLAN.md):
 
-Auth: dedicated ``sophia_infra`` ed25519 keypair (independently revocable —
-grep the key comment in each host's ``authorized_keys``). The private key is
-synced to the box by ``scripts/deploy.sh``; the public key is distributed to
-the fleet by ``scripts/distribute_sophia_ssh_key.sh`` (operator-run).
+  ssh_key_nelanco_aws         - Krake/Seni Nelanco fleet (RSA)
+  ssh_key_server_us           - Krake core US-East hosts (RSA)
+  ssh_key_nelanco_california  - californian_proxy (RSA)
 
-Guardrails:
-- known-host registry only (no arbitrary IPs),
-- ``BatchMode=yes`` — never hangs on a password prompt,
-- timeouts + output truncation.
-This is an SRE power tool: prefer reading logs / checking services; for code
-changes still go through git_push_changes / open_fix_pr + PR review.
+Two hosts trust the box-local ``sophia_infra`` ed25519 key instead and pin it
+via ``FLEET[host]["key"]`` (this autopilot box itself, and ``dao_protocol``).
+Unpinned hosts keep the vault-first host-agnostic default. The host registry
+mirrors AWS_DIGITAL_INFRASTRUCTURE.md sections 2 and 7.
+
+Guardrails: known-host registry only; BatchMode=yes (never hangs on a password
+prompt); timeouts + output truncation. SRE power tool -- for code changes go
+through git_push_changes / open_fix_pr + PR review.
 """
 
 from __future__ import annotations
@@ -34,107 +35,131 @@ _DEFAULT_TIMEOUT_SECS = 60
 _MAX_TIMEOUT_SECS = 300
 _MAX_OUTPUT_CHARS = 8000
 
-# Commands that restart/kill the autopilot itself. These bypass deploy_autopilot's
-# idle-drain guard and sever in-flight turns + wedge the adapter — the repeated
-# self-brick on 2026-06-12. The ONLY sanctioned restart path is deploy_autopilot
-# (which waits for threads to drain). Block raw self-restart here so the guard
-# can't be bypassed. (deploy_autopilot uses its own subprocess path, not ssh_run,
-# so it is unaffected.)
+# Block raw self-restart of the autopilot: it bypasses deploy_autopilot's
+# idle-drain guard and bricks in-flight turns. The alternatives are split across
+# lines on purpose so THIS source file does not itself match the pattern.
 _SELF_RESTART_RE = re.compile(
-    r"(systemctl|service)\s+(restart|stop|kill|reload)\b[^\n]*truesight[-_]autopilot"
-    r"|(pkill|killall)\b[^\n]*(uvicorn|app\.main|truesight[-_]autopilot)"
-    r"|kill\b[^\n]*\b(uvicorn|app\.main)\b",
+    r"(systemctl|service)\s+"
+    r"(restart|stop|kill|reload)\b[^\n]*"
+    r"truesight[-_]autopilot"
+    r"|(pkill|killall)\b[^\n]*"
+    r"(uvicorn|app\.main|truesight[-_]autopilot)"
+    r"|kill\b[^\n]*"
+    r"\b(uvicorn|app\.main)\b",
     re.IGNORECASE,
 )
 
-# Mirrors AWS_DIGITAL_INFRASTRUCTURE.md §2 — running hosts only.
-# label → (public IP, user, what it is)
+# Vault credential -> equivalent on-box key file. Used ONLY when the vault is
+# unavailable (CI / a fresh box before deploy.sh seeds it). These PEMs are the
+# migration source for the vault entries.
+_VAULT_KEY_FILE_FALLBACK = {
+    "ssh_key_nelanco_aws": "~/.ssh/NELANCO_aws_20201122.pem",
+    "ssh_key_server_us": "~/.ssh/server_us.pem",
+    "ssh_key_nelanco_california": "~/.ssh/NELANCO_california_20260213.pem",
+}
+
+# Vault-first order for the host-agnostic DEFAULT key. server_us leads because it
+# is the historical default -- hosts without a per-host pin resolve exactly as
+# before this change (no regression); the others are reached only if it is gone.
+_DEFAULT_VAULT_KEYS = (
+    "ssh_key_server_us",
+    "ssh_key_nelanco_aws",
+    "ssh_key_nelanco_california",
+)
+
 FLEET: dict[str, dict[str, str]] = {
     "autopilot": {
-        # THIS box — Sophia's own host. Loopback so the entry survives IP
-        # changes / blue-green AMI swaps. Self-trust: deploy.sh + user-data.sh
-        # add sophia_infra.pub to this box's own authorized_keys. ubuntu has
-        # passwordless sudo, so this is how Sophia installs packages / runs
-        # sudo on the machine she runs on (e.g. tesseract-ocr for attachments).
+        # THIS box -- loopback so the entry survives IP changes / blue-green AMI
+        # swaps. Self-trust: deploy.sh + user-data.sh add sophia_infra.pub to
+        # this box's own authorized_keys.
         "ip": "127.0.0.1",
         "user": "ubuntu",
-        "desc": "THIS autopilot box itself (Sophia's own host) — loopback self-exec for package installs / sudo on her own machine",
+        "desc": "THIS autopilot box itself (Sophia's own host) -- loopback self-exec for package installs / sudo on her own machine",
     },
     "krake_nginx": {
+        # No vault pin: trusts server_us and has no dedicated vault key.
         "ip": "54.226.114.186",
         "user": "ubuntu",
         "port": "2202",
-        "desc": "Nginx reverse proxy — terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
+        "desc": "Nginx reverse proxy -- terminates HTTPS for edgar/api/chatbot.truesight.me (Nelanco)",
     },
     "seni_ror": {
         "ip": "54.211.179.126",
         "user": "ubuntu",
-        "desc": "Rails sentiment_importer — trading platform ONLY, NOT the DAO API (dao_protocol handles DAO on its own box)",
+        "desc": "Rails sentiment_importer -- trading platform ONLY, NOT the DAO API (dao_protocol handles DAO on its own box)",
     },
     "dao_protocol": {
         "ip": "98.93.94.86",
         "user": "ubuntu",
         "desc": "dao_protocol FastAPI server, port 8010 (Nelanco)",
-        # Pinned: dao_protocol trusts sophia_infra (added to its
-        # authorized_keys), but NOT the vault-first default ssh_key_server_us
-        # (the Krake key) — which _key_path() would otherwise hand it, causing
-        # "Permission denied (publickey)". See _identity_for().
+        # Pinned: trusts the box-local sophia_infra key, NOT the vault default.
         "key": "~/.ssh/sophia_infra",
     },
     "seni_sk": {
         "ip": "34.234.193.80",
         "user": "ubuntu",
         "desc": "Sidekiq worker for Edgar (Nelanco, seni_sk_auto)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "seni_sql": {
         "ip": "44.193.55.205",
         "user": "ubuntu",
         "desc": "PostgreSQL for Edgar (Nelanco, seni_sql_2026)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "seni_redis": {
         "ip": "54.234.59.188",
         "user": "ubuntu",
         "desc": "Redis for Edgar Sidekiq/cache (Nelanco, seni_redis_2)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "krake_ror": {
         "ip": "18.205.20.43",
         "user": "ubuntu",
         "desc": "Krake Rails backend, getdata.io (Nelanco)",
+        "vault_key": "ssh_key_server_us",
     },
     "krake_sk": {
         "ip": "54.227.147.20",
         "user": "ubuntu",
         "desc": "Krake Sidekiq worker (Nelanco)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "krake_sk_webhook": {
         "ip": "52.207.88.236",
         "user": "ubuntu",
         "desc": "Krake webhook worker (Nelanco)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "krake_sk_crawler": {
         "ip": "52.91.57.12",
         "user": "ubuntu",
         "desc": "Krake crawler worker (Nelanco)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "krake_sk_scaler": {
         "ip": "100.25.41.96",
         "user": "ubuntu",
         "desc": "Krake autoscaling worker (Nelanco)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "krake_data": {
         "ip": "52.5.179.48",
         "user": "ubuntu",
         "desc": "Krake data processing (Nelanco)",
+        "vault_key": "ssh_key_server_us",
     },
     "getdata_redis": {
         "ip": "52.1.162.134",
         "user": "ubuntu",
         "desc": "Redis for Krake (Nelanco, GETDATA_REDIS)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
     "getdata_cache": {
         "ip": "98.84.169.188",
         "user": "ubuntu",
         "desc": "Krake cache worker (Nelanco, GETDATA_CACHE)",
+        "vault_key": "ssh_key_nelanco_aws",
     },
 }
 
@@ -144,33 +169,68 @@ def _err(reason: str, **extra: Any) -> dict[str, Any]:
 
 
 def _vault_credential(name: str) -> str | None:
-    """Try vault first, fall back to None."""
+    """Return a vault credential's decrypted value, or ``None``.
+
+    Uses the shared ``get_vault()`` singleton so the ``VAULT_DIR`` env override
+    (honoured by the hermetic test suite) applies. Value is never logged.
+    """
     try:
-        from ..vault import Vault
-        v = Vault()
-        if v.is_initialized():
-            v.initialize()
-            return v.get_value(name)
+        from ..vault import get_vault
+
+        vault = get_vault()
+        if vault.is_initialized() and vault.has_credential(name):
+            return vault.get_value(name)
     except Exception:
         logger.debug("vault lookup failed for %s, falling back", name)
     return None
 
 
+def _write_temp_key(key_material: str) -> Path:
+    """Persist SSH key material to a 0600 temp file and return its path."""
+    import tempfile
+
+    fd, path = tempfile.mkstemp(prefix="sophia_sshkey_", suffix=".pem")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(key_material)
+    Path(path).chmod(0o600)
+    return Path(path)
+
+
+def _resolve_named_key(vault_name: str) -> Path | None:
+    """Resolve one named vault credential to a usable key file.
+
+    Vault first, then the equivalent on-box file fallback
+    (``_VAULT_KEY_FILE_FALLBACK``). Returns ``None`` when neither is available.
+    """
+    material = _vault_credential(vault_name)
+    if material:
+        return _write_temp_key(material)
+    fallback = _VAULT_KEY_FILE_FALLBACK.get(vault_name)
+    if fallback:
+        path = Path(fallback).expanduser()
+        if path.is_file():
+            return path
+    return None
+
+
+def _resolve_by_vault_key(host: str) -> Path | None:
+    """Resolve a host's identity from its per-host ``FLEET[host]['vault_key']``."""
+    vault_key = (FLEET.get(host) or {}).get("vault_key")
+    if not vault_key:
+        return None
+    path = _resolve_named_key(vault_key)
+    if path is None:
+        logger.warning("no key available for %s (vault_key=%s)", host, vault_key)
+    return path
+
+
 def _key_path() -> Path:
-    """Return the first existing SSH key from a list of candidates.
-    Vault-first: try ssh_key_nelanco / ssh_key_server_us / ssh_key_california,
-    then fall back through: sophia_infra -> id_ed25519_truesight_autopilot -> id_rsa."""
-    # Vault-first: write vault key to a temp file if found
-    for vault_name in ("ssh_key_nelanco", "ssh_key_server_us", "ssh_key_california"):
-        val = _vault_credential(vault_name)
-        if val:
-            import tempfile
-            tmp = Path(tempfile.mktemp(prefix=f"vault_{vault_name}_", suffix=".pem"))
-            tmp.write_text(val)
-            tmp.chmod(0o600)
-            logger.info("Resolved %s from vault (temp key at %s)", vault_name, tmp)
-            return tmp
-    # Fallback: current file-based resolution
+    """Vault-first host-agnostic default identity, with a file fallback."""
+    for vault_name in _DEFAULT_VAULT_KEYS:
+        path = _resolve_named_key(vault_name)
+        if path is not None:
+            logger.info("Resolved default SSH key from %s", vault_name)
+            return path
     env_key = os.environ.get("SOPHIA_SSH_KEY_PATH", "")
     if env_key:
         p = Path(env_key).expanduser()
@@ -185,30 +245,37 @@ def _key_path() -> Path:
     for c in candidates:
         if c.is_file():
             return c
-    return candidates[0]  # return default even if missing, for the error message
+    return candidates[0]
 
 
 def _identity_for(host: str) -> Path:
-    """Resolve the SSH identity for a *specific* fleet host.
+    """Resolve the SSH identity for a specific fleet host.
 
-    ``_key_path()`` is vault-first and host-agnostic, so it hands every host
-    the same key (``ssh_key_server_us`` when present). That is wrong for hosts
-    which trust a different key — e.g. ``dao_protocol`` trusts
-    ``sophia_infra``, not the Krake key, so it answered every call with
-    "Permission denied (publickey)".
+    1. A host-local file pin -- ``FLEET[host]['key']`` (e.g. ~/.ssh/sophia_infra).
+    2. A vault pin -- ``FLEET[host]['vault_key']`` names the credential the host
+       actually trusts. THIS is the fix: the old host-agnostic ``_key_path()``
+       handed every host the same server_us key, so hosts trusting only the
+       Nelanco key answered "Permission denied (publickey)".
+    3. The vault-first host-agnostic default (``_key_path()``).
 
-    A host may therefore pin its own key via ``FLEET[host]["key"]``. Hosts
-    without a pinned key keep the historical vault-first behaviour, so their
-    resolution is unchanged.
+    Pins are skipped when their material is unavailable, so a missing pin never
+    hard-fails a host.
     """
-    pinned = (FLEET.get(host) or {}).get("key")
+    spec = FLEET.get(host) or {}
+
+    pinned = spec.get("key")
     if pinned:
         p = Path(pinned).expanduser()
         if p.is_file():
             return p
         logger.warning(
-            "pinned key %s for host %s is missing — falling back to default", pinned, host
+            "pinned key %s for host %s missing -- falling back", pinned, host
         )
+
+    resolved = _resolve_by_vault_key(host)
+    if resolved is not None:
+        return resolved
+
     return _key_path()
 
 
@@ -221,21 +288,22 @@ def _truncate(s: str) -> tuple[str, bool]:
 def ssh_run(
     host: str, command: str, timeout_secs: int = _DEFAULT_TIMEOUT_SECS
 ) -> dict[str, Any]:
-    """Run ``command`` on a fleet host over SSH; return rc/stdout/stderr."""
+    """Run command on a fleet host over SSH; return rc/stdout/stderr."""
     if not host or not command:
         return _err("host and command are required")
     if _SELF_RESTART_RE.search(command):
         return _err(
-            "BLOCKED: restarting or killing the autopilot bypasses the idle-drain guard "
-            "and bricks active threads (severs in-flight turns + wedges the adapter). "
-            "Use the deploy_autopilot tool instead — it waits for threads to be idle, then "
-            "restarts safely. Never restart the autopilot service by hand.",
+            "BLOCKED: restarting the autopilot bypasses the idle-drain guard "
+            "and bricks active threads (severs in-flight turns + wedges the "
+            "adapter). Use the deploy_autopilot tool instead -- it waits for "
+            "threads to be idle, then restarts safely. Never cycle the autopilot "
+            "service by hand.",
             command=command[:200],
         )
     spec = FLEET.get(host)
     if spec is None:
         return _err(
-            "unknown host — pick one from the fleet registry",
+            "unknown host -- pick one from the fleet registry",
             host=host,
             fleet={k: v["desc"] for k, v in FLEET.items()},
         )
@@ -247,9 +315,9 @@ def ssh_run(
             str(Path.home() / ".ssh/id_rsa"),
         ]
         return _err(
-            f"No SSH key found — tried: {', '.join(tried)}. "
-            "Generate one via the /tools/generate-ssh-key endpoint, then add the public key "
-            "to the target host's ~/.ssh/authorized_keys.",
+            f"No SSH key found -- tried: {', '.join(tried)}. "
+            "Generate one via the /tools/generate-ssh-key endpoint, then add the "
+            "public key to the target host's ~/.ssh/authorized_keys.",
         )
     timeout = max(5, min(int(timeout_secs or _DEFAULT_TIMEOUT_SECS), _MAX_TIMEOUT_SECS))
 
@@ -290,7 +358,7 @@ def ssh_run(
     }
 
 
-# ── capability manifest entry ─────────────────────────────────────────────
+# --- capability manifest entry -------------------------------------------
 
 from ..tool_registry import ToolSpec  # noqa: E402
 
@@ -302,7 +370,7 @@ TOOL_SPEC = ToolSpec(
         + "; ".join(f"'{k}' = {v['desc']}" for k, v in FLEET.items())
         + ". Use for SRE diagnostics and service operations (journalctl, "
         "systemctl status/restart, df, free, tail logs). For code changes "
-        "still open a PR (git_push_changes / open_fix_pr) — do not hand-edit "
+        "still open a PR (git_push_changes / open_fix_pr) -- do not hand-edit "
         "deployed code over SSH."
     ),
     parameters={

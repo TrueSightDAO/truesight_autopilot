@@ -1,4 +1,4 @@
-"""Unit tests for ssh_run — registry gate, key check, dispatch shape."""
+"""Unit tests for ssh_run -- registry gate, key check, dispatch shape."""
 
 from __future__ import annotations
 
@@ -15,9 +15,8 @@ def test_unknown_host_rejected_with_fleet_listing():
 
 
 def test_missing_key_is_a_clear_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOPHIA_SSH_KEY_PATH", str(tmp_path / "nope"))
-    # _key_path() falls through to real keys on the autopilot box; mock it
-    # to return the non-existent path so the test is hermetic.
+    # _key_path() would otherwise resolve a real box key; pin it to a
+    # non-existent path so the "no key" branch is exercised hermetically.
     monkeypatch.setattr(ssh_tools, "_key_path", lambda: tmp_path / "nope")
     out = ssh_tools.ssh_run(host="seni_ror", command="uptime")
     assert out["status"] == "error"
@@ -27,7 +26,7 @@ def test_missing_key_is_a_clear_error(tmp_path, monkeypatch):
 def test_dispatch_builds_correct_ssh_command(tmp_path, monkeypatch):
     key = tmp_path / "sophia_infra"
     key.write_text("fake-key")
-    monkeypatch.setenv("SOPHIA_SSH_KEY_PATH", str(key))
+    monkeypatch.setattr(ssh_tools, "_key_path", lambda: key)
 
     completed = MagicMock(returncode=0, stdout="up 12 days\n", stderr="")
     with patch("subprocess.run", return_value=completed) as run:
@@ -42,6 +41,7 @@ def test_dispatch_builds_correct_ssh_command(tmp_path, monkeypatch):
     assert argv[0] == "ssh"
     assert "ubuntu@54.211.179.126" in argv
     assert "BatchMode=yes" in " ".join(argv)
+    assert argv[argv.index("-i") + 1] == str(key)
     assert argv[-1] == "uptime"
     assert run.call_args[1]["timeout"] == 30
 
@@ -49,7 +49,7 @@ def test_dispatch_builds_correct_ssh_command(tmp_path, monkeypatch):
 def test_nonzero_exit_reported(tmp_path, monkeypatch):
     key = tmp_path / "sophia_infra"
     key.write_text("fake-key")
-    monkeypatch.setenv("SOPHIA_SSH_KEY_PATH", str(key))
+    monkeypatch.setattr(ssh_tools, "_key_path", lambda: key)
 
     completed = MagicMock(returncode=1, stdout="", stderr="no such unit\n")
     with patch("subprocess.run", return_value=completed):
