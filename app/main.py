@@ -4585,12 +4585,17 @@ async def chat_blocking(request: Request) -> JSONResponse:
     signature = body.get("signature")
     public_key = request.headers.get("X-Public-Key", "")
 
+    plan_file = None
     if payload and signature and public_key:
         verify_payload(payload, signature, public_key)
         user_message = payload.get("message", "")
+        # PR4c(a): ping_sophia may name the handoff plan so the autopilot (single
+        # writer) records the claim -- see dao_client modules/ping_sophia.py.
+        plan_file = payload.get("plan_file")
     else:
         public_key = verify_jwt(request)
         user_message = body.get("message", "")
+        plan_file = body.get("plan_file")
         if not user_message:
             raise HTTPException(status_code=400, detail="message is required.")
 
@@ -4600,11 +4605,16 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # interleaving its writes — the race that bricked threads 3 and 780. Different
     # threads have different locks, so they still run concurrently.
     async with _session_lock(session_id):
-        return await _chat_blocking_turn(session_id, user_message, public_key)
+        return await _chat_blocking_turn(
+            session_id, user_message, public_key, plan_file=plan_file
+        )
 
 
 async def _chat_blocking_turn(
-    session_id: str, user_message: str, public_key: str
+    session_id: str,
+    user_message: str,
+    public_key: str,
+    plan_file: str | None = None,
 ) -> JSONResponse:
     history = _load_or_create_session(session_id)
     role = find_role_in_history(history)
@@ -4690,9 +4700,9 @@ async def _chat_blocking_turn(
     # (~60 min) rather than lying.
     _claimed_plan = None
     try:
-        from .supervision import claim_for_thread, release
+        from .supervision import claim_for_turn
 
-        _claimed_plan = claim_for_thread(_thread_from_session(session_id))
+        _claimed_plan = claim_for_turn(_thread_from_session(session_id), plan_file)
     except Exception:  # never block a turn
         _claimed_plan = None
 

@@ -142,3 +142,59 @@ def test_thread_from_session_parses_tg_key():
     assert _thread_from_session("abc123:tg:-100:5") == 5
     assert _thread_from_session("publickeyonly") is None
     assert _thread_from_session("") is None
+
+
+# --- claim_for_turn: explicit plan_file wins over thread inference --------------
+
+
+def test_claim_for_turn_prefers_explicit_plan(monkeypatch):
+    import app.supervision as sup
+
+    seen = {}
+    monkeypatch.setattr(
+        sup,
+        "claim",
+        lambda plan, *, note="", supervisor=sup.SELF_SUPERVISOR: (
+            seen.update(plan=plan, note=note) or True
+        ),
+    )
+    monkeypatch.setattr(
+        sup,
+        "claim_for_thread",
+        lambda tid, *, note="x": (_ for _ in ()).throw(
+            AssertionError("thread path must not run")
+        ),
+    )
+    assert sup.claim_for_turn(30083, "plans/X.md") == "plans/X.md"
+    assert seen["plan"] == "plans/X.md"
+    assert "ping_sophia" in seen["note"]
+
+
+def test_claim_for_turn_normalizes_backticks(monkeypatch):
+    import app.supervision as sup
+
+    monkeypatch.setattr(
+        sup, "claim", lambda plan, *, note="", supervisor=sup.SELF_SUPERVISOR: True
+    )
+    assert sup.claim_for_turn(None, "  `plans/Y.md` ") == "plans/Y.md"
+
+
+def test_claim_for_turn_falls_back_to_thread(monkeypatch):
+    import app.supervision as sup
+
+    monkeypatch.setattr(
+        sup,
+        "claim_for_thread",
+        lambda tid, *, note="x": "plans/Z.md" if tid == 7 else None,
+    )
+    assert sup.claim_for_turn(7, None) == "plans/Z.md"
+    assert sup.claim_for_turn(7, "") == "plans/Z.md"
+
+
+def test_claim_for_turn_never_raises(monkeypatch):
+    import app.supervision as sup
+
+    monkeypatch.setattr(
+        sup, "claim", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    assert sup.claim_for_turn(None, "plans/X.md") is None

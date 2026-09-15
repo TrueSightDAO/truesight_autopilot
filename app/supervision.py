@@ -159,3 +159,20 @@ def claim_for_thread(
     if not plan:
         return None
     return plan if claim(plan, note=note) else None
+
+
+def claim_for_turn(thread_id, plan_file: str | None = None) -> str | None:
+    """Resolve + claim the plan for one turn, returning the claimed plan or None.
+
+    An explicit ``plan_file`` (named by ``ping_sophia`` when Envoy hands a thread
+    off) wins over inferring the plan from the session's thread id. Fail-soft:
+    returns None rather than raising, so a claim can never block a turn.
+    """
+    try:
+        plan = normalize_plan(plan_file) if plan_file else ""
+        if plan:
+            return plan if claim(plan, note="auto-claim (ping_sophia)") else None
+        return claim_for_thread(thread_id)
+    except Exception as e:  # never block a turn
+        logger.debug("claim_for_turn failed: %s", e)
+        return None
