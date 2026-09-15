@@ -257,6 +257,24 @@ def _session_key(public_key: str, request: Request) -> str:
     return f"{public_key[:20]}:{sid}" if sid else public_key
 
 
+def _thread_from_session(session_id: str) -> int | None:
+    """Extract the Telegram forum-topic id from a session key.
+
+    Telegram sessions are keyed ``tg:<chat_id>:<thread_id>`` (see
+    telegram_adapter.build_session_id); the blocking path prefixes the governor
+    key, so the ``tg:`` component may not be first. Returns None when the key
+    carries no topic (e.g. a DApp/web session). PR4c(a) uses this to resolve a
+    thread's handoff plan for auto-claim.
+    """
+    m = re.search(r"tg:-?\d+:-?\d+", session_id or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(0).rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        return None
+
+
 def _load_or_create_session(session_key: str) -> list[dict[str, str]]:
     """Load session from memory, then from disk if not found."""
     if session_key in _sessions:
@@ -4665,6 +4683,19 @@ async def _chat_blocking_turn(
         user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
     history.append({"role": "user", "content": user_message})
 
+    # PR4c(a) auto-claim: refresh Sophia's active-supervision claim for this
+    # thread's handoff plan at turn start (visibility side-effect -- see
+    # app/supervision.py). Fail-soft: never blocks or fails a turn. Released on
+    # natural completion below; a mid-turn crash leaves the claim to age out
+    # (~60 min) rather than lying.
+    _claimed_plan = None
+    try:
+        from .supervision import claim_for_thread, release
+
+        _claimed_plan = claim_for_thread(_thread_from_session(session_id))
+    except Exception:  # never block a turn
+        _claimed_plan = None
+
     system_prompt = get_system_prompt_for_role(role)
     tools = get_tool_schemas_for_role(role)
     client = LLMClient()
@@ -4844,6 +4875,16 @@ async def _chat_blocking_turn(
     # Discord channel's transcript stayed at message_count=1 (just the role
     # line) and every subsequent message arrived with no prior context.
     _log_session(session_id, history)
+
+    # PR4c(a): natural completion reached -- release Sophia's claim so the board
+    # stops showing this thread as actively supervised between turns.
+    if _claimed_plan:
+        try:
+            from .supervision import release
+
+            release(_claimed_plan)
+        except Exception:  # never block a turn
+            pass
 
     response_data: dict[str, Any] = {"response": assistant_text}
     if proposal:
