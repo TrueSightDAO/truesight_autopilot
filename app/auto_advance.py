@@ -38,7 +38,14 @@ from dataclasses import dataclass
 
 # Words in a RESUME-HERE target that mean "the plan is finished".
 _DONE_RE = re.compile(r"\b(done|complete|completed|finished|all units|none left)\b", re.I)
-_RESUME_RE = re.compile(r"RESUME\s+HERE\s*[:=]?\s*(.*)", re.I)
+# A RESUME HERE *pointer* is followed by a connector (`:`, `=`, `→`); an
+# optional "(§4)" section ref may precede it. Requiring the connector excludes
+# the many prose / citation mentions of the phrase ("the RESUME HERE pointer",
+# "markers disagree:", a backtick-quoted example) that would otherwise
+# masquerade as pointers — the 2026-09-15 incident #2 root cause.
+_RESUME_RE = re.compile(
+    r"RESUME\s+HERE\s*(?:\*\*)?\s*(?:\([^)]*\)\s*)?[:=→]\s*(.*)", re.I
+)
 # Irreversible / outward-facing work that ALWAYS gates (by rule, even with no/`auto`
 # marker), matched against the next unit's text. A forgetful author cannot arm these
 # for unattended auto-run. Explicit `gate:` markers remain the primary mechanism.
@@ -157,21 +164,74 @@ def parse_resume_tracker(plan_text: str) -> list[TrackerRow]:
     return rows
 
 
+def _resume_marker_targets(plan_text: str) -> list[str]:
+    """Every ``RESUME HERE`` *pointer* target in the plan, in file order.
+
+    Only real pointers are collected: the marker must be followed by a connector
+    (see :data:`_RESUME_RE`), which naturally skips prose/citation mentions, and
+    must not sit inside an inline code span (a quoted example is not a pointer)."""
+    targets: list[str] = []
+    for line in plan_text.splitlines():
+        m = _RESUME_RE.search(line)
+        if not m:
+            continue
+        # Skip markers quoted inside an inline code span (odd number of
+        # backticks before the match) — e.g. a plan citing the convention as
+        # "`**RESUME HERE:** PR2`". Those are examples, not pointers.
+        if line[: m.start()].count("`") % 2 == 1:
+            continue
+        raw = m.group(1)
+        # Drop leading emphasis opened just before the target ("** PR1…").
+        raw = raw.lstrip("*` ").strip()
+        # Cut at the first clause boundary (closing bold, comma, semicolon, or a
+        # parenthetical description) so "RESUME HERE (§8) = PR1**, driven by …"
+        # yields "PR1" and "PR-INTEGRATION (close the gap), then …" yields
+        # "PR-INTEGRATION" — not the trailing prose that would defeat key-matching.
+        raw = re.split(r"\*\*|[,;(]", raw, maxsplit=1)[0]
+        tail = _normalize(raw).strip()
+        if tail:
+            # strip trailing markdown emphasis *and* sentence punctuation
+            # ("PR1a." -> "PR1a") so a pointer sentence still keys to its row.
+            tail = tail.strip("*").strip().rstrip(".,;:").strip()
+            if tail:
+                targets.append(tail)
+    return targets
+
+
 def find_resume_here(plan_text: str) -> str | None:
-    """Return the target text after the LAST ``RESUME HERE`` marker, or None.
+    """Return the target text after the LAST ``RESUME HERE`` pointer, or None.
 
     The last occurrence wins because plans repeat the pointer (a top-of-file
     hint plus the authoritative one in the resume tracker)."""
-    target: str | None = None
-    for line in plan_text.splitlines():
-        m = _RESUME_RE.search(line)
-        if m:
-            tail = _normalize(m.group(1)).lstrip("*").strip()
-            # strip trailing markdown emphasis / punctuation noise
-            tail = tail.strip("*").strip()
-            if tail:
-                target = tail
-    return target
+    targets = _resume_marker_targets(plan_text)
+    return targets[-1] if targets else None
+
+
+def resume_marker_drift(plan_text: str) -> tuple[str, str] | None:
+    """Detect the duplicate-``RESUME HERE`` drift class (incident #2, 2026-09-15).
+
+    Returns ``(valid, stale)`` when the LAST ``RESUME HERE`` pointer does NOT
+    resolve to a resume-tracker unit, but an EARLIER pointer does — the exact
+    shape that otherwise fails key-lookup downstream as an opaque "unit not
+    found". Returns ``None`` when only one pointer exists, when the pointers are
+    consistent, or when the authoritative (last) pointer resolves (the normal
+    top-hint + tracker duplication, where last-wins is correct even if the
+    earlier hint names a different unit). Scoped to resolvable disagreement so
+    prose mentions can never manufacture a spurious gate."""
+    targets = _resume_marker_targets(plan_text)
+    if len(targets) < 2:
+        return None
+    if _DONE_RE.search(targets[-1]):
+        return None  # the authoritative marker says "done" — not drift
+    rows = parse_resume_tracker(plan_text)
+    if not rows:
+        return None
+    if find_unit_row(rows, targets[-1]) is not None:
+        return None  # authoritative marker resolves — last-wins stands
+    for earlier in reversed(targets[:-1]):
+        if find_unit_row(rows, earlier) is not None:
+            return (earlier, targets[-1])
+    return None
 
 
 def classify_marker(marker: str) -> AdvanceDecision:
@@ -299,6 +359,17 @@ def next_action(
             gate_reason=(
                 "turn made no progress — no PR opened and no side-effecting "
                 "action — halting auto-advance"
+            ),
+        )
+    drift = resume_marker_drift(plan_text)
+    if drift:
+        valid, stale = drift
+        return AdvanceDecision(
+            decision="gate",
+            gate_reason=(
+                f"multiple RESUME HERE markers disagree: '{valid}' vs '{stale}' "
+                "— fix the plan before continuing (the authoritative marker "
+                "matches no tracker row)"
             ),
         )
     resume = find_resume_here(plan_text)
