@@ -24,7 +24,6 @@ os.environ.setdefault("SESSION_LOG_DIR", tempfile.mkdtemp())
 os.environ["DEPLOY_DRAIN_WAIT_SEC"] = "0"
 
 try:
-    import app.main as m
     from app.tools import deploy as dep
 except Exception as exc:  # noqa: BLE001
     pytest.skip(f"app import unavailable: {exc}", allow_module_level=True)
@@ -42,7 +41,9 @@ def _fresh_epoch_file(monkeypatch, tmp_path):
 
 def test_parse_caller_thread_telegram_keys():
     """Real Telegram session keys recover chat + thread."""
-    chat, thread = dep._parse_caller_thread("ab12cd34ef56ab12cd34:tg:-1003919341801:29509")
+    chat, thread = dep._parse_caller_thread(
+        "ab12cd34ef56ab12cd34:tg:-1003919341801:29509"
+    )
     assert chat == -1003919341801
     assert thread == 29509
     # No-topic (thread 0 / absent) → thread_id None, chat intact.
