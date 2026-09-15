@@ -2185,6 +2185,12 @@ def handle_message(
     # Voice messages: give the assistant channel context so it does not assume the DApp
     # and knows its reply is spoken back. Not part of the transcript shown to the user.
     dispatch_text = _strip_bot_mention(msg, text) if not is_voice else text
+    # Progress-query classification must see the RAW user message, not the
+    # handoff/Telegram/voice-note-decorated dispatch text: _handoff_prefix()
+    # alone can exceed _is_progress_query's 80-char cap, which made
+    # 'progress?' never classify as a status ping in any handoff-registered
+    # topic (UAT 2026-09-15). Capture before any decoration is appended.
+    raw_user_text = dispatch_text
     if is_voice:
         dispatch_text = (
             text
@@ -2205,7 +2211,7 @@ def handle_message(
         # If the lock is held (a turn is running) AND the message is a short
         # status-y phrase, answer immediately from the live-progress record
         # without queuing or waiting for the lock.
-        if lock.locked() and _is_progress_query(dispatch_text):
+        if lock.locked() and _is_progress_query(raw_user_text):
             try:
                 token = create_jwt(public_key)
                 headers = {
