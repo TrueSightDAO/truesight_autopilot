@@ -391,11 +391,18 @@ def test_state_write_is_atomic(monkeypatch, tmp_path):
 
 
 def test_email_watch_enabled_defaults_false():
-    """The loop must ship inert: EMAIL_WATCH_ENABLED default False."""
+    """The loop must ship inert: EMAIL_WATCH_ENABLED default False.
+
+    Hermetic: ``_env_file=None`` so the assertion is against the *code* default,
+    not the operator's ``.env``. On a box where ``EMAIL_WATCH_ENABLED=true`` is
+    set in ``.env`` (env_file=".env" is loaded by ``Settings``), a bare
+    ``Settings()`` picks up the override and this test fails -- non-hermetic, as
+    the clean CI runner has no ``.env`` and passes.
+    """
     from app.config import Settings
 
-    # A fresh Settings with no env override for the flag must be False.
-    assert Settings().email_watch_enabled is False
+    # A fresh Settings with the env file ignored must default to False.
+    assert Settings(_env_file=None).email_watch_enabled is False
 
 
 def test_start_helper_is_noop_when_disabled(monkeypatch):
