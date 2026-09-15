@@ -38,7 +38,7 @@ def test_partial_override_merges_onto_defaults():
         _env_file=None,
         OWN_REPOS='{"transcript":"bionpact_autopilot_transcription",'
         '"attachments":"bionpact_attachments",'
-        '"followups":"bionpact_agentic_ai_context"}'
+        '"followups":"bionpact_agentic_ai_context"}',
     )
     assert s.own_repos["context"] == "agentic_ai_context"
     assert s.own_repos["transcript"] == "bionpact_autopilot_transcription"
@@ -50,7 +50,7 @@ def test_overriding_transcript_and_attachments_folds_into_api_only_repos():
     s = Settings(
         _env_file=None,
         OWN_REPOS='{"transcript":"bionpact_autopilot_transcription",'
-        '"attachments":"bionpact_attachments"}'
+        '"attachments":"bionpact_attachments"}',
     )
     assert "bionpact_autopilot_transcription" in s.api_only_repos
     assert "bionpact_attachments" in s.api_only_repos
