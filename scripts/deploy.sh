@@ -249,6 +249,17 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     fi
 "
 
+echo "=== Installing df-alert cron scripts (vault-native) ==="
+# These were historically hand-placed at /usr/local/bin (unversioned). Install
+# them from the repo so the vault-native versions win on every deploy, and so a
+# box rebuild reproduces them. Keys resolve via scripts/fleet_probe.py -> vault.
+ssh -i "$EC2_KEY" "$EC2_HOST" "
+    sudo install -m 755 $REMOTE_DIR/scripts/df-alert.sh /usr/local/bin/df-alert.sh
+    sudo install -m 755 $REMOTE_DIR/scripts/df-alert-fleet.sh /usr/local/bin/df-alert-fleet.sh
+    sudo install -m 755 $REMOTE_DIR/scripts/df-alert-remote-krakedata.sh /usr/local/bin/df-alert-remote-krakedata.sh
+    echo 'df-alert scripts installed (vault-native)'
+"
+
 echo "=== Installing helper scripts ==="
 cat > /tmp/truesight-autopilot-logs.sh << 'SCRIPT'
 #!/bin/bash
