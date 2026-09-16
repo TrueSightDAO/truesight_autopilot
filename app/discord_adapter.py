@@ -51,7 +51,7 @@ import httpx
 from . import discord_resume_registry
 from .auth import create_jwt
 from .config import settings
-from .governor_registry import load_governors
+from .governor_registry import load_governors, sentinel_emails
 from .voice import transcribe_voice
 from .voice_output import detect_language, synthesize_voice
 
@@ -402,24 +402,43 @@ def _email_is_governor(email: str | None) -> bool:
     return False
 
 
+def _email_is_sentinel(email: str | None) -> bool:
+    """Check an email against the sentinel-role contributors (plan D4)."""
+    if not email:
+        return False
+    try:
+        return email.strip().lower() in sentinel_emails()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sentinel cache lookup failed: %s", exc)
+        return False
+
+
 def author_role(user_id: str | int, allowed: set[str]) -> str:
-    """Resolve an author to 'governor', 'member', or 'guest'.
+    """Resolve an author to 'governor', 'sentinel', 'member', or 'guest'.
 
     Order:
       1. env governor allowlist (``DISCORD_ALLOWED_USER_IDS``) -> governor
       2. sheet binding (Contributors contact information, Discord-ID column)
          + Governors cache: email is a governor -> governor
+      2b. sheet binding to a sentinel-role contributor, or the env sentinel
+          allowlist (``DISCORD_SENTINEL_USER_IDS``) -> sentinel  (plan D4)
       3. bound to a real contributor, or on the env member allowlist
          (``DISCORD_MEMBER_USER_IDS``) -> member
       4. otherwise -> guest
 
     * governor -- may instruct the bot and authorize actions.
+    * sentinel -- the DAO's AI-agent contributors. A DISTINCT identity class
+                  from governor (never conflated in attribution/audit) that
+                  nonetheless carries governor-tier RIGHTS under the brain's
+                  WRITE/ADMIN gate (plan D4).
     * member   -- a verified contributor who is NOT a governor: may converse
                   (ask / research / draft) but is **data-only**, never an
                   instruction, and carries no governor authority.
     * guest    -- unknown; observed as context only.
 
-    Fail-closed: any error resolves to 'guest'.
+    Governor is checked first so a genuine governor always wins; the sentinel
+    check sits AFTER governor but BEFORE the member fallback (plan D4), so a
+    sentinel is never downgraded to member. Fail-closed: any error -> 'guest'.
     """
     uid = str(user_id)
     if is_allowed(uid, allowed):
@@ -430,6 +449,9 @@ def author_role(user_id: str | int, allowed: set[str]) -> str:
         return "guest"
     if _email_is_governor(email):
         return "governor"
+    sentinel_ids = parse_allowed_ids(getattr(settings, "discord_sentinel_user_ids", ""))
+    if _email_is_sentinel(email) or is_allowed(uid, sentinel_ids):
+        return "sentinel"
     member_ids = parse_allowed_ids(getattr(settings, "discord_member_user_ids", ""))
     if email or is_allowed(uid, member_ids):
         return "member"
@@ -743,13 +765,16 @@ def call_chat(
     session_id: str,
     public_key: str,
     author_role: str = "governor",
+    author_name: str | None = None,
 ) -> str:
     """POST to /chat-blocking; return the assistant text.
 
-    ``author_role`` rides the signed JWT (see ``app.auth.create_jwt``); the
-    default governor preserves existing behaviour.
+    ``author_role`` / ``author_name`` ride the signed JWT (see
+    ``app.auth.create_jwt``); the default governor preserves existing
+    behaviour. ``author_name`` (plan D4) lets a non-governor turn (a sentinel)
+    be attributed by its own name, never relabeled the human governor.
     """
-    token = create_jwt(public_key, author_role)
+    token = create_jwt(public_key, author_role, author_name)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
     try:
         resp = httpx.post(
@@ -789,6 +814,7 @@ def call_chat_with_progress(
     session_id: str,
     public_key: str,
     author_role: str = "governor",
+    author_name: str | None = None,
 ) -> tuple[str, bool]:
     """POST to /chat (SSE) and edit ONE status message in place as the turn runs.
 
@@ -806,14 +832,17 @@ def call_chat_with_progress(
     the blocking fallback, where the caller must post the text itself (avoids the
     duplicate-text bug).
     """
-    token = create_jwt(public_key, author_role)
+    token = create_jwt(public_key, author_role, author_name)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
 
     ids = send_message(channel_id, "\U0001f504 Thinking\u2026")
     status_id: str | None = ids[0] if ids else None
     if status_id is None:
         logger.warning("Could not send status message -- falling back to blocking chat")
-        return call_chat(message, session_id, public_key, author_role), False
+        return (
+            call_chat(message, session_id, public_key, author_role, author_name),
+            False,
+        )
 
     # Ride out a brain restart (e.g. a redeploy) before streaming, so a brief
     # redeploy shows a clear indicator instead of a Connection-refused error.
@@ -1292,14 +1321,14 @@ def handle_message(
     session_id = build_session_id(guild_id, channel_id)
     role = author_role(user_id, allowed)
 
-    # Data/instruction boundary: only a governor's message is an instruction.
-    # A MEMBER is a verified contributor but NOT a governor -- recognised and
-    # attributed (context tied to a real identity), yet still data-only: never
-    # dispatched as an instruction. Enabling member *replies* requires the
-    # brain to be tier-aware (a member turn minted on the governor's public key
-    # would inherit governor authority), so it stays off for now -- see
-    # agentic_ai_context OPEN_FOLLOWUPS.md.
-    if role != "governor":
+    # Data/instruction boundary: only a governor's or sentinel's message is an
+    # instruction. A sentinel is the DAO's AI-agent contributor tier (plan D4):
+    # a DISTINCT identity class from governor that carries governor-tier RIGHTS,
+    # so it IS dispatched -- but attributed by its OWN name, never relabeled the
+    # human governor. A MEMBER is a verified contributor but NOT a governor --
+    # recognised and attributed, yet still data-only: never dispatched as an
+    # instruction (see app/policy.py WRITE/ADMIN gate).
+    if role not in ("governor", "sentinel"):
         logger.info(
             "Discord message from %s %s (%s) in %s -- logging as context only",
             role,
@@ -1328,7 +1357,8 @@ def handle_message(
         return
 
     logger.info(
-        "Discord governor message from %s (%s) in %s -- dispatching turn",
+        "Discord %s message from %s (%s) in %s -- dispatching turn",
+        role,
         username,
         user_id,
         channel_id,
@@ -1361,7 +1391,7 @@ def handle_message(
         with _channel_dispatch_lock(channel_id):
             with TypingIndicator(channel_id):
                 reply, shown = call_chat_with_progress(
-                    channel_id, prompt, session_id, public_key
+                    channel_id, prompt, session_id, public_key, role, username
                 )
         if voice_att:
             _handle_voice_reply(channel_id, reply, transcript, shown)

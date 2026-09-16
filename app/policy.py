@@ -44,11 +44,16 @@ class Role(enum.Enum):
                       converse with the assistant (ask / research / draft)
                       but carries **no** governor authority: never signs,
                       never deploys, never moves money.
+    * ``SENTINEL`` -- the DAO's AI-agent contributors (e.g. Sophia, Claude
+                      Anthropic). A DISTINCT identity class from governor (never
+                      conflated in attribution/audit), but carrying governor-tier
+                      RIGHTS under the WRITE/ADMIN policy gate (plan D4).
     * ``GOVERNOR`` -- may instruct the assistant and authorize actions.
     """
 
     GUEST = "guest"
     MEMBER = "member"
+    SENTINEL = "sentinel"
     GOVERNOR = "governor"
 
 
@@ -262,8 +267,27 @@ def resolve_identity(
 
 
 def is_governor(identity: Identity) -> bool:
-    """Check if a resolved identity has governor privileges."""
+    """True only for a GOVERNOR (the strict identity-label check).
+
+    Use :func:`has_governor_rights` for an *authorization* check: a SENTINEL is
+    a different identity class carrying the same WRITE/ADMIN rights (plan D4).
+    """
     return identity.role == Role.GOVERNOR
+
+
+def has_governor_rights(identity: Identity) -> bool:
+    """True if the identity may perform governor-tier WRITE/ADMIN actions.
+
+    Governor OR sentinel (plan D4). Sentinels are the DAO's AI-agent
+    contributors: a distinct identity class (so attribution/audit never reads
+    "governor" for a bot turn) that nonetheless carries governor-tier rights.
+    """
+    return identity.role in (Role.GOVERNOR, Role.SENTINEL)
+
+
+def role_label(identity: Identity) -> str:
+    """Audit label for an identity's role ('governor' / 'sentinel' / 'guest')."""
+    return identity.role.value
 
 
 def require_governor(identity: Identity, action_description: str = "") -> None:
@@ -279,10 +303,10 @@ def require_governor(identity: Identity, action_description: str = "") -> None:
     Raises:
         PermissionError: If the identity is a guest.
     """
-    if not is_governor(identity):
+    if not has_governor_rights(identity):
         name = identity.name or "Unknown user"
         desc = f" for {action_description}" if action_description else ""
-        msg = f"Access denied{desc}: {name} is not a governor."
+        msg = f"Access denied{desc}: {name} is not a governor or sentinel."
         logger.warning("POLICY DENY: %s (telegram_id=%s)", msg, identity.telegram_id)
         raise PermissionError(msg)
 
@@ -422,18 +446,21 @@ def evaluate(
             reason="Secret values are never returned through chat. Use the vault web page.",
         )
 
-    # WRITE / ADMIN: governor only
-    if is_governor(identity):
+    # WRITE / ADMIN: governor OR sentinel (the sentinel keeps its own label).
+    if has_governor_rights(identity):
         return PolicyDecision(
             allowed=True,
             identity=identity,
             action_class=action_class,
-            reason=f"Governor {identity.name} is authorized.",
+            reason=f"{role_label(identity).capitalize()} {identity.name} is authorized.",
         )
 
     return PolicyDecision(
         allowed=False,
         identity=identity,
         action_class=action_class,
-        reason=f"Write/admin actions require governor privileges. {identity.name} is a guest.",
+        reason=(
+            "Write/admin actions require governor privileges. "
+            f"{identity.name} is a {role_label(identity)}."
+        ),
     )

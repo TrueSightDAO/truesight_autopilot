@@ -27,7 +27,15 @@ from fastapi.responses import (
 
 import httpx
 
-from .auth import create_jwt, verify_jwt, verify_payload
+from .auth import (
+    DEFAULT_AUTHOR_ROLE,
+    author_name_from_claims,
+    author_role_from_claims,
+    create_jwt,
+    verify_jwt,
+    verify_jwt_claims,
+    verify_payload,
+)
 from .media_archive_pipeline import router as media_archive_pipeline_router
 from .signature_ledger_pipeline import router as signature_ledger_pipeline_router
 from .auto_advance import next_action
@@ -85,9 +93,12 @@ from .tools.qr_scanner import (
 from .vault_routes import router as vault_router
 from .policy import (
     ActionClass as _ActionClass,
+    Identity as _Identity,
+    Role as _Role,
     classify_action as _classify_action,
     evaluate as _policy_evaluate,
     resolve_identity as _resolve_identity,
+    role_label as _role_label,
 )
 
 
@@ -1905,6 +1916,7 @@ def _run_tool_sync(
     history: list[dict] | None = None,
     session_id: str | None = None,
     governor_name: str | None = None,
+    author_role: str = DEFAULT_AUTHOR_ROLE,
 ) -> str:
     # Phase 0.2: Policy enforcement gate.
     # Every tool invocation is checked against the requester's identity.
@@ -1912,6 +1924,28 @@ def _run_tool_sync(
     # This is the tool-layer enforcement point (Security invariant #1).
     action_class = _classify_action(func_name)
     if action_class in (_ActionClass.WRITE, _ActionClass.ADMIN):
+        # Brain tier-awareness gate (plan: BRAIN_TIER_AWARENESS, PR2). A turn's
+        # *asserted* tier rides the signed JWT claim ``author_role``. A member or
+        # guest turn can arrive on the governor's public key (the adapter mints
+        # the JWT for the governor key), so ``governor_name`` alone is NOT
+        # sufficient evidence of authority -- without this check a member turn
+        # would inherit governor write power (privilege escalation). Absent claim
+        # resolves to "governor", so pre-existing governor traffic is unchanged.
+        if author_role not in ("governor", "sentinel"):
+            logger.warning(
+                "POLICY BLOCK: %s denied for author_role=%s (action_class=%s)",
+                func_name,
+                author_role,
+                action_class.value,
+            )
+            return json.dumps(
+                {
+                    "status": "blocked",
+                    "message": "This action requires governor privileges. "
+                    f"This turn is authenticated as '{author_role}', which is "
+                    "read-only (ask / research / draft only).",
+                }
+            )
         if not governor_name:
             logger.warning(
                 "POLICY BLOCK: %s called without governor identity (action_class=%s)",
@@ -1925,15 +1959,24 @@ def _run_tool_sync(
                     "Please authenticate with your DAO identity first.",
                 }
             )
-        # Resolve identity from governor_name
+        # Resolve identity from governor_name, then FORCE the asserted tier.
+        # resolve_identity() maps by NAME (Telegram-shaped), so a sentinel name
+        # is unknown to it -> GUEST -> denied. The asserted author_role is the
+        # authoritative tier (it rode a signed JWT), so stamp it on, keeping the
+        # sentinel's DISTINCT label (never silently rewritten to governor).
         identity = _resolve_identity(display_name=governor_name)
+        identity = _Identity(
+            telegram_id=identity.telegram_id,
+            role=_Role(author_role),
+            name=identity.name or governor_name,
+        )
         decision = _policy_evaluate(identity, func_name)
         if not decision.allowed:
             logger.warning(
                 "POLICY BLOCK: %s by %s (role=%s, reason=%s)",
                 func_name,
                 governor_name,
-                identity.role.value,
+                _role_label(identity),
                 decision.reason,
             )
             return json.dumps(
@@ -1946,7 +1989,7 @@ def _run_tool_sync(
             "POLICY ALLOW: %s by %s (role=%s)",
             func_name,
             governor_name,
-            identity.role.value,
+            _role_label(identity),
         )
 
     # First try the capability-manifest registry. Tools whose TOOL_SPEC carries
@@ -2674,6 +2717,7 @@ async def _run_tool(
     history: list[dict] | None = None,
     session_id: str | None = None,
     governor_name: str | None = None,
+    author_role: str = DEFAULT_AUTHOR_ROLE,
 ) -> str:
     # Run the (blocking, synchronous) tool body in a worker thread so a long
     # call — ssh_run's subprocess.run, GitHub/Sheets API calls, gspread, … —
@@ -2681,7 +2725,13 @@ async def _run_tool(
     # and the Telegram adapter misreports "Sophia is briefly restarting" even
     # though the brain is up and merely busy on a tool. (2026-08-20)
     return await asyncio.to_thread(
-        _run_tool_sync, func_name, func_args, history, session_id, governor_name
+        _run_tool_sync,
+        func_name,
+        func_args,
+        history,
+        session_id,
+        governor_name,
+        author_role,
     )
 
 
@@ -2956,6 +3006,7 @@ async def _run_tool_round_loop(
     req_id: int,
     state: dict,
     queue_msg_id: str | None = None,
+    author_role: str = DEFAULT_AUTHOR_ROLE,
 ):
     """One conversational turn: runs the LLM ↔ tool-call loop up to
     MAX_TOOL_ROUNDS, yielding SSE event strings as it goes.
@@ -3159,7 +3210,14 @@ async def _run_tool_round_loop(
                 _live_progress[session_id]["current_arg"] = str(func_args)[:200]
 
                 tool_task = asyncio.create_task(
-                    _run_tool(func_name, func_args, history, session_id, governor_name)
+                    _run_tool(
+                        func_name,
+                        func_args,
+                        history,
+                        session_id,
+                        governor_name,
+                        author_role,
+                    )
                 )
                 try:
                     async for hb in _heartbeat_until_done(
@@ -3327,6 +3385,7 @@ async def _stream_chat(
     governor_name: str | None = None,
     do_not_publish: bool = False,
     role=None,
+    author_role: str = DEFAULT_AUTHOR_ROLE,
 ):
     system_prompt = get_system_prompt_for_role(role)
     client = LLMClient()
@@ -3361,6 +3420,7 @@ async def _stream_chat(
             governor_name=governor_name,
             req_id=req_id,
             state=state,
+            author_role=author_role,
         ):
             yield ev
         if state.get("cancelled"):
@@ -3459,6 +3519,7 @@ async def _stream_chat(
                 req_id=req_id,
                 state=q_state,
                 queue_msg_id=next_msg["id"],
+                author_role=author_role,
             ):
                 yield ev
             if q_state.get("cancelled"):
@@ -4172,12 +4233,17 @@ async def chat(request: Request):
     signature = body.get("signature")
     public_key = request.headers.get("X-Public-Key", "")
 
+    author_role = DEFAULT_AUTHOR_ROLE
+    author_name: str | None = None
     if payload and signature and public_key:
         verify_payload(payload, signature, public_key)
         user_message = payload.get("message", "")
         do_not_publish = bool(payload.get("do_not_publish", False))
     else:
-        public_key = verify_jwt(request)
+        claims = verify_jwt_claims(request)
+        public_key = claims["sub"]
+        author_role = author_role_from_claims(claims)
+        author_name = author_name_from_claims(claims)
         user_message = body.get("message", "")
         do_not_publish = bool(body.get("do_not_publish", False))
         if not user_message:
@@ -4287,12 +4353,18 @@ async def chat(request: Request):
                     yield event
                 return
 
-            # Inject governor identity so the LLM knows who "I" / "me" refers to
+            # Inject governor identity so the LLM knows who "I" / "me" refers to.
+            # D4: only a TRUE governor turn gets the governor's name stamped on
+            # it; a sentinel turn is attributed by its OWN asserted name and is
+            # NEVER relabeled the human governor.
             gov_name = _gov_name_for_key(public_key)
-            if gov_name and not any(
-                "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
-            ):
-                user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+            if author_role == "governor":
+                if gov_name and not any(
+                    "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+                ):
+                    user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+            else:
+                gov_name = author_name or author_role
 
             history.append({"role": "user", "content": user_message})
             _auto_name_session(public_key, request, history, user_message)
@@ -4314,6 +4386,7 @@ async def chat(request: Request):
                     governor_name=gov_name,
                     do_not_publish=do_not_publish,
                     role=role,
+                    author_role=author_role,
                 ):
                     yield event
             except Exception as exc:
@@ -4400,12 +4473,17 @@ async def chat_upload(
     payload_raw = request.headers.get("X-Payload", "")
     signature = request.headers.get("X-Signature", "")
 
+    author_role = DEFAULT_AUTHOR_ROLE
+    author_name: str | None = None
     if payload_raw and signature and public_key:
         payload = json.loads(payload_raw)
         verify_payload(payload, signature, public_key)
         user_message_text = payload.get("message", "")
     else:
-        public_key = verify_jwt(request)
+        claims = verify_jwt_claims(request)
+        public_key = claims["sub"]
+        author_role = author_role_from_claims(claims)
+        author_name = author_name_from_claims(claims)
         user_message_text = ""
 
     session_id = _session_key(public_key, request)
@@ -4606,10 +4684,13 @@ async def chat_upload(
         role = find_role_in_history(history)
         # If no role, default to general (upload endpoints always have history from scanning step)
         gov_name = _gov_name_for_key(public_key)
-        if gov_name and not any(
-            "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
-        ):
-            user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+        if author_role == "governor":
+            if gov_name and not any(
+                "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+            ):
+                user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+        else:
+            gov_name = author_name or author_role
         history.append({"role": "user", "content": user_message})
         _auto_name_session(public_key, request, history, user_message)
         _log_session(session_id, history)
@@ -4620,6 +4701,7 @@ async def chat_upload(
             session_id,
             attachment_info=attachment_info,
             governor_name=gov_name,
+            author_role=author_role,
             role=role,
         ):
             yield event
@@ -4647,6 +4729,8 @@ async def chat_blocking(request: Request) -> JSONResponse:
     public_key = request.headers.get("X-Public-Key", "")
 
     plan_file = None
+    author_role = DEFAULT_AUTHOR_ROLE
+    author_name: str | None = None
     if payload and signature and public_key:
         verify_payload(payload, signature, public_key)
         user_message = payload.get("message", "")
@@ -4654,7 +4738,10 @@ async def chat_blocking(request: Request) -> JSONResponse:
         # writer) records the claim -- see dao_client modules/ping_sophia.py.
         plan_file = payload.get("plan_file")
     else:
-        public_key = verify_jwt(request)
+        claims = verify_jwt_claims(request)
+        public_key = claims["sub"]
+        author_role = author_role_from_claims(claims)
+        author_name = author_name_from_claims(claims)
         user_message = body.get("message", "")
         plan_file = body.get("plan_file")
         if not user_message:
@@ -4667,7 +4754,12 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # threads have different locks, so they still run concurrently.
     async with _session_lock(session_id):
         return await _chat_blocking_turn(
-            session_id, user_message, public_key, plan_file=plan_file
+            session_id,
+            user_message,
+            public_key,
+            plan_file=plan_file,
+            author_role=author_role,
+            author_name=author_name,
         )
 
 
@@ -4676,6 +4768,8 @@ async def _chat_blocking_turn(
     user_message: str,
     public_key: str,
     plan_file: str | None = None,
+    author_role: str = DEFAULT_AUTHOR_ROLE,
+    author_name: str | None = None,
 ) -> JSONResponse:
     history = _load_or_create_session(session_id)
     role = find_role_in_history(history)
@@ -4748,10 +4842,13 @@ async def _chat_blocking_turn(
         )
 
     gov_name = _gov_name_for_key(public_key)
-    if gov_name and not any(
-        "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
-    ):
-        user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+    if author_role == "governor":
+        if gov_name and not any(
+            "GOVERNOR_IDENTITY:" in str(m.get("content", "")) for m in history
+        ):
+            user_message = f"[GOVERNOR_IDENTITY: You are speaking with {gov_name}. When they say 'I', 'me', or 'my', they mean {gov_name}.]\n\n{user_message}"
+    else:
+        gov_name = author_name or author_role
     history.append({"role": "user", "content": user_message})
 
     # PR4c(a) auto-claim: refresh Sophia's active-supervision claim for this
@@ -4851,7 +4948,12 @@ async def _chat_blocking_turn(
                     func_args = {}
                 result_text = _externalize_tool_result(
                     await _run_tool(
-                        func_name, func_args, history, session_id, gov_name
+                        func_name,
+                        func_args,
+                        history,
+                        session_id,
+                        gov_name,
+                        author_role,
                     ),
                     tc["id"],
                     session_id,

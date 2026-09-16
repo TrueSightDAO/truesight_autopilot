@@ -589,6 +589,15 @@ class Settings(BaseSettings):
     discord_member_user_ids: str = Field(
         default="", validation_alias="DISCORD_MEMBER_USER_IDS"
     )
+    # Comma-separated Discord user ids recognised as SENTINELS -- the DAO's
+    # AI-agent contributors (plan D4). Sentinels are a DISTINCT identity class,
+    # never conflated with governor for attribution/audit, but they carry
+    # governor-tier RIGHTS under the brain's WRITE/ADMIN gate. The sheet half is
+    # automatic (Contributors contact information col G -> email -> the roles
+    # in dao_members.json); this env list is the explicit override.
+    discord_sentinel_user_ids: str = Field(
+        default="", validation_alias="DISCORD_SENTINEL_USER_IDS"
+    )
     # Which governor identity the bot speaks as (resolved to a public key).
     discord_governor_name: str = Field(
         default="Gary Teh", validation_alias="DISCORD_GOVERNOR_NAME"
