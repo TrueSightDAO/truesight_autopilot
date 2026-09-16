@@ -472,7 +472,7 @@ class TestPostToThread:
             ok = await _post_to_thread("-1003919341801", "2622", "hello")
 
         assert ok is True
-        m.assert_called_once_with(-1003919341801, "hello", 2622)
+        m.assert_called_once_with(-1003919341801, "hello", 2622, require_thread=True)
 
     @pytest.mark.asyncio
     async def test_returns_false_when_send_yields_no_message_id(self):

@@ -797,13 +797,21 @@ def send_message(
     text: str,
     thread_id: int | None = None,
     resume_awaiting: bool = False,
+    require_thread: bool = False,
 ) -> int | None:
     """Send a message; return the Telegram message_id of the first chunk, or None.
 
     Retries up to 3 times on 429 (rate limited) with exponential backoff,
     respecting Telegram's retry_after hint.
+
+    When ``require_thread`` is set (and a ``thread_id`` was given) the call
+    returns ``None`` unless the message was confirmed delivered *inside that
+    topic* — so a caller that must not silently downgrade (the follow-up strike
+    notifier) can tell "pinged the thread" apart from "fell back to the group's
+    top level and reported success".
     """
     msg_id: int | None = None
+    landed_in_thread = bool(thread_id)
     for i, chunk in enumerate(chunk_text(text)):
         # Render Markdown → Telegram HTML so headings/bold/bullets/code show up.
         payload: dict[str, Any] = {
@@ -841,19 +849,26 @@ def send_message(
                     )
                     time.sleep(min(retry_after + 1, 30))
                 else:
-                    logger.warning(
-                        "sendMessage %s: %s", resp.status_code, resp.text[:200]
-                    )
-                    # Fallback: send the raw chunk as plain text. Covers both
-                    # "message thread not found" and any HTML parse error.
-                    # NOTE: do NOT include message_thread_id in the fallback — if the
-                    # original 400 was "message thread not found", the retry with the
-                    # same thread_id would 400 again. Drop it so the message lands.
+                    body = (resp.text or "")[:200]
+                    logger.warning("sendMessage %s: %s", resp.status_code, body)
+                    # Retry as **escaped** plain text. Two distinct 400s land here:
+                    #   * "message thread not found" — the topic is gone, so a retry
+                    #     WITH thread_id 400s again; drop it and record that we did
+                    #     NOT land in the intended thread.
+                    #   * "can't parse entities" — resending the raw markdown with
+                    #     parse_mode=HTML (the previous behaviour) 400'd
+                    #     deterministically and silently dropped the ping. Escape the
+                    #     entities and KEEP the thread_id so it lands in the topic.
+                    thread_missing = "thread not found" in body.lower()
                     fallback: dict[str, Any] = {
                         "chat_id": chat_id,
-                        "text": chunk,
+                        "text": html.escape(chunk, quote=False),
                         "disable_web_page_preview": True,
                     }
+                    if thread_id and not thread_missing:
+                        fallback["message_thread_id"] = thread_id
+                    else:
+                        landed_in_thread = False
                     resp2 = httpx.post(_api("sendMessage"), json=fallback, timeout=20.0)
                     if resp2.status_code == 200:
                         chunk_id = resp2.json().get("result", {}).get("message_id")
@@ -861,6 +876,8 @@ def send_message(
                             resume_registry.mark_resume_awaiting(
                                 chunk_id, thread_id, text
                             )
+                    else:
+                        landed_in_thread = False
                     if i == 0 and resp2.status_code == 200:
                         msg_id = resp2.json().get("result", {}).get("message_id")
                     break
@@ -868,6 +885,13 @@ def send_message(
                 logger.warning("sendMessage failed (attempt %d/3): %s", attempt + 1, e)
                 if attempt < 2:
                     time.sleep(2**attempt)
+    if require_thread and thread_id and not landed_in_thread:
+        logger.warning(
+            "sendMessage: no confirmed in-thread delivery for thread %s "
+            "(fell back to the group top level) — reporting undelivered",
+            thread_id,
+        )
+        return None
     return msg_id
 
 
