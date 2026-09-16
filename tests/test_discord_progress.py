@@ -150,7 +150,7 @@ def _sse(*events):
 def test_progress_edits_status_in_place(monkeypatch):
     monkeypatch.setattr(da, "settings", _Settings(dry=False))
     monkeypatch.setattr(da, "_wait_for_brain", lambda *a, **k: True)
-    monkeypatch.setattr(da, "create_jwt", lambda pk: "jwt")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "jwt")
 
     sent = []
     edited = []
@@ -188,9 +188,9 @@ def test_progress_edits_status_in_place(monkeypatch):
 
 def test_progress_falls_back_when_status_send_fails(monkeypatch):
     monkeypatch.setattr(da, "settings", _Settings(dry=False))
-    monkeypatch.setattr(da, "create_jwt", lambda pk: "jwt")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr(da, "send_message", lambda c, t: [])
-    monkeypatch.setattr(da, "call_chat", lambda m, s, p: "blocking reply")
+    monkeypatch.setattr(da, "call_chat", lambda *a, **k: "blocking reply")
     resp, shown = da.call_chat_with_progress("c1", "hello", "s1", "pk")
     assert resp == "blocking reply"
     assert shown is False  # caller must post it
@@ -198,7 +198,7 @@ def test_progress_falls_back_when_status_send_fails(monkeypatch):
 
 def test_progress_hiccups_on_brain_down(monkeypatch):
     monkeypatch.setattr(da, "settings", _Settings(dry=False))
-    monkeypatch.setattr(da, "create_jwt", lambda pk: "jwt")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr(da, "send_message", lambda c, t: ["status-1"])
     monkeypatch.setattr(da, "_wait_for_brain", lambda *a, **k: False)
     edited = []
@@ -217,7 +217,7 @@ def test_progress_hiccups_on_brain_down(monkeypatch):
 
 def test_handle_message_uses_progress_and_removes_reaction(monkeypatch):
     monkeypatch.setattr(da, "settings", _Settings(dry=False))
-    monkeypatch.setattr(da, "create_jwt", lambda pk: "jwt")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
     events = {}
     monkeypatch.setattr(
@@ -272,7 +272,7 @@ def test_handle_message_uses_progress_and_removes_reaction(monkeypatch):
 def test_proposal_does_not_append_stale_approval_prompt(monkeypatch):
     monkeypatch.setattr(da, "settings", _Settings(dry=False))
     monkeypatch.setattr(da, "_wait_for_brain", lambda *a, **k: True)
-    monkeypatch.setattr(da, "create_jwt", lambda pk: "jwt")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr(da, "send_message", lambda c, t: ["status-1"])
     edited = []
     monkeypatch.setattr(

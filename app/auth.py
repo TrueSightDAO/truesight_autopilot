@@ -119,8 +119,27 @@ def is_governor(public_key_b64: str) -> bool:
     return _is_governor_from_registry(public_key_b64)
 
 
-def create_jwt(public_key_b64: str) -> str:
-    """Issue a short-lived JWT for session continuity."""
+# Tiers a chat transport may assert about the author of a turn. The value rides
+# as a *signed* JWT claim (see create_jwt) so only a holder of the shared
+# jwt_secret -- the adapters -- can set it. A plain HTTP header would be
+# spoofable by any caller, so tier-awareness deliberately uses the signed claim
+# instead (plan: brain tier-awareness, transport option (a)).
+AUTHOR_ROLES = ("governor", "member", "guest")
+DEFAULT_AUTHOR_ROLE = "governor"
+
+
+def create_jwt(public_key_b64: str, author_role: str = DEFAULT_AUTHOR_ROLE) -> str:
+    """Issue a short-lived JWT for session continuity.
+
+    ``author_role`` is the tier the transport asserts about the author of the
+    turn (governor / member / guest). It is carried as a signed claim so the
+    brain can gate on it without trusting a spoofable plain header. A value
+    outside ``AUTHOR_ROLES`` is coerced to the safe default (governor), so a
+    caller passing junk gets today's behaviour rather than an accidental
+    privilege change.
+    """
+    if author_role not in AUTHOR_ROLES:
+        author_role = DEFAULT_AUTHOR_ROLE
     now = datetime.now(timezone.utc)
     payload = {
         "sub": public_key_b64,
@@ -128,12 +147,18 @@ def create_jwt(public_key_b64: str) -> str:
         "exp": now + timedelta(minutes=settings.jwt_expiry_minutes),
         "jti": str(uuid.uuid4()),
         "scope": "governor_chat",
+        "author_role": author_role,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def verify_jwt(request: Request) -> str:
-    """Extract and verify JWT from Authorization header or cookie. Returns public_key."""
+def verify_jwt_claims(request: Request) -> dict:
+    """Extract and verify JWT from header/cookie. Returns the FULL decoded claims.
+
+    The claims carry ``sub`` (the public key) and ``author_role`` (the asserted
+    tier -- see ``create_jwt``). Callers that only need the public key should
+    keep using ``verify_jwt``.
+    """
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
         token = auth[7:]
@@ -151,13 +176,33 @@ def verify_jwt(request: Request) -> str:
         payload = jwt.decode(
             token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
         )
-        public_key = payload.get("sub")
-        if not public_key:
-            raise JWTError("No subject in token")
-        return public_key
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session token.",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
+    if not payload.get("sub"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
+
+
+def verify_jwt(request: Request) -> str:
+    """Extract and verify JWT from Authorization header or cookie. Returns public_key."""
+    return verify_jwt_claims(request)["sub"]
+
+
+def author_role_from_claims(claims: dict | None) -> str:
+    """Read the asserted author tier from verified JWT claims.
+
+    Absent or unrecognised claim -> governor: tokens minted before
+    tier-awareness carried no ``author_role``, and every such caller today is a
+    governor, so the default preserves existing behaviour. (The brain-side gate
+    that *consumes* this lives in a follow-up PR.)
+    """
+    role = (claims or {}).get("author_role", DEFAULT_AUTHOR_ROLE)
+    return role if role in AUTHOR_ROLES else DEFAULT_AUTHOR_ROLE

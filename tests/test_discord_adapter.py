@@ -178,7 +178,7 @@ def test_handle_message_member_logged_not_dispatched(monkeypatch):
 def test_handle_message_governor_dispatches_and_replies(monkeypatch):
     sent = {}
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
-    monkeypatch.setattr(da, "call_chat", lambda text, sid, key: "reply!")
+    monkeypatch.setattr(da, "call_chat", lambda *a, **k: "reply!")
     monkeypatch.setattr(
         da, "send_message", lambda ch, txt: sent.update(ch=ch, txt=txt) or []
     )
@@ -254,7 +254,7 @@ def test_call_chat_timeout_message_is_actionable(monkeypatch):
         raise httpx.TimeoutException("too slow")
 
     monkeypatch.setattr(da.httpx, "post", boom)
-    monkeypatch.setattr(da, "create_jwt", lambda key: "t")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "t")
     msg = da.call_chat("hi", "s", "KEY")
     assert "unusually long" in msg
     assert "unreachable" not in msg
@@ -265,7 +265,7 @@ def test_call_chat_connection_error_still_says_unreachable(monkeypatch):
         raise httpx.ConnectError("refused")
 
     monkeypatch.setattr(da.httpx, "post", boom)
-    monkeypatch.setattr(da, "create_jwt", lambda key: "t")
+    monkeypatch.setattr(da, "create_jwt", lambda *a, **k: "t")
     assert "unreachable" in da.call_chat("hi", "s", "KEY")
 
 
@@ -278,7 +278,7 @@ def test_handle_message_governor_acks_reaction(monkeypatch):
         return True
 
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "governor")
-    monkeypatch.setattr(da, "call_chat", lambda text, sid, key: "reply!")
+    monkeypatch.setattr(da, "call_chat", lambda *a, **k: "reply!")
     monkeypatch.setattr(da, "send_message", lambda ch, txt: [])
     monkeypatch.setattr(da, "remove_reaction", lambda *a, **k: True)
     monkeypatch.setattr(da, "add_reaction", _ack)

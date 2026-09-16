@@ -117,6 +117,7 @@ def extract_urls(text: str) -> list[str]:
     """Return the http(s) URLs in ``text`` (for a links-only follow-up)."""
     return _URL_RE.findall(text or "")
 
+
 # Per-channel dispatch locks (parity with Telegram's `_thread_dispatch_lock`).
 # Serialize the *turn* within one (guild, channel) so two governor messages or
 # two reactions can never run overlapping turns on the same session id. Message
@@ -628,11 +629,20 @@ class TypingIndicator:
 
 
 def log_observed_message(
-    message: str, session_id: str, public_key: str, sender_name: str
+    message: str,
+    session_id: str,
+    public_key: str,
+    sender_name: str,
+    author_role: str = "governor",
 ) -> None:
-    """POST to /chat/observe -- appends to session history, no model call."""
+    """POST to /chat/observe -- appends to session history, no model call.
+
+    ``author_role`` is the tier this transport asserts about the author; it rides
+    the signed JWT so downstream legs can gate on it. Default governor keeps
+    every existing caller byte-identical.
+    """
     try:
-        token = create_jwt(public_key)
+        token = create_jwt(public_key, author_role)
         headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
         httpx.post(
             f"{settings.autopilot_chat_url.rstrip('/')}/chat/observe",
@@ -728,9 +738,18 @@ def _brain_unavailable_message() -> str:
     return "\u23f3 Sophia is briefly restarting \u2014 please resend in a few seconds."
 
 
-def call_chat(message: str, session_id: str, public_key: str) -> str:
-    """POST to /chat-blocking as the governor; return the assistant text."""
-    token = create_jwt(public_key)
+def call_chat(
+    message: str,
+    session_id: str,
+    public_key: str,
+    author_role: str = "governor",
+) -> str:
+    """POST to /chat-blocking; return the assistant text.
+
+    ``author_role`` rides the signed JWT (see ``app.auth.create_jwt``); the
+    default governor preserves existing behaviour.
+    """
+    token = create_jwt(public_key, author_role)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
     try:
         resp = httpx.post(
@@ -769,6 +788,7 @@ def call_chat_with_progress(
     message: str,
     session_id: str,
     public_key: str,
+    author_role: str = "governor",
 ) -> tuple[str, bool]:
     """POST to /chat (SSE) and edit ONE status message in place as the turn runs.
 
@@ -786,14 +806,14 @@ def call_chat_with_progress(
     the blocking fallback, where the caller must post the text itself (avoids the
     duplicate-text bug).
     """
-    token = create_jwt(public_key)
+    token = create_jwt(public_key, author_role)
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id}
 
     ids = send_message(channel_id, "\U0001f504 Thinking\u2026")
     status_id: str | None = ids[0] if ids else None
     if status_id is None:
         logger.warning("Could not send status message -- falling back to blocking chat")
-        return call_chat(message, session_id, public_key), False
+        return call_chat(message, session_id, public_key, author_role), False
 
     # Ride out a brain restart (e.g. a redeploy) before streaming, so a brief
     # redeploy shows a clear indicator instead of a Connection-refused error.
@@ -1292,7 +1312,9 @@ def handle_message(
             names = attachment_names(data)
             if names:
                 observed = f"{observed}\n[attachments: {names}]".strip()
-            log_observed_message(observed, session_id, public_key, username)
+            log_observed_message(
+                observed, session_id, public_key, username, author_role=role
+            )
         return
 
     if not public_key:

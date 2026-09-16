@@ -227,7 +227,9 @@ def test_handle_message_bare_attachment_is_dispatched(monkeypatch):
     monkeypatch.setattr(
         da, "_ingest_attachments", lambda atts, ch, sid, txt: "PROMPT:" + txt
     )
-    monkeypatch.setattr(da, "call_chat", lambda p, s, k: seen.update(prompt=p) or "ok")
+    monkeypatch.setattr(
+        da, "call_chat", lambda *a, **k: seen.update(prompt=a[0]) or "ok"
+    )
     monkeypatch.setattr(da, "send_message", lambda ch, t: [])
     da.handle_message(_msg(content="", attachments=[_att()]), {"999"}, "KEY", "1", "42")
     assert seen["prompt"] == "PROMPT:"
@@ -241,7 +243,9 @@ def test_handle_message_governor_attachment_ingested(monkeypatch):
         "_ingest_attachments",
         lambda atts, ch, sid, txt: f"INGEST({len(atts)}):{txt}",
     )
-    monkeypatch.setattr(da, "call_chat", lambda p, s, k: seen.update(prompt=p) or "ok")
+    monkeypatch.setattr(
+        da, "call_chat", lambda *a, **k: seen.update(prompt=a[0]) or "ok"
+    )
     monkeypatch.setattr(da, "send_message", lambda ch, t: [])
     da.handle_message(
         _msg(content="look", attachments=[_att(), _att(aid="a2")]),
@@ -258,7 +262,9 @@ def test_handle_message_non_governor_attachment_never_downloaded(monkeypatch):
     observed = {}
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
     monkeypatch.setattr(
-        da, "log_observed_message", lambda txt, sid, key, who: observed.update(txt=txt)
+        da,
+        "log_observed_message",
+        lambda txt, sid, key, who, **k: observed.update(txt=txt),
     )
     monkeypatch.setattr(
         da,
