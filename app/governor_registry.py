@@ -257,6 +257,36 @@ def load_governors(force_refresh: bool = False) -> dict:
     }
 
 
+_SENTINEL_EMAILS_CACHE: dict[str, tuple[float, set[str]]] = {}
+
+
+def sentinel_emails(ttl: int | None = None) -> set[str]:
+    """Emails of contributors whose roles include 'sentinel' (plan D4).
+
+    Sentinels are the DAO's AI-agent contributors (Claude Anthropic, Deep Seek,
+    Kimi, Sophia, ...). Read straight from the same dao_members.json the
+    governor cache consumes, short-TTL cached. Fail-soft: any error -> empty
+    set, so a Discord sender then falls through to member/guest and is NEVER
+    silently granted sentinel.
+    """
+    url = os.getenv("GOVERNORS_RAW_URL", _DEFAULT_MEMBERS_URL)
+    now = _now()
+    ttl = _CACHE_TTL_SECONDS if ttl is None else ttl
+    cached = _SENTINEL_EMAILS_CACHE.get(url)
+    if cached is not None and (now - cached[0]) < ttl:
+        return cached[1]
+    out: set[str] = set()
+    data = _fetch_remote(url)
+    if data:
+        for c in data.get("contributors", []) or []:
+            if "sentinel" in (c.get("roles") or []):
+                em = (c.get("email") or "").strip().lower()
+                if em:
+                    out.add(em)
+    _SENTINEL_EMAILS_CACHE[url] = (now, out)
+    return out
+
+
 def is_sentinel(public_key_b64: str) -> bool:
     """Check if a public key belongs to a registered sentinel (monitor access)."""
     identity = _resolve_key_safe(public_key_b64)

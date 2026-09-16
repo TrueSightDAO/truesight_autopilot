@@ -49,7 +49,9 @@ def _wire_common(monkeypatch):
     monkeypatch.setattr(m, "_append_turn_report", lambda text, state: text)
     monkeypatch.setattr(m, "_compute_advance_signal", lambda history, trace: None)
 
-    async def _fake_run_tool(func_name, func_args, history, session_id, gov_name):
+    async def _fake_run_tool(
+        func_name, func_args, history, session_id, gov_name, author_role="governor"
+    ):
         return {"ok": True, "tool": func_name}
 
     monkeypatch.setattr(m, "_run_tool", _fake_run_tool)
@@ -133,7 +135,8 @@ class TestConvergenceNudge:
         nudges = [
             msg
             for msg in history
-            if msg.get("role") == "user" and "RESUME HERE" in str(msg.get("content", ""))
+            if msg.get("role") == "user"
+            and "RESUME HERE" in str(msg.get("content", ""))
         ]
         assert len(nudges) == 1, (
             "expected exactly one convergence directive injected into history; "
@@ -170,8 +173,8 @@ class TestDsmlLeakParity:
         _wire_common(monkeypatch)
         leaked = (
             "<｜｜DSML｜｜tool_calls>\n"
-            "<｜｜DSML｜｜invoke name=\"read_tool_result\">\n"
-            "<｜｜DSML｜｜parameter name=\"artifact_id\">call_00_abc</｜｜DSML｜｜parameter>\n"
+            '<｜｜DSML｜｜invoke name="read_tool_result">\n'
+            '<｜｜DSML｜｜parameter name="artifact_id">call_00_abc</｜｜DSML｜｜parameter>\n'
             "</｜｜DSML｜｜invoke>\n"
             "</｜｜DSML｜｜tool_calls>"
         )
@@ -193,7 +196,7 @@ class TestDsmlLeakParity:
         """Keep the pre-existing "<tool_call>" text-leak guard working too —
         this fix should be additive, not a replacement that drops coverage."""
         _wire_common(monkeypatch)
-        leaked = "<tool_call>{\"name\": \"foo\", \"arguments\": {}}</tool_call>"
+        leaked = '<tool_call>{"name": "foo", "arguments": {}}</tool_call>'
         clean = "Clean retry text."
         fake_client = _FakeLLMClient(
             [_text_completion(leaked), _text_completion(clean)]
@@ -211,9 +214,7 @@ class TestDsmlLeakParity:
         """If even the forced retry comes back blank, fall back to the fixed
         non-empty message rather than ever returning an empty response."""
         _wire_common(monkeypatch)
-        fake_client = _FakeLLMClient(
-            [_text_completion(""), _text_completion("")]
-        )
+        fake_client = _FakeLLMClient([_text_completion(""), _text_completion("")])
 
         resp = _run_turn(monkeypatch, fake_client, max_rounds=15)
         assert resp.status_code == 200

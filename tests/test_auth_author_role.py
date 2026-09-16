@@ -83,4 +83,6 @@ def test_verify_jwt_still_returns_public_key_only():
 
 
 def test_author_roles_constant_is_the_tier_enum():
-    assert set(AUTHOR_ROLES) == {"governor", "member", "guest"}
+    # D4 (PR2) added 'sentinel' -- the DAO's AI-agent contributor tier: a
+    # distinct identity class carrying governor-tier WRITE/ADMIN rights.
+    assert set(AUTHOR_ROLES) == {"governor", "sentinel", "member", "guest"}

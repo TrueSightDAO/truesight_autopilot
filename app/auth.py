@@ -124,11 +124,15 @@ def is_governor(public_key_b64: str) -> bool:
 # jwt_secret -- the adapters -- can set it. A plain HTTP header would be
 # spoofable by any caller, so tier-awareness deliberately uses the signed claim
 # instead (plan: brain tier-awareness, transport option (a)).
-AUTHOR_ROLES = ("governor", "member", "guest")
+AUTHOR_ROLES = ("governor", "sentinel", "member", "guest")
 DEFAULT_AUTHOR_ROLE = "governor"
 
 
-def create_jwt(public_key_b64: str, author_role: str = DEFAULT_AUTHOR_ROLE) -> str:
+def create_jwt(
+    public_key_b64: str,
+    author_role: str = DEFAULT_AUTHOR_ROLE,
+    author_name: str | None = None,
+) -> str:
     """Issue a short-lived JWT for session continuity.
 
     ``author_role`` is the tier the transport asserts about the author of the
@@ -148,6 +152,7 @@ def create_jwt(public_key_b64: str, author_role: str = DEFAULT_AUTHOR_ROLE) -> s
         "jti": str(uuid.uuid4()),
         "scope": "governor_chat",
         "author_role": author_role,
+        **({"author_name": author_name} if author_name else {}),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
@@ -206,3 +211,14 @@ def author_role_from_claims(claims: dict | None) -> str:
     """
     role = (claims or {}).get("author_role", DEFAULT_AUTHOR_ROLE)
     return role if role in AUTHOR_ROLES else DEFAULT_AUTHOR_ROLE
+
+
+def author_name_from_claims(claims: dict | None) -> str | None:
+    """Read the adapter-asserted sender name from verified JWT claims.
+
+    Signed like ``author_role`` -- only a jwt_secret holder (an adapter) can set
+    it. Used so a non-governor turn (a sentinel) is attributed by its OWN name,
+    never silently relabeled with the human governor's name (plan D4).
+    """
+    name = (claims or {}).get("author_name")
+    return name.strip() if isinstance(name, str) and name.strip() else None
