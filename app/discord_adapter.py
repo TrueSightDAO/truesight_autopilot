@@ -1328,7 +1328,19 @@ def handle_message(
     # human governor. A MEMBER is a verified contributor but NOT a governor --
     # recognised and attributed, yet still data-only: never dispatched as an
     # instruction (see app/policy.py WRITE/ADMIN gate).
-    if role not in ("governor", "sentinel"):
+    # Data/instruction boundary (plan BRAIN_TIER_AWARENESS, PR3). Only a
+    # governor's or a sentinel's message is an INSTRUCTION. A sentinel (plan D4)
+    # is a DISTINCT identity class carrying governor-tier RIGHTS -- dispatched,
+    # but attributed by its OWN name, never relabeled the human governor. A MEMBER
+    # is a verified contributor but NOT a governor: PR3 now dispatches it too, but
+    # ONLY when it explicitly @-mentions the bot -- casual chatter stays observed
+    # context. The reply a member receives is the READ-ONLY class (ask / research /
+    # draft): the brain's WRITE/ADMIN gate (app/main.py _run_tool_sync) denies
+    # every mutating tool for author_role="member", so a member turn can never
+    # issue an instruction that changes state. A guest is never dispatched.
+    is_instructive = role in ("governor", "sentinel")
+    member_mentioned = role == "member" and is_mention(raw, bot_id)
+    if not (is_instructive or member_mentioned):
         logger.info(
             "Discord message from %s %s (%s) in %s -- logging as context only",
             role,
@@ -1348,7 +1360,8 @@ def handle_message(
 
     if not public_key:
         logger.warning(
-            "Governor message but no public key resolved -- cannot call brain"
+            "%s message but no public key resolved -- cannot call brain",
+            role,
         )
         send_message(
             channel_id,

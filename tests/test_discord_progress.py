@@ -239,7 +239,7 @@ def test_handle_message_uses_progress_and_removes_reaction(monkeypatch):
 
     monkeypatch.setattr(da, "TypingIndicator", _TI)
     monkeypatch.setattr(
-        da, "call_chat_with_progress", lambda c, p, s, pk: ("answer", True)
+        da, "call_chat_with_progress", lambda c, p, s, pk, role, name: ("answer", True)
     )
     posted = []
     monkeypatch.setattr(da, "send_message", lambda c, t: posted.append(t) or ["x"])
