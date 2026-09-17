@@ -523,6 +523,17 @@ async def lifespan(app: FastAPI):
     )
     _install_signal_loggers()
 
+    # ── Pin the gh CLI to the canonical DAO PAT (never a stray token) ──
+    # Ad-hoc `gh` reads GH_TOKEN / ~/.config/gh/hosts.yml, NOT
+    # settings.github_pat -- so a box whose hosts.yml holds an under-scoped
+    # PAT gets 403 on creates while every tool call works. Best-effort.
+    try:
+        from app.gh_cli import ensure_gh_cli_uses_canonical_pat
+
+        ensure_gh_cli_uses_canonical_pat()
+    except Exception as exc:  # never block startup
+        logger.warning("gh CLI PAT pin failed: %s", exc)
+
     # ── Deploy notification: check for marker file from deploy.py ──
     _check_deploy_marker()
 
