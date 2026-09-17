@@ -143,3 +143,91 @@ def test_merge_refuses_when_ci_not_green():
     result = gh.merge_pr("truesight_autopilot", 1)
     assert result["merged"] is False
     assert "Refusing to merge" in result["message"]
+
+
+# --- fallback: Checks API unreadable (403) but repo has no workflows ---
+
+
+class FakeGithubException(Exception):
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f"HTTP {status}")
+
+
+class FakeContent:
+    def __init__(self, name):
+        self.name = name
+
+
+class FakeRepoWithContents:
+    def __init__(self, commit, contents_result):
+        self._commit = commit
+        self._contents_result = contents_result
+
+    def get_commit(self, sha):
+        return self._commit
+
+    def get_contents(self, path, ref=None):
+        if isinstance(self._contents_result, Exception):
+            raise self._contents_result
+        return self._contents_result
+
+
+class FakeBaseWithContents:
+    def __init__(self, repo):
+        self.repo = repo
+
+
+class FakePRUnreadableCI:
+    def __init__(self, contents_result):
+        self.head = type("H", (), {"sha": "abc123"})()
+
+        class _Commit:
+            def get_check_runs(self_):
+                raise FakeGithubException(403)
+
+            def get_combined_status(self_):
+                raise FakeGithubException(403)
+
+        repo = FakeRepoWithContents(_Commit(), contents_result)
+        self.base = FakeBaseWithContents(repo)
+        self.merged = False
+        self.draft = False
+
+
+def _client_for(pr):
+    gh = GitHubClient.__new__(GitHubClient)
+    gh.g = type("G", (), {})()
+    return gh
+
+
+def test_checks_403_and_no_workflows_falls_back_to_no_ci():
+    # get_contents on .github/workflows -> 404 => repo has no CI at all.
+    pr = FakePRUnreadableCI(FakeGithubException(404))
+    gh = _client_for(pr)
+    ci = gh._ci_status(pr)
+    assert ci["reason"] == "no-ci"
+    assert ci["green"] is False
+
+
+def test_checks_403_with_workflows_still_refuses():
+    # Workflows exist => genuine CI we merely cannot read -> stay blocked.
+    pr = FakePRUnreadableCI([FakeContent("test.yml")])
+    gh = _client_for(pr)
+    ci = gh._ci_status(pr)
+    assert "ci-unavailable" in ci["reason"]
+
+
+def test_repo_has_workflows_true_and_false():
+    gh = _client_for(None)
+    assert gh._repo_has_workflows(
+        FakePRUnreadableCI([FakeContent("smoke.yml"), FakeContent("README.md")])
+    ) is True
+    assert gh._repo_has_workflows(FakePRUnreadableCI(FakeGithubException(404))) is False
+    # Unknown error (e.g. 500) -> conservative True.
+    assert gh._repo_has_workflows(FakePRUnreadableCI(FakeGithubException(500))) is True
+
+
+def test_repo_has_workflows_ignores_non_yaml():
+    gh = _client_for(None)
+    assert gh._repo_has_workflows(FakePRUnreadableCI([FakeContent("notes.txt")])) is False
