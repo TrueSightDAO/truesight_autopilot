@@ -181,6 +181,7 @@ def create_repo(repo: str, private: bool = True, description: str = "") -> dict[
 
     Guardrail (default-allow model): ``repo`` must match a governor-blessed
     ``settings.create_repo_patterns`` glob (e.g. ``*-program``, ``cfr-*``,
+    ``member-*``,
     ``*-site``). Writing an EXISTING repo is default-allow, but creating a NEW
     one stays bounded so a hallucinated name cannot spin up arbitrary org
     repos. Add a pattern to config.py / CREATE_REPO_PATTERNS to bless a new
@@ -408,7 +409,7 @@ TOOL_SPECS = [
         name="create_repo",
         description=(
             "Create a brand-new, empty GitHub repo. Guardrail: the repo name must match a "
-            "governor-blessed settings.create_repo_patterns glob (e.g. '*-program', 'cfr-*', "
+            "governor-blessed settings.create_repo_patterns glob (e.g. '*-program', 'cfr-*', 'member-*', "
             "'*-site') — an unblessed/hallucinated name is refused; a governor adds a pattern "
             "to config.py / CREATE_REPO_PATTERNS to open a naming family. Org defaults to TrueSightDAO; "
             "for a different org (e.g. KrakeIO), the governor must also add an entry to "
