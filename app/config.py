@@ -622,6 +622,16 @@ class Settings(BaseSettings):
     discord_sentinel_user_ids: str = Field(
         default="", validation_alias="DISCORD_SENTINEL_USER_IDS"
     )
+    # Comma-separated Discord BOT user ids (snowflakes) that handle_message's
+    # top bot guard does NOT reflexively discard. Plan
+    # DISCORD_ENVOY_GOVERNOR_PARITY: this grants ONLY "don't drop the message"
+    # -- the turn still runs through the UNCHANGED author_role() resolution
+    # below, so role/authority is never conferred by this list. Default empty =
+    # every bot dropped, byte-for-byte today's behaviour. The bot's OWN id is
+    # never trusted, even if misconfigured here.
+    discord_trusted_bot_ids: str = Field(
+        default="", validation_alias="DISCORD_TRUSTED_BOT_IDS"
+    )
     # Which governor identity the bot speaks as (resolved to a public key).
     discord_governor_name: str = Field(
         default="Gary Teh", validation_alias="DISCORD_GOVERNOR_NAME"

@@ -1305,10 +1305,20 @@ def handle_message(
 ) -> None:
     """Process one MESSAGE_CREATE event: gate -> observe/dispatch -> reply."""
     author = data.get("author") or {}
-    if author.get("bot"):
-        return  # never respond to bots (incl. ourselves)
-
     user_id = str(author.get("id") or "")
+    if author.get("bot"):
+        # Plan DISCORD_ENVOY_GOVERNOR_PARITY: a *trusted* bot (a governor-
+        # configured id in DISCORD_TRUSTED_BOT_IDS) is not reflexively
+        # discarded -- but this grants ONLY "don't drop the message". The turn
+        # still runs through the UNCHANGED author_role() resolution below, so
+        # role/authority is never conferred by the trusted list itself. Our OWN
+        # bot id is never trusted, even if misconfigured into the list (defense
+        # in depth: two independently-configured knobs must both be right).
+        trusted_bot_ids = parse_allowed_ids(
+            getattr(settings, "discord_trusted_bot_ids", "")
+        )
+        if not (user_id and user_id in trusted_bot_ids and user_id != str(bot_id)):
+            return  # never respond to bots (incl. ourselves)
     username = author.get("global_name") or author.get("username") or user_id
     channel_id = str(data.get("channel_id") or "")
     message_id = str(data.get("id") or "")
