@@ -91,6 +91,7 @@ def _fake_loop_factory(reply: str):
         governor_name,
         req_id,
         state,
+        author_role="governor",
         queue_msg_id=None,
     ):
         state["assistant_text"] = reply
