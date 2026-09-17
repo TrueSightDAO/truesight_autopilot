@@ -314,6 +314,22 @@ def _newest_source_mtime(remote_dir: str) -> float:
     return newest
 
 
+def _env_mtime(remote_dir: str) -> float:
+    """mtime of the runtime `.env` file (0 if absent).
+
+    Included in the process-staleness comparison so an env-only change (no .py
+    file touched) still triggers a restart: the running process read its
+    environment at startup, so a newer `.env` means it is serving stale config
+    and must be reloaded. 2026-09-17: `DISCORD_TRUSTED_BOT_IDS` was written to
+    `.env` but never loaded, because the deploy no-op guard scanned only .py
+    mtimes and short-circuited with "already on latest".
+    """
+    try:
+        return os.path.getmtime(os.path.join(remote_dir, ".env"))
+    except OSError:
+        return 0.0
+
+
 def _is_process_stale(remote_dir: str) -> bool:
     """Check if the running process is stale relative to source files on disk.
 
@@ -332,7 +348,7 @@ def _is_process_stale(remote_dir: str) -> bool:
         # (e.g. the main API restarts, the telegram adapter does not), leaving a
         # reaction-handling process running old code. Stale if ANY autopilot
         # service process started before the newest app/scripts source mtime.
-        file_mtime = _newest_source_mtime(remote_dir)
+        file_mtime = max(_newest_source_mtime(remote_dir), _env_mtime(remote_dir))
         if file_mtime <= 0:
             logger.debug("No source files found - cannot check staleness")
             return False
