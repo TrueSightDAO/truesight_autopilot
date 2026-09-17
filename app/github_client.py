@@ -315,6 +315,19 @@ class GitHubClient:
                 "message": f"Failed to mark PR #{pr_number} ready: {e}",
             }
 
+    def _repo_has_no_workflows(self, pr) -> bool:
+        """True when the PR's base repo has zero GitHub Actions workflows.
+
+        Lets ``_ci_status`` tell 'no CI configured at all' (safe to
+        warn-and-merge) apart from 'CI configured but unreadable' (refuse)
+        when the checks lookup raises -- e.g. a freshly-created private repo
+        whose check-runs the token cannot read (403).
+        """
+        try:
+            return len(list(pr.base.repo.get_workflows())) == 0
+        except Exception:  # pragma: no cover - API edge cases
+            return False
+
     def _ci_status(self, pr) -> dict:
         """Check the PR's CI status via the Checks API + combined commit status.
 
@@ -331,6 +344,14 @@ class GitHubClient:
             combined = commit.get_combined_status()
             statuses = combined.statuses
         except Exception as e:  # pragma: no cover - API edge cases
+            # The Checks API can raise even when there is genuinely no CI to
+            # gate on: a workflow-less repo, or a repo whose check-runs the
+            # token cannot read (freshly-created private repos 403 here). Tell
+            # that apart from 'CI exists but is unreadable': with zero
+            # workflows there is nothing to gate on, so report 'no-ci' (the
+            # caller warns and merges); otherwise refuse.
+            if self._repo_has_no_workflows(pr):
+                return {"green": False, "checks": [], "reason": "no-ci"}
             return {
                 "green": False,
                 "checks": [],
