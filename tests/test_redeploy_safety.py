@@ -155,3 +155,47 @@ def test_is_process_stale_fresh_when_started_after(monkeypatch, tmp_path):
     monkeypatch.setattr(dep, "_service_pids", lambda: [12345])
     monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now + 10)
     assert dep._is_process_stale(str(tmp_path)) is False
+
+
+def test_env_mtime_zero_when_absent(tmp_path):
+    """No .env on disk -> 0.0, so env check never manufactures staleness."""
+    assert dep._env_mtime(str(tmp_path)) == 0.0
+
+
+def test_is_process_stale_detects_newer_env(monkeypatch, tmp_path):
+    """Env-only change (no .py touched) still marks the process stale.
+
+    Reproduces the 2026-09-17 gap: DISCORD_TRUSTED_BOT_IDS was written to .env
+    but the deploy no-op guard scanned only .py mtimes, so the restart never
+    fired and the running process kept stale config.
+    """
+    import time
+
+    now = time.time()
+    (tmp_path / "app").mkdir()
+    f = tmp_path / "app" / "telegram_adapter.py"
+    f.write_text("x")
+    os.utime(f, (now - 1000, now - 1000))  # source older than the process
+    env = tmp_path / ".env"
+    env.write_text("FOO=bar")
+    os.utime(env, (now, now))  # .env newer than the process
+    monkeypatch.setattr(dep, "_service_pids", lambda: [12345])
+    monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now - 100)
+    assert dep._is_process_stale(str(tmp_path)) is True
+
+
+def test_is_process_stale_fresh_when_env_older(monkeypatch, tmp_path):
+    """A .env older than the process start does NOT make it stale."""
+    import time
+
+    now = time.time()
+    (tmp_path / "app").mkdir()
+    f = tmp_path / "app" / "telegram_adapter.py"
+    f.write_text("x")
+    os.utime(f, (now - 1000, now - 1000))
+    env = tmp_path / ".env"
+    env.write_text("FOO=bar")
+    os.utime(env, (now - 1000, now - 1000))
+    monkeypatch.setattr(dep, "_service_pids", lambda: [12345])
+    monkeypatch.setattr(dep, "_proc_start_epoch", lambda pid: now)
+    assert dep._is_process_stale(str(tmp_path)) is False
