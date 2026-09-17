@@ -111,6 +111,13 @@ def test_create_repo_env_override_replaces_defaults():
     assert s.create_repo_allowed("cfr-anapu")[0] is False
 
 
+def test_create_repo_member_family_blessed():
+    ok, reason = Settings().create_repo_allowed("member-workspace")
+    assert ok is True, reason
+    # the family is a prefix family, not a blanket allow
+    assert Settings().create_repo_allowed("workspace")[0] is False
+
+
 def test_create_repo_blank_name():
     assert Settings().create_repo_allowed("")[0] is False
 

@@ -83,6 +83,9 @@ _DEFAULT_CREATE_REPO_PATTERNS: list[str] = [
     "*-prod",
     "*-cache",
     "*-raw",
+    # member-tier quarantine workspace (non-authoritative SOP candidates).
+    # See agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md.
+    "member-*",
 ]
 
 
