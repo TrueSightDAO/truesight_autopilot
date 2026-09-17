@@ -1550,6 +1550,15 @@ async def _catalog_refresh_loop() -> None:
 # Event types not yet in the live catalog use these hardcoded fallbacks.
 _VALIDATE_REQUIRED_FIELDS: dict[str, list[str]] = {
     "INVENTORY MOVEMENT": ["Manager Name", "Recipient Name", "QR Code"],
+    # SS12.3 -- disbursement receipt; no raw recipient PII is accepted here.
+    "PAYOUT EVENT": [
+        "Program",
+        "Amount",
+        "Currency",
+        "Paid At",
+        "Bank Ref",
+        "Recipient",
+    ],
     "SALES EVENT": ["Item", "Sales price", "Sold by"],
     "CONTRIBUTION EVENT": ["Type", "Amount"],
     "CAPITAL INJECTION EVENT": ["Ledger", "Amount"],
@@ -1557,6 +1566,20 @@ _VALIDATE_REQUIRED_FIELDS: dict[str, list[str]] = {
 }
 
 _CANONICAL_LABELS: dict[str, list[str]] = {
+    "PAYOUT EVENT": [
+        "Program",
+        "Amount",
+        "Currency",
+        "Paid At",
+        "Bank Ref Type",
+        "Bank Ref",
+        "Recipient",
+        "Recipient PK Hash",
+        "Tree Planting IDs",
+        "Status",
+        "Receipt URL",
+        "Submission Source",
+    ],
     "INVENTORY MOVEMENT": [
         "Manager Name",
         "Recipient Name",

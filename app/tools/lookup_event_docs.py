@@ -68,12 +68,37 @@ _INTENT_GUIDANCE: dict[str, str] = {
     "invalidate plot": "PLOT INVALIDATION EVENT",
     "plot invalidation": "PLOT INVALIDATION EVENT",
     "remove plot": "PLOT INVALIDATION EVENT",
+    "pay the planter": "PAYOUT EVENT",
+    "payout": "PAYOUT EVENT",
+    "pay planter": "PAYOUT EVENT",
+    "pay the farmer": "PAYOUT EVENT",
+    "pix payout": "PAYOUT EVENT",
+    "disburse": "PAYOUT EVENT",
+    "compensation transfer": "PAYOUT EVENT",
+    "record payout": "PAYOUT EVENT",
+    "pay trees": "PAYOUT EVENT",
 }
 
 # ── Important fields per event type ───────────────────────────────────────
 # Fields that are most commonly missed or incorrectly filled by the LLM.
 # The LLM should ensure these are always present when submitting.
 _IMPORTANT_FIELDS: dict[str, list[str]] = {
+    # SS12.3 -- a payout is the DISBURSEMENT receipt, not the registration.
+    # Carries NO raw PII (recipient referenced by pk_hash only, SS12.1).
+    "PAYOUT EVENT": [
+        "Program",
+        "Amount",
+        "Currency",
+        "Paid At",
+        "Bank Ref Type",
+        "Bank Ref",
+        "Recipient",
+        "Recipient PK Hash",
+        "Tree Planting IDs",
+        "Status",
+        "Receipt URL",
+        "Submission Source",
+    ],
     "SALES EVENT": [
         "Cash proceeds collected by",
         "Owner email",
@@ -170,6 +195,24 @@ _IMPORTANT_FIELDS: dict[str, list[str]] = {
 
 # Minimal fallback for when Edgar is unreachable
 _FALLBACK_DOCS: dict[str, dict[str, Any]] = {
+    "PAYOUT EVENT": {
+        "description": "Use to record an OUTBOUND compensation transfer to a planter/farmer (e.g. a PIX payout). "
+        "ONE row per TRANSFER -- a single transfer may cover N trees, so Tree Planting IDs is carried as a "
+        "list. Carries NO raw recipient PII: reference the recipient by Recipient PK Hash, never a raw "
+        "PIX/account (SS12.1). Distinguishes live capture from backfill (SS12.7). Spec: "
+        "agentic_ai_context/plans/CRF_ANAPU_SUNMINT_COHORT_PROPOSAL.md SS12.2/SS12.3. "
+        "NOT the same as PAYMENT EVENT (a generic outbound payment) nor PAYOUT REGISTRATION (the P4 "
+        "intake form, which DOES carry a raw PIX).",
+        "required_fields": [
+            "Program",
+            "Amount",
+            "Currency",
+            "Paid At",
+            "Bank Ref",
+            "Recipient",
+        ],
+        "dapp_page": "report_payout_event.html",
+    },
     "SALES EVENT": {
         "description": "Use when a bag is sold to an end customer (retail sale). QR status updated to SOLD. "
         "BATCH RULE: ONE submission per QR code — never aggregate. Read SOPHIA_BATCH_SALES_PLAN.md §0.",
