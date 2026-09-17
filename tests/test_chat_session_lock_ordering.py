@@ -39,6 +39,14 @@ def _wire_common(monkeypatch):
     """Bypass auth + role-detection + side-channel bookkeeping so the test
     exercises only the lock-ordering property, not unrelated subsystems."""
     monkeypatch.setattr(m, "verify_jwt", lambda request: "testpublickey0123456789")
+    # PR1 routed /chat through verify_jwt_claims to read the asserted
+    # author_role; stub it too so the lock-ordering property is exercised
+    # without a real signed token.
+    monkeypatch.setattr(
+        m,
+        "verify_jwt_claims",
+        lambda request: {"sub": "testpublickey0123456789", "author_role": "governor"},
+    )
     monkeypatch.setattr(m, "find_role_in_history", lambda history: ROLES["general"])
     monkeypatch.setattr(m, "_gov_name_for_key", lambda pk: None)
     monkeypatch.setattr(m, "_auto_name_session", lambda *a, **k: None)
@@ -122,7 +130,9 @@ def test_second_request_blocks_until_first_releases_lock(monkeypatch):
         await turn1_entered.wait()  # turn 1 is inside _stream_chat, holding the lock
 
         task2 = asyncio.create_task(_post_chat("second", session_id))
-        await asyncio.sleep(0.05)  # give task2 a chance to run if it (incorrectly) could
+        await asyncio.sleep(
+            0.05
+        )  # give task2 a chance to run if it (incorrectly) could
         # Task2 must be blocked on the lock: no second "load" yet.
         assert order.count("load") == 1, order
 
@@ -141,6 +151,12 @@ def test_role_menu_early_return_still_covered_by_lock(monkeypatch):
     default configured) must also run under the lock — it used to run
     entirely before the lock was ever acquired."""
     monkeypatch.setattr(m, "verify_jwt", lambda request: "testpublickey0123456789")
+    # Auth is wired inline here (not via _wire_common): stub the claim reader too.
+    monkeypatch.setattr(
+        m,
+        "verify_jwt_claims",
+        lambda request: {"sub": "testpublickey0123456789", "author_role": "governor"},
+    )
     monkeypatch.setattr(m, "find_role_in_history", lambda history: None)
     monkeypatch.setattr(m, "get_default_role", lambda: None)
     session_id = "lock-order-test-3"

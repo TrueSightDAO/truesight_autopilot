@@ -160,7 +160,8 @@ def test_handle_message_non_governor_logged_not_dispatched(monkeypatch):
     assert observed["n"] == 1  # logged as context
 
 
-def test_handle_message_member_logged_not_dispatched(monkeypatch):
+def test_handle_message_member_unmentioned_observed_only(monkeypatch):
+    """A member's UNMENTIONED chatter is context only (PR3 keeps casual noise out)."""
     observed = {"n": 0}
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
     monkeypatch.setattr(
@@ -168,11 +169,70 @@ def test_handle_message_member_logged_not_dispatched(monkeypatch):
     )
     monkeypatch.setattr(
         da,
-        "call_chat",
+        "call_chat_with_progress",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("member dispatched!")),
     )
     da.handle_message(_msg(), set(), "KEY", "1", "42")
-    assert observed["n"] == 1  # recognised + logged, but data-only
+    assert observed["n"] == 1  # recognised + logged, but not dispatched
+
+
+def test_handle_message_guest_never_dispatched_even_when_mentioned(monkeypatch):
+    """An unknown author is observed only, even with an explicit bot @-mention."""
+    observed = {"n": 0}
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "guest")
+    monkeypatch.setattr(
+        da, "log_observed_message", lambda *a, **k: observed.update(n=observed["n"] + 1)
+    )
+    monkeypatch.setattr(
+        da,
+        "call_chat_with_progress",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("guest dispatched!")),
+    )
+    da.handle_message(_msg(content="<@42> hey there"), set(), "KEY", "1", "42")
+    assert observed["n"] == 1
+
+
+def test_handle_message_member_mention_dispatches_read_only(monkeypatch):
+    """A member who @-mentions the bot IS dispatched (PR3), asserted as member
+    and attributed by its OWN name -- never silently elevated to governor."""
+    sent = {}
+    seen = {}
+
+    def _fake_progress(channel_id, message, session_id, public_key, role, name):
+        seen.update(role=role, name=name, msg=message)
+        return ("member reply", False)
+
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
+    monkeypatch.setattr(da, "call_chat_with_progress", _fake_progress)
+    monkeypatch.setattr(
+        da, "send_message", lambda ch, txt: sent.update(ch=ch, txt=txt) or []
+    )
+    da.handle_message(
+        _msg(content="<@42> what is our cacao yield this season?"),
+        set(),
+        "KEY",
+        "1",
+        "42",
+    )
+    assert seen["role"] == "member"  # never elevated to governor
+    assert seen["name"] == "u"  # attributed by its own name
+    assert sent["txt"] == "member reply"
+
+
+def test_handle_message_member_mention_is_stripped_before_brain(monkeypatch):
+    """The bot @-mention is stripped before the member's prompt reaches the brain."""
+    seen = {}
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
+    monkeypatch.setattr(
+        da,
+        "call_chat_with_progress",
+        lambda ch, msg, sid, pk, role, name: seen.update(msg=msg) or ("ok", False),
+    )
+    monkeypatch.setattr(da, "send_message", lambda ch, txt: [])
+    da.handle_message(
+        _msg(content="<@42> research amazon cacao"), set(), "KEY", "1", "42"
+    )
+    assert seen["msg"] == "research amazon cacao"
 
 
 def test_handle_message_governor_dispatches_and_replies(monkeypatch):

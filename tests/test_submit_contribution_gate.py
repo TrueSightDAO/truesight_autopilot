@@ -62,7 +62,9 @@ def _wire(monkeypatch, *, gate: bool):
         m,
         "_resolve_identity",
         lambda display_name=None, **k: SimpleNamespace(
-            role=SimpleNamespace(value="governor")
+            telegram_id=1,
+            role=SimpleNamespace(value="governor"),
+            name=None,
         ),
     )
     monkeypatch.setattr(
