@@ -12,6 +12,7 @@ pytest.importorskip(
 sys.path.insert(0, "scripts")
 
 from scripts.sync_sunmint_signatures import (  # noqa: E402
+    _ledger_files,
     _scan,
     build_measurements,
     build_signatures,
@@ -52,6 +53,16 @@ EMAIL_SAMPLE = (
     "--------\n\n"
     "My Digital Signature: MIIB_PUBKEY_EMAIL\n\n"
     "Request Transaction ID: TXN_HASH_EMAIL\n"
+)
+
+PAYOUT_SAMPLE = (
+    "[PAYOUT REGISTRATION]\n"
+    "- PIX Key Type: cpf\n"
+    "- PIX Key: 123.456.789-01\n"
+    "- Program: crf-anapu\n"
+    "--------\n\n"
+    "My Digital Signature: " + PLANT_PK + "\n\n"
+    "Request Transaction ID: " + SIG + "\n"
 )
 
 
@@ -162,3 +173,40 @@ def test_pii_scan_blocks_email():
 
     with pytest.raises(SystemExit):
         _scan({"events": {"1": {"signed_text": "contact farmer@example.com now"}}})
+
+
+def test_payout_registration_hard_excluded_under_allow_pii():
+    """[PAYOUT REGISTRATION] carries a raw PIX -> excluded even under --allow-pii."""
+    chat = [
+        [
+            "4690",
+            "",
+            "",
+            "900",
+            "student",
+            "",
+            PAYOUT_SAMPLE,
+            "",
+            "0",
+            "",
+            "",
+            "20260917",
+        ],
+    ]
+    out = build_signatures(chat, {}, {}, allow_pii=True)
+    assert out["count"] == 0
+    assert "900" in out["excluded_pii_events"]
+    assert "900" not in out["events"]
+    assert "900" not in out["other_signed"]
+    # The raw PIX must not be stashed in the exclusion report either.
+    assert "123.456.789-01" not in str(out["excluded_pii_events"])
+
+
+def test_ledger_files_never_emits_hard_excluded_marker():
+    sigs = {
+        "events": {
+            "900": {"event_type": "[PAYOUT REGISTRATION]", "signed_text": PAYOUT_SAMPLE}
+        }
+    }
+    files = _ledger_files(sigs, {"items": []})
+    assert not any("payout" in p for p in files)
