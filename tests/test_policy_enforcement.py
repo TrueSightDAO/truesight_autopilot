@@ -250,6 +250,7 @@ class TestRunToolEnforcement:
                 func_name="deploy_autopilot",
                 func_args={},
                 governor_name="Stranger",
+                author_role="guest",
             )
         )
         assert "blocked" in result.lower()
@@ -468,6 +469,7 @@ class TestRunToolEnforcementDirect:
                     func_name="git_push_changes",
                     func_args={},
                     governor_name="Stranger",
+                    author_role="guest",
                 )
             )
             assert "blocked" in result.lower()
