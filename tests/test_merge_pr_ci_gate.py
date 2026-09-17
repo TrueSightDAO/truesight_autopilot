@@ -143,3 +143,99 @@ def test_merge_refuses_when_ci_not_green():
     result = gh.merge_pr("truesight_autopilot", 1)
     assert result["merged"] is False
     assert "Refusing to merge" in result["message"]
+
+
+# --- fallback: Checks API unreadable (403) but repo has no workflows ---
+
+
+class _FakeGithubException(Exception):
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f"HTTP {status}")
+
+
+class _FakeContent:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeRepoWithContents:
+    def __init__(self, commit, contents_result):
+        self._commit = commit
+        self._contents_result = contents_result
+
+    def get_commit(self, sha):
+        return self._commit
+
+    def get_contents(self, path, ref=None):
+        if isinstance(self._contents_result, Exception):
+            raise self._contents_result
+        return self._contents_result
+
+
+class _FakeBase2:
+    def __init__(self, repo):
+        self.repo = repo
+
+
+class _FakePR2:
+    def __init__(self, contents_result):
+        self.head = type("H", (), {"sha": "abc123"})()
+
+        class _Commit:
+            def get_check_runs(self_):
+                raise _FakeGithubException(403)
+
+            def get_combined_status(self_):
+                raise _FakeGithubException(403)
+
+        repo = _FakeRepoWithContents(_Commit(), contents_result)
+        self.base = _FakeBase2(repo)
+        self.merged = False
+        self.draft = False
+
+
+def _client_for_pr2(pr):
+    gh = GitHubClient.__new__(GitHubClient)
+    gh.g = type(
+        "G",
+        (),
+        {"get_repo": lambda self, n: _FakeRepoWithContents(None, None)},
+    )()
+    return gh
+
+
+def test_checks_403_and_no_workflows_falls_back_to_no_ci():
+    # get_contents on .github/workflows -> 404 => repo has no CI.
+    pr = _FakePR2(_FakeGithubException(404))
+    gh = _client_for_pr2(pr)
+    ci = gh._ci_status(pr)
+    assert ci["reason"] == "no-ci"
+    assert ci["green"] is False
+
+
+def test_checks_403_with_workflows_still_refuses():
+    # Workflows exist => genuine CI we merely cannot read -> stay blocked.
+    pr = _FakePR2([_FakeContent("test.yml")])
+    gh = _client_for_pr2(pr)
+    ci = gh._ci_status(pr)
+    assert "ci-unavailable" in ci["reason"]
+
+
+def test_repo_has_workflows_true_and_false():
+    pr = _FakePR2([_FakeContent("smoke.yml"), _FakeContent("README.md")])
+    gh = _client_for_pr2(pr)
+    assert gh._repo_has_workflows(pr) is True
+
+    pr2 = _FakePR2(_FakeGithubException(404))
+    assert gh._repo_has_workflows(pr2) is False
+
+    # Unknown error (e.g. 500) -> conservative True.
+    pr3 = _FakePR2(_FakeGithubException(500))
+    assert gh._repo_has_workflows(pr3) is True
+
+
+def test_repo_has_workflows_ignores_non_yaml():
+    pr = _FakePR2([_FakeContent("notes.txt")])
+    gh = _client_for_pr2(pr)
+    assert gh._repo_has_workflows(pr) is False
