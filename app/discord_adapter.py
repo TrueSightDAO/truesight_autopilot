@@ -1322,13 +1322,15 @@ def handle_message(
     role = author_role(user_id, allowed)
 
     # Data/instruction boundary: only a governor's or sentinel's message is an
-    # instruction. A sentinel is the DAO's AI-agent contributor tier (plan D4):
+    # *instruction*. A sentinel is the DAO's AI-agent contributor tier (plan D4):
     # a DISTINCT identity class from governor that carries governor-tier RIGHTS,
     # so it IS dispatched -- but attributed by its OWN name, never relabeled the
-    # human governor. A MEMBER is a verified contributor but NOT a governor --
-    # recognised and attributed, yet still data-only: never dispatched as an
-    # instruction (see app/policy.py WRITE/ADMIN gate).
-    if role not in ("governor", "sentinel"):
+    # human governor. A MEMBER is a verified contributor: it IS dispatched (PR3)
+    # for the read-only *ask / research / draft* class, but carries NO authority
+    # -- the brain's WRITE/ADMIN gate refuses every write-class tool for any turn
+    # whose asserted tier is not governor/sentinel (plan BRAIN_TIER_AWARENESS).
+    # A GUEST is unknown: observed as context only, never dispatched.
+    if role == "guest":
         logger.info(
             "Discord message from %s %s (%s) in %s -- logging as context only",
             role,
@@ -1348,7 +1350,8 @@ def handle_message(
 
     if not public_key:
         logger.warning(
-            "Governor message but no public key resolved -- cannot call brain"
+            "%s message but no public key resolved -- cannot call brain",
+            role.capitalize(),
         )
         send_message(
             channel_id,

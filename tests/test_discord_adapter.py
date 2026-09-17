@@ -160,19 +160,52 @@ def test_handle_message_non_governor_logged_not_dispatched(monkeypatch):
     assert observed["n"] == 1  # logged as context
 
 
-def test_handle_message_member_logged_not_dispatched(monkeypatch):
+def test_handle_message_member_dispatches_readonly(monkeypatch):
+    """PR3: a resolved MEMBER turn IS dispatched (read-only ask/research/draft).
+    It rides the governor public key but asserts author_role='member', which the
+    brain WRITE/ADMIN gate refuses -- so dispatch must carry role, not the key."""
+    sent = {}
     observed = {"n": 0}
+    seen = {}
     monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
     monkeypatch.setattr(
         da, "log_observed_message", lambda *a, **k: observed.update(n=observed["n"] + 1)
     )
+
+    def _call_chat(
+        message, session_id, public_key, author_role="governor", author_name=None
+    ):
+        seen["role"] = author_role
+        seen["name"] = author_name
+        return "member reply!"
+
+    monkeypatch.setattr(da, "call_chat", _call_chat)
     monkeypatch.setattr(
-        da,
-        "call_chat",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("member dispatched!")),
+        da, "send_message", lambda ch, txt: sent.update(ch=ch, txt=txt) or []
     )
-    da.handle_message(_msg(), set(), "KEY", "1", "42")
-    assert observed["n"] == 1  # recognised + logged, but data-only
+    da.handle_message(_msg(content="<@42> what is the price?"), set(), "KEY", "1", "42")
+    assert sent["txt"] == "member reply!"
+    assert seen["role"] == "member"  # asserted tier rides the turn (brain gate sees it)
+    assert observed["n"] == 0  # dispatched, not merely observed
+
+
+def test_handle_message_member_never_uses_governor_tier(monkeypatch):
+    """A member turn must assert 'member', never 'governor' -- else the brain
+    WRITE/ADMIN gate would grant it governor write power (privilege escalation)."""
+    seen = {}
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
+
+    def _call_chat(
+        message, session_id, public_key, author_role="governor", author_name=None
+    ):
+        seen["role"] = author_role
+        return "ok"
+
+    monkeypatch.setattr(da, "call_chat", _call_chat)
+    monkeypatch.setattr(da, "send_message", lambda ch, txt: [])
+    da.handle_message(_msg(content="<@42> hello"), set(), "KEY", "1", "42")
+    assert seen["role"] == "member"
+    assert seen["role"] != "governor"
 
 
 def test_handle_message_governor_dispatches_and_replies(monkeypatch):
