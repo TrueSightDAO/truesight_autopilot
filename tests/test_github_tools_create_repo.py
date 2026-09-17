@@ -23,6 +23,31 @@ def test_create_repo_accepts_blessed_pattern_name(monkeypatch):
     assert "pattern" not in out["reason"]
 
 
+def test_create_repo_member_family_cannot_be_public(monkeypatch):
+    """D6: a member-* repo may NEVER be created public (privacy hard gate)."""
+    monkeypatch.setattr(github_tools.settings, "github_pat", "test-ts-pat")
+    out = github_tools.create_repo(repo="member-workspace", private=False)
+    assert out["status"] == "error"
+    assert "private" in out["reason"].lower()
+    assert "D6" in out["reason"]
+
+
+def test_create_repo_member_private_guard_fires_before_pat(monkeypatch):
+    """The private guard is refusal-first: it fires even with no PAT set."""
+    monkeypatch.setattr(github_tools.settings, "github_pat", "")
+    out = github_tools.create_repo(repo="member-workspace", private=False)
+    assert out["status"] == "error"
+    assert "No PAT" not in out["reason"]
+
+
+def test_create_repo_member_family_private_allowed(monkeypatch):
+    """private=True passes the D6 guard and proceeds to the PAT check."""
+    monkeypatch.setattr(github_tools.settings, "github_pat", "")
+    out = github_tools.create_repo(repo="member-workspace", private=True)
+    assert out["status"] == "error"
+    assert "No PAT" in out["reason"]
+
+
 def test_repo_org_defaults_to_truesightdao():
     assert github_tools._repo_org("some_dao_repo") == "TrueSightDAO"
 

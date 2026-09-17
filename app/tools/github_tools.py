@@ -181,15 +181,30 @@ def create_repo(repo: str, private: bool = True, description: str = "") -> dict[
 
     Guardrail (default-allow model): ``repo`` must match a governor-blessed
     ``settings.create_repo_patterns`` glob (e.g. ``*-program``, ``cfr-*``,
-    ``member-*``,
-    ``*-site``). Writing an EXISTING repo is default-allow, but creating a NEW
-    one stays bounded so a hallucinated name cannot spin up arbitrary org
-    repos. Add a pattern to config.py / CREATE_REPO_PATTERNS to bless a new
-    naming family. See plans/SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md.
+    ``member-*``, ``*-site``). Writing an EXISTING repo is default-allow, but
+    creating a NEW one stays bounded so a hallucinated name cannot spin up
+    arbitrary org repos. Add a pattern to config.py / CREATE_REPO_PATTERNS to
+    bless a new naming family. See plans/SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md.
+
+    Additional privacy gate (D6): a name matching a private-only family
+    (``_PRIVATE_ONLY_CREATE_REPO_PATTERNS``, e.g. ``member-*``) is REFUSED if
+    ``private`` is False - member content must never be created public. See
+    agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md.
     """
     ok, reason = settings.create_repo_allowed(repo)
     if not ok:
         return {"status": "error", "reason": reason}
+
+    if not private and settings.create_repo_must_be_private(repo):
+        return {
+            "status": "error",
+            "reason": (
+                f"'{repo}' matches a private-only naming family and MUST be "
+                "created private (member material may not be ready for public "
+                "view). See agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md "
+                "decision D6."
+            ),
+        }
 
     org = _repo_org(repo)
     pat = _repo_pat(repo)

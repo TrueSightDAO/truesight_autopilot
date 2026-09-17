@@ -118,6 +118,12 @@ def test_create_repo_member_family_blessed():
     assert Settings().create_repo_allowed("workspace")[0] is False
 
 
+def test_create_repo_member_family_must_be_private():
+    s = Settings()
+    assert s.create_repo_must_be_private("member-workspace") is True
+    assert s.create_repo_must_be_private("agentic_ai_context") is False
+
+
 def test_create_repo_blank_name():
     assert Settings().create_repo_allowed("")[0] is False
 
