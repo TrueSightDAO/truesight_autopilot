@@ -315,6 +315,25 @@ class GitHubClient:
                 "message": f"Failed to mark PR #{pr_number} ready: {e}",
             }
 
+    def _repo_has_workflows(self, pr) -> bool:
+        """Best-effort: does the PR's repo define any GitHub Actions workflows?
+
+        Only used as a fallback when the Checks/Status API is unreadable (e.g. a
+        fine-grained PAT without checks:read on a private repo, which GitHub
+        answers with 403). Workflow presence is visible through the Contents API
+        with ordinary contents:read, so it lets us tell "no CI configured" (safe
+        to warn + merge, the ``no-ci`` path) apart from "CI exists but we cannot
+        read its result" (must still refuse). Conservative on error: return True
+        (assume CI exists) whenever we cannot tell.
+        """
+        try:
+            repo = pr.base.repo
+            items = repo.get_contents(".github/workflows")
+        except Exception as e:  # noqa: BLE001 - any failure -> assume CI exists
+            return getattr(e, "status", None) != 404
+        entries = items if isinstance(items, list) else [items]
+        return any(getattr(x, "name", "").endswith((".yml", ".yaml")) for x in entries)
+
     def _ci_status(self, pr) -> dict:
         """Check the PR's CI status via the Checks API + combined commit status.
 
@@ -331,6 +350,18 @@ class GitHubClient:
             combined = commit.get_combined_status()
             statuses = combined.statuses
         except Exception as e:  # pragma: no cover - API edge cases
+            # Checks/Status API unreachable (commonly a 403 from a token that
+            # lacks checks:read). If the repo defines no workflows at all there
+            # is genuinely no CI to gate on, so fall back to the no-ci path (the
+            # caller warns and proceeds) instead of blocking a merge on a token
+            # permission quirk. If workflows DO exist, keep refusing.
+            if not self._repo_has_workflows(pr):
+                logger.warning(
+                    "Checks API unavailable (%s) but repo has no workflows; "
+                    "treating as no-ci",
+                    e,
+                )
+                return {"green": False, "checks": [], "reason": "no-ci"}
             return {
                 "green": False,
                 "checks": [],
