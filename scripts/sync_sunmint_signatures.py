@@ -21,6 +21,13 @@ already public in the Telegram Chat Logs that back the DAO's public dapp. The bu
 to FAIL-CLOSED (email scan blocks publication); pass --allow-pii to publish as-is. The cron
 runs with --allow-pii per this decision.
 
+Hard-excluded markers (governor decision 2026-09-17, Gary, thread 30026): some event
+types carry financial PII that must NEVER reach the public cache, even under
+--allow-pii -- currently [PAYOUT REGISTRATION] (a raw PIX key bound to a public key).
+These are excluded UNCONDITIONALLY at build time (see HARD_EXCLUDED_MARKERS); the sink
+that consumes them writes a private, governor-only sheet instead. See
+plans/CRF_ANAPU_SUNMINT_COHORT_PROPOSAL.md section 11.4.
+
 Usage:
     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json python3 scripts/sync_sunmint_signatures.py --dry-run
     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json GITHUB_TOKEN=... python3 scripts/sync_sunmint_signatures.py --push
@@ -96,6 +103,14 @@ GROW = {
 }
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+# Markers whose signed payload carries PII that must NEVER reach the public cache,
+# even under --allow-pii. Unlike email-bearing events (which --allow-pii publishes
+# as-is per the 2026-09-02 governor decision), payout registrations carry a raw PIX
+# key -- a financial identifier bound to a named (minor) student. Governor decision
+# 2026-09-17 (Gary, thread 30026). See
+# plans/CRF_ANAPU_SUNMINT_COHORT_PROPOSAL.md section 11.4.
+HARD_EXCLUDED_MARKERS = {"[PAYOUT REGISTRATION]"}
 
 
 def _now_iso() -> str:
@@ -194,6 +209,20 @@ def build_signatures(
             continue
         if msg_id in events:
             dupes.append(msg_id)
+            continue
+        if parsed["marker"] in HARD_EXCLUDED_MARKERS:
+            # PII that must never reach a public surface -- UNCONDITIONAL, ahead of
+            # the --allow-pii bypass further down.
+            excluded_pii[msg_id] = {
+                "event_type": parsed["marker"],
+                "telegram_message_id": msg_id,
+                "reason": (
+                    "hard-excluded marker (PII must never reach a public cache)"
+                    " -- governor decision 2026-09-17 (Gary, thread 30026)"
+                ),
+                "public_key": parsed["public_key"],
+                "signature": parsed["signature"],
+            }
             continue
         source_tabs = []
         if msg_id in planting_by_msg:
@@ -442,6 +471,10 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     folders: dict[str, dict] = {}
     events = signatures.get("events", {})
     for msg_id, ev in events.items():
+        if ev.get("event_type", "") in HARD_EXCLUDED_MARKERS:
+            # Defense-in-depth: never bucket a hard-excluded marker into a public
+            # folder (see HARD_EXCLUDED_MARKERS).
+            continue
         folder = _folder_for(ev.get("event_type", ""))
         folders.setdefault(folder, {})[msg_id] = ev
 
