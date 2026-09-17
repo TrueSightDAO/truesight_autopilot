@@ -345,3 +345,88 @@ def test_handle_message_governor_acks_reaction(monkeypatch):
     da.handle_message(_msg(content="<@42> do a thing"), {"999"}, "KEY", "1", "42")
     assert acked["ch"] == "555"
     assert acked["mid"] == "msg1"
+
+
+# ── trusted-bot carve-out (plan DISCORD_ENVOY_GOVERNOR_PARITY, PR1) ──────────
+
+
+def test_handle_message_untrusted_bot_still_dropped(monkeypatch):
+    """(a) Regression guard: a bot NOT on the trusted list is dropped, exactly
+    as before this plan -- the security invariant is intact."""
+    called = {"sent": False, "observed": 0}
+    monkeypatch.setattr(da.settings, "discord_trusted_bot_ids", "111")
+    monkeypatch.setattr(da, "send_message", lambda *a, **k: called.update(sent=True))
+    monkeypatch.setattr(
+        da,
+        "log_observed_message",
+        lambda *a, **k: called.update(observed=called["observed"] + 1),
+    )
+    da.handle_message(_msg(user_id="222", bot=True), {"222"}, "KEY", "1", "42")
+    assert called["sent"] is False
+    assert called["observed"] == 0  # never even reached role resolution
+
+
+def test_handle_message_trusted_bot_not_sentinel_observed_only(monkeypatch):
+    """(b) A TRUSTED bot that does NOT resolve to governor/sentinel proceeds to
+    the context-only (observed) branch -- still no dispatch/reply. The trusted
+    list grants only 'don't drop', never authority."""
+    seen = {"sent": False, "observed": 0, "dispatched": False}
+    monkeypatch.setattr(da.settings, "discord_trusted_bot_ids", "111")
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "member")
+    monkeypatch.setattr(
+        da,
+        "log_observed_message",
+        lambda *a, **k: seen.update(observed=seen["observed"] + 1),
+    )
+    monkeypatch.setattr(
+        da,
+        "call_chat_with_progress",
+        lambda *a, **k: seen.update(dispatched=True) or ("x", False),
+    )
+    monkeypatch.setattr(da, "send_message", lambda *a, **k: seen.update(sent=True))
+    da.handle_message(
+        _msg(user_id="111", content="hi", bot=True), set(), "KEY", "1", "42"
+    )
+    assert seen["observed"] == 1
+    assert seen["dispatched"] is False
+    assert seen["sent"] is False
+
+
+def test_handle_message_trusted_bot_sentinel_dispatches(monkeypatch):
+    """(c) A trusted bot that DOES resolve to sentinel is dispatched -- the
+    target end state (Envoy supervising on Discord)."""
+    seen = {}
+    monkeypatch.setattr(da.settings, "discord_trusted_bot_ids", "111")
+    monkeypatch.setattr(da, "author_role", lambda uid, allowed: "sentinel")
+
+    def _fake_progress(channel_id, message, session_id, public_key, role, name):
+        seen.update(role=role, name=name)
+        return ("sentinel reply", False)
+
+    monkeypatch.setattr(da, "call_chat_with_progress", _fake_progress)
+    monkeypatch.setattr(da, "send_message", lambda ch, txt: seen.update(txt=txt) or [])
+    da.handle_message(
+        _msg(user_id="111", content="hello", bot=True), set(), "KEY", "1", "42"
+    )
+    assert seen["role"] == "sentinel"
+    assert seen["txt"] == "sentinel reply"
+
+
+def test_handle_message_own_bot_id_never_trusted(monkeypatch):
+    """(d) Our OWN bot id is never trusted, even if erroneously added to the
+    trusted list -- defense in depth against a bot-to-bot self-echo loop."""
+    called = {"sent": False}
+    monkeypatch.setattr(da.settings, "discord_trusted_bot_ids", "42,111")
+    monkeypatch.setattr(
+        da, "author_role", lambda uid, allowed: "sentinel"
+    )  # even if it *would* resolve
+    monkeypatch.setattr(da, "send_message", lambda *a, **k: called.update(sent=True))
+    monkeypatch.setattr(
+        da,
+        "call_chat_with_progress",
+        lambda *a, **k: called.update(sent=True) or ("x", False),
+    )
+    da.handle_message(
+        _msg(user_id="42", content="self", bot=True), set(), "KEY", "1", "42"
+    )
+    assert called["sent"] is False
