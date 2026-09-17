@@ -88,6 +88,14 @@ _DEFAULT_CREATE_REPO_PATTERNS: list[str] = [
     "member-*",
 ]
 
+# Naming families whose repos MUST ALWAYS be private - creating one public is
+# refused by github_tools.create_repo. Member-tier material may contain content
+# not ready for public view. See
+# agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md (decision D6).
+_PRIVATE_ONLY_CREATE_REPO_PATTERNS: list[str] = [
+    "member-*",
+]
+
 
 class Settings(BaseSettings):
     # populate_by_name lets ``Settings(allowed_repos=[...])`` (field name) keep
@@ -437,6 +445,19 @@ class Settings(BaseSettings):
             f"'{repo}' does not match any blessed create_repo pattern "
             f"({', '.join(self.create_repo_patterns)}). A governor must add a "
             "pattern to settings.create_repo_patterns (or CREATE_REPO_PATTERNS)."
+        )
+
+    def create_repo_must_be_private(self, repo: str) -> bool:
+        """True if ``repo`` matches a family that MUST be created PRIVATE.
+
+        Member-tier material may hold content not ready for public view, so the
+        whole ``member-*`` family is private-only; ``github_tools.create_repo``
+        refuses to create such a repo public. See
+        agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md (decision D6).
+        """
+        return any(
+            fnmatch.fnmatchcase(repo, pat)
+            for pat in _PRIVATE_ONLY_CREATE_REPO_PATTERNS
         )
 
     def repo_upload_allowed(self, repo: str) -> tuple[bool, str]:
