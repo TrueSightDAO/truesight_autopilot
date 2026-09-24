@@ -324,7 +324,11 @@ class Settings(BaseSettings):
     )
 
     @field_validator(
-        "allowed_repos", "strict_repos", "create_repo_patterns", mode="before"
+        "allowed_repos",
+        "strict_repos",
+        "create_repo_patterns",
+        "prod_sync_generated_globs",
+        mode="before",
     )
     @classmethod
     def _parse_repo_lists(cls, value: object) -> list[str]:
@@ -456,8 +460,7 @@ class Settings(BaseSettings):
         agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md (decision D6).
         """
         return any(
-            fnmatch.fnmatchcase(repo, pat)
-            for pat in _PRIVATE_ONLY_CREATE_REPO_PATTERNS
+            fnmatch.fnmatchcase(repo, pat) for pat in _PRIVATE_ONLY_CREATE_REPO_PATTERNS
         )
 
     def repo_upload_allowed(self, repo: str) -> tuple[bool, str]:
@@ -515,6 +518,19 @@ class Settings(BaseSettings):
         "dapp_prod": "dapp_beta",
         "sunmint_prod": "sunmint_beta",
     }
+    # AUTO-GENERATED files that both a beta repo and its prod fork regenerate on
+    # a schedule, so their independent bot commits diverge and block
+    # ``sync_beta_to_prod``'s merge-upstream with a 409 even when the reviewed
+    # change itself merges cleanly. On such a 409 the tool takes BETA's copy of
+    # every path matching one of these globs, then retries the sync ONCE.
+    # Nothing outside this list is ever auto-touched. Override with
+    # PROD_SYNC_GENERATED_GLOBS (comma/space separated). See
+    # tests/test_sync_beta_to_prod_tool.py.
+    prod_sync_generated_globs: list[str] = Field(
+        default_factory=lambda: ["stats/*.json"],
+        validation_alias="PROD_SYNC_GENERATED_GLOBS",
+        repr=False,
+    )
 
     # Gmail
     gmail_token_json: str = os.getenv("GMAIL_TOKEN_JSON", "")
