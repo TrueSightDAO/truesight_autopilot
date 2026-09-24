@@ -1488,3 +1488,154 @@ def test_progress_gate_instruction_with_trigger_word_not_dropped(monkeypatch):
 
     assert "ran" in calls  # queued + executed, NOT dropped as a status ping
     assert sent and sent[0].startswith("\U0001f4e5")  # queue ack, not the snapshot
+
+
+# ── reply-to context: surface WHICH prior message a reply targets ──────────
+# Regression (live 2026-09-24, "second occurrence"): Telegram hands the bot the
+# replied-to message's full content in `reply_to_message`, but the adapter read
+# it only for the mention-gate bypass + a topic-creation probe. Replying to a
+# specific photo/earlier message therefore lost the relationship before it
+# reached the LLM. Fix: a `[Replying to ...]` bracketed prefix (same convention
+# as `[GOVERNOR_IDENTITY: ...]` / `[Telegram context: ...]`).
+
+
+def test_reply_context_prefix_none_when_not_a_reply():
+    # No reply_to_message at all -> empty prefix (the overwhelmingly common case).
+    assert ta._reply_context_prefix({"text": "hello"}) == ""
+    assert ta._reply_context_prefix({}) == ""
+
+
+def test_reply_context_prefix_text_reply():
+    p = ta._reply_context_prefix(
+        {
+            "text": "what about this one?",
+            "reply_to_message": {
+                "from": {"first_name": "Gary", "username": "garyjob"},
+                "date": 1758700000,
+                "text": "here is the plan we agreed on",
+            },
+        }
+    )
+    assert p.startswith("[Replying to ")
+    assert "Gary (@garyjob)" in p
+    assert "here is the plan we agreed on" in p
+    assert "UTC" in p and "sent " in p
+
+
+def test_reply_context_prefix_captioned_photo():
+    p = ta._reply_context_prefix(
+        {
+            "text": "scan this bag",
+            "reply_to_message": {
+                "from": {"first_name": "Kirsten"},
+                "caption": "the cacao bag label",
+            },
+        }
+    )
+    assert p.startswith("[Replying to ")
+    assert "Kirsten" in p
+    assert "the cacao bag label" in p
+
+
+def test_reply_context_prefix_uncaptioned_photo_says_reply_happened():
+    p = ta._reply_context_prefix(
+        {
+            "text": "how many of these?",
+            "reply_to_message": {
+                "from": {"first_name": "Kirsten"},
+                "photo": [{"file_id": "small"}, {"file_id": "big"}],
+            },
+        }
+    )
+    assert p.startswith("[Replying to ")
+    assert "uncaptioned photo" in p
+    assert "Kirsten" in p
+    # content genuinely unavailable -> the prefix must be honest about that
+    assert "not available" in p
+
+
+def test_reply_context_prefix_document():
+    p = ta._reply_context_prefix(
+        {
+            "text": "check section 4",
+            "reply_to_message": {
+                "from": {"username": "someuser"},
+                "document": {"file_id": "doc1", "file_name": "x.pdf"},
+            },
+        }
+    )
+    assert "uncaptioned document" in p
+    assert "someuser" in p
+
+
+def test_reply_context_prefix_truncates_long_quoted_text():
+    long_text = "y" * 2000
+    p = ta._reply_context_prefix(
+        {"reply_to_message": {"from": {"first_name": "Gary"}, "text": long_text}}
+    )
+    assert "..." in p and p.rstrip().endswith("]")
+    assert len(p) < 800  # a quote, not the whole prior message
+
+
+def _capture_dispatch(monkeypatch, msg):
+    captured = {}
+    monkeypatch.setattr(
+        ta,
+        "call_chat_with_progress",
+        lambda chat_id, thread_id, message, session_id, public_key, **kwargs: (
+            captured.update(message=message) or ("", True)
+        ),
+    )
+    ta.handle_message(msg, allowed={111}, public_key="PK")
+    return captured.get("message")
+
+
+def test_handle_message_no_reply_dispatch_text_byte_identical(monkeypatch):
+    """The no-reply regression guard: without a reply_to_message the dispatch
+    text must be byte-identical to the pre-fix output (no prefix, no stray
+    whitespace), so behavior is unchanged for non-replies."""
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "")
+    message = _capture_dispatch(
+        monkeypatch, _msg(user_id=111, chat_id=555, text="just a normal message")
+    )
+    assert message == "[Telegram context: chat_id=555] just a normal message"
+
+
+def test_handle_message_no_reply_topic_dispatch_text_byte_identical(monkeypatch):
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "")
+    message = _capture_dispatch(
+        monkeypatch,
+        _msg(user_id=111, chat_id=555, text="hi", thread_id=7, is_topic=True),
+    )
+    assert message == "[Telegram context: chat_id=555, thread_id=7] hi"
+
+
+def test_handle_message_reply_to_photo_surfaces_context(monkeypatch):
+    """Live-reported case: a governor replies to a specific PHOTO — the reply
+    relationship must reach the LLM in the dispatched text."""
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "")
+    msg = _msg(user_id=111, chat_id=555, text="which bag is this?")
+    msg["reply_to_message"] = {
+        "from": {"first_name": "Gary", "username": "garyjob"},
+        "photo": [{"file_id": "big"}],
+        "date": 1758700000,
+    }
+    message = _capture_dispatch(monkeypatch, msg)
+    assert "[Replying to " in message
+    assert "uncaptioned photo" in message
+    assert "[Telegram context: chat_id=555] " in message
+    # the reply prefix sits immediately before the user's own text
+    assert message.endswith("which bag is this?")
+    assert message.index("[Telegram context") < message.index("[Replying to")
+
+
+def test_handle_message_reply_to_text_surfaces_quoted_text(monkeypatch):
+    monkeypatch.setattr(ta, "_handoff_prefix", lambda thread_id, text="": "")
+    msg = _msg(user_id=111, chat_id=555, text="yes do that")
+    msg["reply_to_message"] = {
+        "from": {"first_name": "Gary", "username": "garyjob"},
+        "text": "should I merge PR #500?",
+    }
+    message = _capture_dispatch(monkeypatch, msg)
+    assert "should I merge PR #500?" in message
+    assert "yes do that" in message

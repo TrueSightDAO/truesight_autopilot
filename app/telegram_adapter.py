@@ -623,6 +623,92 @@ def _bot_was_mentioned(msg: dict[str, Any]) -> bool:
     return False
 
 
+def _format_reply_time(ts: Any) -> str:
+    """Format a Telegram unix `date` as a stable UTC string, or '' when absent."""
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return ""
+    if ts_int <= 0:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ts_int))
+
+
+def _describe_media(reply_to: dict[str, Any]) -> str:
+    """Name the kind of media in a replied-to message that carries no text."""
+    for key, label in (
+        ("photo", "photo"),
+        ("video", "video"),
+        ("video_note", "video message"),
+        ("animation", "GIF"),
+        ("voice", "voice message"),
+        ("audio", "audio file"),
+        ("document", "document"),
+        ("sticker", "sticker"),
+        ("poll", "poll"),
+        ("location", "location"),
+        ("venue", "location"),
+        ("contact", "contact card"),
+    ):
+        if reply_to.get(key):
+            return label
+    return "message"
+
+
+def _reply_context_prefix(msg: dict[str, Any]) -> str:
+    """Build a ``[Replying to ...]`` bracketed prefix from a message's
+    ``reply_to_message``, so the LLM knows WHICH prior message the governor is
+    replying to.
+
+    Telegram hands the bot the replied-to message's full content in
+    ``reply_to_message``, but the adapter never looked at it beyond two narrow
+    checks (the mention-gate bypass and a topic-creation probe), so replying to
+    a specific photo or earlier message silently lost the relationship before it
+    reached the LLM (found live 2026-09-24, second occurrence). This follows the
+    same established convention as ``[GOVERNOR_IDENTITY: ...]`` and
+    ``[Telegram context: ...]`` — a bracketed prefix prepended to the dispatched
+    text.
+
+    Returns "" when the message is not a reply (the overwhelmingly common case),
+    so ``dispatch_text`` stays byte-identical to before for non-replies.
+
+    Scope note: for a reply to an UNCAPTIONED photo/document there is no text to
+    surface — we only say that a reply to such a media message happened, from
+    whom and when, so the model can ask a clarifying question or go look it up.
+    Re-fetching the media and passing it into the LLM (vision) is a separate,
+    bigger feature; no image-passing capability exists in the current LLM call
+    path.
+    """
+    reply_to = msg.get("reply_to_message") or {}
+    if not reply_to:
+        return ""
+
+    sender = reply_to.get("from") or {}
+    name = (
+        " ".join(
+            p for p in (sender.get("first_name"), sender.get("last_name")) if p
+        ).strip()
+        or sender.get("username")
+        or "someone"
+    )
+    username = sender.get("username")
+    who = f"{name} (@{username})" if username and name != username else name
+    when = _format_reply_time(reply_to.get("date"))
+    when_bit = f", sent {when}" if when else ""
+
+    content = (reply_to.get("text") or reply_to.get("caption") or "").strip()
+    if content:
+        snippet = content if len(content) <= 500 else content[:497] + "..."
+        body = f'a message from {who}{when_bit}: "{snippet}"'
+    else:
+        kind = _describe_media(reply_to)
+        body = (
+            f"an uncaptioned {kind} from {who}{when_bit} "
+            f"(its content is not available to you here)"
+        )
+    return f"[Replying to {body} — the user is replying to THIS specific message.] "
+
+
 def _get_member_count(chat_id: int) -> int | None:
     now = time.time()
     cached = _member_count_cache.get(chat_id)
@@ -2234,6 +2320,15 @@ def handle_message(
             + " [System note: the user sent this as a VOICE message via the Telegram bot. Your text reply is automatically synthesized into a voice note and sent back, so answer naturally for speech and keep it concise. The user is on Telegram, NOT the DApp web chat -- do not claim otherwise. URLs are delivered separately as text, so do not read URLs aloud.]"
         )
     dispatch_text = _handoff_prefix(thread_id, dispatch_text) + dispatch_text
+
+    # Prepend the reply relationship (when this message is a reply) so a reply
+    # to a specific prior message — e.g. a governor replying to one photo out of
+    # many — is not silently dropped before it reaches the LLM. No-op (byte
+    # identical dispatch_text) for the overwhelming majority of non-reply
+    # messages.
+    reply_ctx = _reply_context_prefix(msg)
+    if reply_ctx:
+        dispatch_text = reply_ctx + dispatch_text
 
     # Prepend Telegram context so the LLM can reference chat_id and thread_id
     if thread_id:
