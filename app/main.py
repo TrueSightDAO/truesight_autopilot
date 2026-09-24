@@ -2134,14 +2134,28 @@ def _run_tool_sync(
                     }
                 )
 
+        # Some events legitimately operate on a QR that is NOT freshly MINTED:
+        # their *precondition* is a later status. [TREE PLANTING LINK EVENT]
+        # requires the QR to be SOLD (the handler rejects anything else), so the
+        # MINTED-only duplicate guard below would otherwise block every link.
+        # Map event -> statuses that are a valid precondition (NOT a duplicate).
+        # Events absent from this map keep the original MINTED-only rule.
+        _QR_STATUS_PRECONDITION_EVENTS = {
+            "TREE PLANTING LINK EVENT": {"SOLD"},
+        }
+
         qr = attributes.get("QR Code", "")
         # For SALES EVENT, also check the Item field for QR duplicate guard
         if not qr and event_name.upper() == "SALES EVENT":
             qr = _sales_item
         recipient = attributes.get("Recipient Name", "")
+        _precond_statuses = _QR_STATUS_PRECONDITION_EVENTS.get(event_name.upper())
 
-        # 1. Check session history for prior submission
-        if qr and history:
+        # 1. Check session history for prior submission.
+        # Skipped for precondition events (e.g. tree-planting links): those are
+        # idempotent server-side via the precondition checked in step 2, and a
+        # legitimate retry after an earlier failed attempt must not be blocked.
+        if qr and history and _precond_statuses is None:
             for msg in history:
                 content = str(msg.get("content", ""))
                 if (
@@ -2166,7 +2180,14 @@ def _run_tool_sync(
                 if ledger_state.get("status") == "success":
                     current_status = ledger_state.get("qr_status", "").upper()
                     current_manager = ledger_state.get("manager_name", "")
-                    if current_status not in ("MINTED", ""):
+                    if _precond_statuses is not None:
+                        # Event whose precondition is a specific status (a
+                        # tree-planting link needs SOLD). Any other status means
+                        # it is not (yet) eligible, or already processed.
+                        _status_ok = current_status in _precond_statuses
+                    else:
+                        _status_ok = current_status in ("MINTED", "")
+                    if not _status_ok:
                         return json.dumps(
                             {
                                 "status": "duplicate",
