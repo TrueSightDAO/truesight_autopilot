@@ -3081,23 +3081,27 @@ def _compute_advance_signal(
         if settings.goal_loop_enabled and session_id:
             from . import thread_goal
 
-            goal = thread_goal.current_goal(session_id)
-            if goal is not None and goal.status == thread_goal.GOAL_OPEN:
-                # Count this turn FIRST, then decide -- turns/last_progress_ts are
-                # what drive the ceiling + stall checks inside should_continue().
+            prev_goal = thread_goal.current_goal(session_id)
+            if prev_goal is not None and prev_goal.status == thread_goal.GOAL_OPEN:
+                # Count this turn FIRST, then decide -- the post-turn `turns` is
+                # what drives the ceiling check inside should_continue(). Keep the
+                # PRE-turn snapshot too: a progress turn just bumped
+                # last_progress_ts to now, so the A3 wall-clock stall must measure
+                # from before the bump (else it could never fire).
                 goal = (
                     thread_goal.record_turn(session_id, made_progress=made_progress)
-                    or goal
+                    or prev_goal
                 )
                 pending = f"{goal.goal_text} {goal.done_criteria}".strip()
-                # Pass the ceiling EXPLICITLY (read at call time, not the
-                # function's baked-in default) so it is live-tunable -- A3 swaps
-                # this for the CHAT_MAX_GOAL_TURNS config value.
+                # Ceiling + stall read at call time (not baked-in defaults) so both
+                # are live-tunable via CHAT_MAX_GOAL_TURNS / GOAL_STALL_SECONDS.
                 dec = thread_goal.should_continue(
                     goal,
                     made_progress=made_progress,
                     pending_text=pending,
-                    max_turns=thread_goal.DEFAULT_MAX_GOAL_TURNS,
+                    max_turns=settings.chat_max_goal_turns,
+                    stall_seconds=settings.goal_stall_seconds,
+                    prev_progress_ts=prev_goal.last_progress_ts,
                 )
                 if dec.decision == "continue":
                     logger.info(

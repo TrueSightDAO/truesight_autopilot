@@ -174,6 +174,19 @@ class Settings(BaseSettings):
     # identical; flipped only after a soak (the plan's A2 gate).
     goal_loop_enabled: bool = Field(default=False, validation_alias="GOAL_LOOP_ENABLED")
 
+    # Goal-loop hard ceiling (Track A / unit A3): max TOTAL turns a single
+    # thread goal may consume before the loop force-stops. This is the
+    # independent guard the roadmap calls out (§4 rule 6 / §8 risk 1) so a
+    # goal-driven loop cannot run away. Mirrors app.thread_goal.DEFAULT_MAX_GOAL_TURNS.
+    chat_max_goal_turns: int = Field(default=40, validation_alias="CHAT_MAX_GOAL_TURNS")
+    # Goal-loop stall detector (Track A / unit A3): force-stop when the goal has
+    # made NO progress for this many seconds (wall clock since the last
+    # made-progress turn). 0 (default) DISABLES it => behavior is unchanged
+    # until a governor opts in with a positive value.
+    goal_stall_seconds: float = Field(
+        default=0.0, validation_alias="GOAL_STALL_SECONDS"
+    )
+
     # Catalog-driven field normalizer. When ON, _normalize_submission_labels uses
     # the live events catalog's canonical_labels to map LLM-supplied attribute keys
     # to canonical labels via exact/case-insensitive/space-underscore-hyphen matching,
