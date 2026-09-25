@@ -1639,3 +1639,65 @@ def test_handle_message_reply_to_text_surfaces_quoted_text(monkeypatch):
     message = _capture_dispatch(monkeypatch, msg)
     assert "should I merge PR #500?" in message
     assert "yes do that" in message
+
+
+def test_callback_resume_option_tap_dispatches_synthesized_go(monkeypatch):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(rr, "lookup_options", lambda tok: ["Run unit 2", "Run unit 3"])
+    dispatched: dict = {}
+    monkeypatch.setattr(
+        ta,
+        "_dispatch_synthesized_go",
+        lambda chat_id, thread_id, message_id, go_text, origin: dispatched.update(
+            go_text=go_text, origin=origin, thread_id=thread_id
+        ),
+    )
+    monkeypatch.setattr(ta, "answer_callback", lambda *a, **k: None)
+    monkeypatch.setattr(ta, "edit_message_text", lambda *a, **k: True)
+    cb = {
+        "id": "cb1",
+        "from": {"id": 9},
+        "data": "ro:TOK:1",
+        "message": {
+            "message_id": 55,
+            "is_topic_message": True,
+            "message_thread_id": 36518,
+            "chat": {"id": -1003919341801},
+        },
+    }
+    ta.handle_callback_query(cb, {9})
+    assert dispatched["origin"] == "button"
+    assert dispatched["thread_id"] == 36518
+    assert "Run unit 3" in dispatched["go_text"]
+    assert "go for it" in dispatched["go_text"]
+
+
+def test_callback_resume_option_expired_menu(monkeypatch):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(rr, "lookup_options", lambda tok: None)
+    edits: list = []
+    answers: list = []
+    monkeypatch.setattr(
+        ta, "edit_message_text", lambda c, m, t, th=None: edits.append(t)
+    )
+    monkeypatch.setattr(ta, "answer_callback", lambda cid, t="": answers.append(t))
+    monkeypatch.setattr(
+        ta,
+        "_dispatch_synthesized_go",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not dispatch")),
+    )
+    cb = {
+        "id": "cb2",
+        "from": {"id": 9},
+        "data": "ro:GONE:0",
+        "message": {
+            "message_id": 56,
+            "is_topic_message": True,
+            "message_thread_id": 36518,
+            "chat": {"id": -1003919341801},
+        },
+    }
+    ta.handle_callback_query(cb, {9})
+    assert any("expired" in e.lower() for e in edits)

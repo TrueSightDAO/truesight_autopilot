@@ -122,3 +122,85 @@ def lookup(message_id: int | str) -> dict | None:
     except Exception as e:  # never block a turn
         logger.debug("resume_registry lookup failed: %s", e)
         return None
+
+
+def mark_options(key: str, thread_id: int | str, options: list[str]) -> None:
+    """Register an option set under an opaque ``key`` (multiple-choice buttons).
+
+    Used by ``post_to_telegram_topic(options=[...])``: the caller generates a
+    short token, embeds it in each button's ``callback_data``
+    (``ro:<token>:<index>``), and registers the labels here. A button tap
+    later recovers the labels via :func:`lookup_options` using only the token
+    (Telegram caps callback_data at 64 bytes, so labels must live server-side).
+
+    ``thread_id`` is recorded for context/introspection. Idempotent;
+    TTL-bounded like every other entry.
+    """
+    try:
+        k = str(key).strip()
+        tid = str(thread_id).strip()
+        opts = [str(o).strip() for o in (options or []) if str(o).strip()]
+        if not k or not tid or not opts:
+            return
+        with _lock:
+            data = _load()
+            _prune(data)
+            entry = data.get(k)
+            if not isinstance(entry, dict):
+                entry = {"text": "", "ts": time.time()}
+            entry["thread_id"] = tid
+            entry.setdefault("text", "")
+            entry["options"] = opts
+            entry["ts"] = time.time()
+            data[k] = entry
+            _save(data)
+            logger.info("marked resume options: key %s -> %d option(s)", k, len(opts))
+    except Exception as e:  # never block a turn
+        logger.debug("mark_options failed: %s", e)
+
+
+def lookup_options(key: str) -> list[str] | None:
+    """Return the option labels registered under ``key``, or None.
+
+    Consumption semantics (mirrors :func:`lookup`): an option set is
+    single-use -- the entry is popped once its labels are read, so the same
+    button menu cannot be answered twice. A plain resume-awaiting message
+    (no ``options``) is left untouched and returns None.
+    """
+    try:
+        k = str(key).strip()
+        with _lock:
+            data = _load()
+            _prune(data)
+            entry = data.get(k)
+            if not isinstance(entry, dict):
+                return None
+            opts = entry.get("options")
+            if not isinstance(opts, list) or not opts:
+                return None
+            data.pop(k, None)  # consume
+            _save(data)
+            return [str(o) for o in opts]
+    except Exception as e:  # never block a turn
+        logger.debug("resume_registry lookup_options failed: %s", e)
+        return None
+
+
+def peek_options(key: str) -> list[str] | None:
+    """Non-consuming read of an option set (used for token-collision checks).
+
+    Unlike :func:`lookup_options` this leaves the entry in place, so it is safe
+    to call when generating a new menu token.
+    """
+    try:
+        with _lock:
+            data = _load()
+            _prune(data)
+            entry = data.get(str(key).strip())
+            opts = entry.get("options") if isinstance(entry, dict) else None
+            if isinstance(opts, list) and opts:
+                return [str(o) for o in opts]
+            return None
+    except Exception as e:  # never block a turn
+        logger.debug("peek_options failed: %s", e)
+        return None
