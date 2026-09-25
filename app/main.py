@@ -3072,6 +3072,50 @@ def _compute_advance_signal(
                 "next_unit": dec.next_unit,
                 "plan": plan_file,
             }
+        # Goal-loop (Track A / A2): a PLAN-LESS thread may still auto-continue if
+        # it has an OPEN thread goal (set via the ``set_thread_goal`` tool) and the
+        # flag is on. Requires AUTO_ADVANCE -- the master switch -- already checked
+        # above, so with GOAL_LOOP_ENABLED off this block is never reached and
+        # behavior is byte-identical. Fail-closed: any error here is swallowed by
+        # the outer ``except`` -> None (no signal).
+        if settings.goal_loop_enabled and session_id:
+            from . import thread_goal
+
+            goal = thread_goal.current_goal(session_id)
+            if goal is not None and goal.status == thread_goal.GOAL_OPEN:
+                # Count this turn FIRST, then decide -- turns/last_progress_ts are
+                # what drive the ceiling + stall checks inside should_continue().
+                goal = (
+                    thread_goal.record_turn(session_id, made_progress=made_progress)
+                    or goal
+                )
+                pending = f"{goal.goal_text} {goal.done_criteria}".strip()
+                # Pass the ceiling EXPLICITLY (read at call time, not the
+                # function's baked-in default) so it is live-tunable -- A3 swaps
+                # this for the CHAT_MAX_GOAL_TURNS config value.
+                dec = thread_goal.should_continue(
+                    goal,
+                    made_progress=made_progress,
+                    pending_text=pending,
+                    max_turns=thread_goal.DEFAULT_MAX_GOAL_TURNS,
+                )
+                if dec.decision == "continue":
+                    logger.info(
+                        "goal-loop: session=%s continue goal=%r turns=%d",
+                        session_id,
+                        goal.goal_text,
+                        goal.turns,
+                    )
+                    return {
+                        "decision": "auto",
+                        "gate_reason": None,
+                        "next_unit": goal.goal_text or "the goal",
+                        "plan": None,
+                        "goal": True,
+                    }
+                # stop / done -> fall through to the plan-less None (single turn).
+                # (A completed goal needs no signal: the tool call already told
+                # the model it was done.)
         # NO plan-scoped fallback: a thread with no plan file gets no auto signal,
         # even if it opened a PR. Auto-advance is a plan-following behavior; without
         # a plan there is no safe "next unit" (cross-thread bleed fix, 2026-08-21).
