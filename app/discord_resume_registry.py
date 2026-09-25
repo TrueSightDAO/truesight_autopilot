@@ -143,3 +143,88 @@ def lookup(message_id: int | str) -> dict | None:
     except Exception as e:  # never block a turn
         logger.debug("lookup failed: %s", e)
         return None
+
+
+def mark_options(key: str, channel_id: int | str, options: list[str]) -> None:
+    """Register an option set under an opaque ``key`` (multiple-choice buttons).
+
+    Discord twin of ``app.resume_registry.mark_options``. Used by
+    ``post_to_discord_channel(options=[...])``: the caller generates a short
+    token, embeds it in each button's ``custom_id`` (``ro:<token>:<index>``),
+    and registers the labels here. A component tap later recovers the labels via
+    :func:`lookup_options` using only the token, so the button payload stays
+    tiny (Discord caps ``custom_id`` at 100 chars -- labels live server-side).
+
+    ``channel_id`` is recorded for context/introspection. Idempotent;
+    TTL-bounded like every other entry. NOTE: a key that is *also* a
+    resume-awaiting message id is left alone -- mark_options never clobbers the
+    ``{channel_id, text}`` resume fields an emoji-go would need.
+    """
+    try:
+        k = str(key).strip()
+        cid = str(channel_id).strip()
+        opts = [str(o).strip() for o in (options or []) if str(o).strip()]
+        if not k or not cid or not opts:
+            return
+        with _lock:
+            data = _load()
+            _prune(data)
+            entry = data.get(k)
+            if not isinstance(entry, dict):
+                entry = {"channel_id": cid, "text": "", "ts": time.time()}
+            entry["channel_id"] = cid
+            entry.setdefault("text", "")
+            entry["options"] = opts
+            entry["ts"] = time.time()
+            data[k] = entry
+            _save(data)
+            logger.info("marked resume options: key %s -> %d option(s)", k, len(opts))
+    except Exception as e:  # never block a turn
+        logger.debug("mark_options failed: %s", e)
+
+
+def lookup_options(key: str) -> list[str] | None:
+    """Return the option labels registered under ``key``, or None.
+
+    Consumption semantics (mirrors :func:`lookup`): an option set is
+    single-use -- the labels are read and the whole entry popped, so the same
+    button menu cannot be answered twice. A plain resume-awaiting message (no
+    ``options``) returns None and is left untouched.
+    """
+    try:
+        k = str(key).strip()
+        with _lock:
+            data = _load()
+            _prune(data)
+            entry = data.get(k)
+            if not isinstance(entry, dict):
+                return None
+            opts = entry.get("options")
+            if not isinstance(opts, list) or not opts:
+                return None
+            data.pop(k, None)  # consume
+            _save(data)
+            return [str(o) for o in opts]
+    except Exception as e:  # never block a turn
+        logger.debug("lookup_options failed: %s", e)
+        return None
+
+
+def peek_options(key: str) -> list[str] | None:
+    """Non-consuming read of an option set (used for token-collision checks).
+
+    Unlike :func:`lookup_options` this leaves the entry in place, so it is safe
+    to call when generating a new menu token.
+    """
+    try:
+        with _lock:
+            data = _load()
+            _prune(data)
+            entry = data.get(str(key).strip())
+            opts = entry.get("options") if isinstance(entry, dict) else None
+            if isinstance(opts, list) and opts:
+                return [str(o) for o in opts]
+            return None
+    except Exception as e:  # never block a turn
+        logger.debug("peek_options failed: %s", e)
+        return None
