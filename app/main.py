@@ -2940,15 +2940,23 @@ def _extract_plan_file(history: list[dict]) -> str | None:
     return plan
 
 
-def _thread_id_from_session_id(session_id: str | None) -> int | None:
-    """Extract the Telegram thread id from a ``tg:<chat>:<thread>`` session id.
+def _registry_id_from_session_id(session_id: str | None) -> int | None:
+    """The numeric id to resolve against HANDOFF_MANIFEST.md for this session.
 
-    Returns None for anything that is not a 3-part Telegram session key (e.g. a
-    Discord or CLI session), in which case callers fall back to history parsing."""
+    Telegram ``tg:<chat>:<thread>`` -> the topic's message_thread_id (matched
+    against the manifest's message_thread_id / Telegram-topic cells). Discord
+    ``dc:<guild>:<channel>`` -> the CHANNEL id (matched against the manifest's
+    "Discord channel id" cell), so a handoff coordinated in a Discord channel
+    also resolves REGISTRY-FIRST instead of falling back to the lossy history
+    literal -- the same prefix-loss / wrong-plan-bleed bugs #506 fixed for
+    Telegram, which a ``dc:`` session otherwise still hit.
+
+    Returns None for any other session key (CLI/other), so callers fall back to
+    history parsing."""
     if not session_id:
         return None
     parts = session_id.split(":")
-    if len(parts) >= 3 and parts[0] == "tg" and parts[2].isdigit():
+    if len(parts) >= 3 and parts[0] in ("tg", "dc") and parts[2].isdigit():
         return int(parts[2])
     return None
 
@@ -2958,7 +2966,8 @@ def _resolve_plan_for_signals(
 ) -> str | None:
     """Which handoff plan (if any) scopes this turn's auto-advance signal.
 
-    REGISTRY-FIRST: for a Telegram topic, resolve ``thread_id -> plan`` via
+    REGISTRY-FIRST: for a Telegram topic OR Discord channel, resolve the
+    session -> plan via
     ``HANDOFF_MANIFEST.md`` (single source of truth) through
     telegram_adapter._handoff_plan_for_thread. This is the durable fix for two
     failure modes of the old history-literal-only lookup:
@@ -2972,21 +2981,19 @@ def _resolve_plan_for_signals(
        wrong plan.
 
     Falls back to the history literal when the registry yields nothing (a
-    brand-new handoff not yet registered, a non-Telegram session, or a
+    brand-new handoff not yet registered, a CLI/other session, or a
     non-handoff topic). Fails CLOSED -- any error falls through to the literal
     path, never raising."""
-    thread_id = _thread_id_from_session_id(session_id)
-    if thread_id is not None:
+    lookup_id = _registry_id_from_session_id(session_id)
+    if lookup_id is not None:
         try:
             from .telegram_adapter import _handoff_plan_for_thread
 
-            plan = _handoff_plan_for_thread(thread_id)
+            plan = _handoff_plan_for_thread(lookup_id)
             if plan:
                 return plan
         except Exception:  # noqa: BLE001 -- enrichment must never break a turn
-            logger.debug(
-                "registry plan lookup failed for thread %s", thread_id, exc_info=True
-            )
+            logger.debug("registry plan lookup failed for %s", lookup_id, exc_info=True)
     return _extract_plan_file(history)
 
 
