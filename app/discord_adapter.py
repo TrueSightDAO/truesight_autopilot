@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 import urllib.parse
@@ -1600,6 +1601,233 @@ def _handle_message_safe(
 # ── Gateway ─────────────────────────────────────────────────────────────
 
 
+# ── Component (button) go-signal ──────────────────────────────────────────────
+# Discord twin of the Telegram inline-keyboard resume options. A tap arrives as
+# an INTERACTION_CREATE (type 3, MESSAGE_COMPONENT) that MUST be ACKed within 3s
+# or Discord shows "This interaction failed". A resume turn runs for minutes, so
+# the tap handler ACKs IMMEDIATELY (deferred, type 6) and only then dispatches the
+# go-signal on the SAME synthesized-message path a reaction uses.
+_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # no 0/O/1/I -- retype-safe
+
+
+def _new_option_token() -> str:
+    """A short, unambiguous ref token not currently live in the registry."""
+    for _ in range(8):
+        tok = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(4))
+        if not discord_resume_registry.peek_options(tok):
+            return tok
+    return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(6))
+
+
+def _build_components(token: str, options: list[str]) -> list[dict[str, Any]]:
+    """One action-row button per option (numbered), plus a non-decision 'Other'.
+
+    ``custom_id`` is ``ro:<token>:<index>`` (or ``ro:<token>:o`` for Other) --
+    labels live server-side in ``discord_resume_registry``, so the payload stays
+    tiny (Discord caps custom_id at 100 chars). Style 1 = primary, 2 = secondary.
+    """
+    buttons: list[dict[str, Any]] = []
+    for i, opt in enumerate(options):
+        label = opt if len(opt) <= 76 else opt[:75] + "\u2026"
+        buttons.append(
+            {
+                "type": 2,
+                "style": 1,
+                "label": f"{i + 1}. {label}",
+                "custom_id": f"ro:{token}:{i}",
+            }
+        )
+    buttons.append(
+        {
+            "type": 2,
+            "style": 2,
+            "label": "\u270d\ufe0f Other \u2014 just reply",
+            "custom_id": f"ro:{token}:o",
+        }
+    )
+    return [{"type": 1, "components": buttons}]
+
+
+def send_message_with_components(
+    channel_id: str | int, text: str, options: list[str]
+) -> dict[str, Any]:
+    """Post a message with a one-tap resume-option menu (multiple-choice buttons).
+
+    Mirrors ``app/tools/telegram_post.py`` + ``app/resume_registry``: labels are
+    stored server-side under an opaque token, the message is flagged
+    resume-awaiting (so an emoji-go still works), and the menu is single-fire.
+    """
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()]
+    if not opts:
+        ids = send_message(channel_id, text)
+        return {"status": "ok", "message_id": ids[0] if ids else None}
+    token = _new_option_token()
+    body = (
+        f"{text}\n\n\u21a9\ufe0f Reply [{token}-1]\u2026[{token}-{len(opts)}] "
+        f"\u2014 or pick one below:"
+    )
+    content = body[:_MESSAGE_LIMIT]
+    if settings.discord_dry_run:
+        logger.info(
+            "[DRY_RUN] would post %d-option menu to channel %s: %.120s",
+            len(opts),
+            channel_id,
+            content,
+        )
+        return {"status": "ok", "dry_run": True, "option_token": token, "options": opts}
+    result = _api(
+        "POST",
+        f"/channels/{channel_id}/messages",
+        {"content": content, "components": _build_components(token, opts)},
+    )
+    if not result or not result.get("id"):
+        return {"status": "error", "reason": f"Discord send failed: {result}"}
+    mid = result["id"]
+    discord_resume_registry.mark_options(token, channel_id, opts)
+    discord_resume_registry.mark_resume_awaiting(mid, channel_id, text)
+    return {"status": "ok", "message_id": mid, "option_token": token, "options": opts}
+
+
+def ack_interaction(interaction_id: str, token: str, content: str = "") -> None:
+    """ACK a component interaction BEFORE the 3s deadline.
+
+    Empty ``content`` -> deferred update (type 6): leave the original message
+    as-is and edit it later via :func:`_edit_via_interaction`. Honours dry-run.
+    """
+    if settings.discord_dry_run:
+        logger.info("[DRY_RUN] would ACK interaction %s", interaction_id)
+        return
+    body: dict[str, Any] = (
+        {"type": 7, "data": {"content": content}} if content else {"type": 6}
+    )
+    _api("POST", f"/interactions/{interaction_id}/{token}/callback", body)
+
+
+def _edit_via_interaction(application_id: str, token: str, content: str) -> None:
+    """Edit the interaction's original message via the interaction webhook.
+
+    Uses the application id from the interaction payload (for a bot that equals
+    the bot user id), never the raw bot token in the URL. Honours dry-run.
+    """
+    if settings.discord_dry_run:
+        logger.info("[DRY_RUN] would edit interaction message: %.120s", content)
+        return
+    if not application_id:
+        return
+    _api(
+        "PATCH",
+        f"/webhooks/{application_id}/{token}/messages/@original",
+        {"content": (content or "")[:_MESSAGE_LIMIT]},
+    )
+
+
+def handle_component_interaction(
+    data: dict[str, Any],
+    allowed: set[str],
+    public_key: str | None,
+    guild_id: str,
+    bot_id: str,
+) -> None:
+    """Process one INTERACTION_CREATE (MESSAGE_COMPONENT) -- a resume-option tap.
+
+    ACKs within the 3s deadline FIRST, then consumes the option set and
+    dispatches a synthesized go-signal through the same path a reaction uses.
+    """
+    if data.get("type") != 3:
+        return  # only MESSAGE_COMPONENT
+    interaction_id = str(data.get("id") or "")
+    itoken = str(data.get("token") or "")
+    app_id = str(data.get("application_id") or "")
+    member = data.get("member") or {}
+    user = (
+        data.get("user")
+        or (member.get("user") if isinstance(member, dict) else None)
+        or {}
+    )
+    user_id = str(user.get("id") or "")
+    channel_id = str(data.get("channel_id") or "")
+    message = data.get("message") or {}
+    message_id = str(message.get("id") or "")
+    custom_id = str((data.get("data") or {}).get("custom_id") or "")
+    if not interaction_id or not itoken or not custom_id.startswith("ro:"):
+        return
+    # ACK immediately (deferred) -- BEFORE any registry lookup or dispatch work.
+    ack_interaction(interaction_id, itoken)
+    if bot_id and user_id == str(bot_id):
+        return
+    parts = custom_id.split(":")
+    token = parts[1] if len(parts) > 1 else ""
+    sel = parts[2] if len(parts) > 2 else ""
+    options = discord_resume_registry.lookup_options(token) if token else None
+    if not options:
+        _edit_via_interaction(
+            app_id, itoken, "\u231b This menu has expired \u2014 please re-ask."
+        )
+        return
+    if sel in ("o", "other"):
+        _edit_via_interaction(
+            app_id, itoken, "\u270d\ufe0f Awaiting your typed reply\u2026"
+        )
+        return
+    try:
+        label = options[int(sel)]
+    except (ValueError, IndexError):
+        _edit_via_interaction(
+            app_id, itoken, "\u2753 Unknown option \u2014 please re-ask."
+        )
+        return
+    if not _reaction_reactor_authorized(user_id, allowed):
+        _edit_via_interaction(app_id, itoken, "\u26d4 Not authorized.")
+        return
+    _edit_via_interaction(app_id, itoken, f"\u2705 Picked: {label}")
+    if public_key is None:
+        send_message(
+            channel_id,
+            "\u26a0\ufe0f No governor identity configured \u2014 cannot resume.",
+        )
+        return
+    entry = discord_resume_registry.lookup(message_id)  # consume the resume flag
+    resume_channel = str((entry or {}).get("channel_id") or channel_id)
+    resume_text = ((entry or {}).get("text") or "").strip()
+    suffix = f" \u2014 original resume text: {resume_text[:200]}" if resume_text else ""
+    go_text = f'[resume-option: "{label}" from user {user_id}] go for it{suffix}'
+    logger.info(
+        "component go-signal: msg=%s channel=%s sel=%s -> dispatching turn",
+        message_id,
+        resume_channel,
+        sel,
+    )
+    synthetic = {
+        "id": message_id,
+        "channel_id": resume_channel,
+        "content": go_text,
+        "author": {"id": user_id, "username": user_id, "bot": False},
+    }
+    try:
+        handle_message(synthetic, allowed, public_key, guild_id, bot_id)
+    except Exception:  # noqa: BLE001 -- never let a tap crash the loop
+        logger.exception("component go-signal dispatch failed")
+        send_message(
+            resume_channel,
+            "\u26a0\ufe0f Failed to resume after your selection "
+            "\u2014 please retype the go-signal.",
+        )
+
+
+def _handle_component_safe(
+    data: dict[str, Any],
+    allowed: set[str],
+    public_key: str | None,
+    guild_id: str,
+    bot_id: str,
+) -> None:
+    """Wrap handle_component_interaction for background-thread dispatch."""
+    try:
+        handle_component_interaction(data, allowed, public_key, guild_id, bot_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("handle_component_interaction crashed")
+
+
 def _gateway_url() -> str:
     data = _api("GET", "/gateway/bot")
     if not data or not data.get("url"):
@@ -1621,6 +1849,7 @@ async def _gateway_once(
     bot_id: str,
     dispatch: Callable[[dict[str, Any]], None],
     dispatch_reaction: Callable[[dict[str, Any]], None] | None = None,
+    dispatch_interaction: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     import websockets
 
@@ -1652,6 +1881,8 @@ async def _gateway_once(
                     dispatch(event["d"])
                 elif etype == "MESSAGE_REACTION_ADD" and dispatch_reaction is not None:
                     dispatch_reaction(event["d"])
+                elif etype == "INTERACTION_CREATE" and dispatch_interaction is not None:
+                    dispatch_interaction(event["d"])
         finally:
             hb.cancel()
 
@@ -1663,13 +1894,21 @@ async def _gateway_loop(
     bot_id: str,
     dispatch: Callable[[dict[str, Any]], None],
     dispatch_reaction: Callable[[dict[str, Any]], None] | None = None,
+    dispatch_interaction: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     backoff = 5.0
     while True:
         try:
             url = _gateway_url()
             await _gateway_once(
-                url, allowed, public_key, guild_id, bot_id, dispatch, dispatch_reaction
+                url,
+                allowed,
+                public_key,
+                guild_id,
+                bot_id,
+                dispatch,
+                dispatch_reaction,
+                dispatch_interaction,
             )
             logger.warning("Discord gateway closed; reconnecting in %.0fs", backoff)
         except Exception as exc:  # noqa: BLE001 -- reconnect on any failure
@@ -1739,9 +1978,24 @@ def run() -> None:
                 _handle_reaction_safe, payload, allowed, public_key, gid, bot_id
             )
 
+        def dispatch_interaction(payload: dict[str, Any]) -> None:
+            # A component tap may omit guild_id; default to the configured guild.
+            gid = str(payload.get("guild_id") or guild_id)
+            if guild_id and gid != guild_id:
+                return  # ignore other guilds
+            executor.submit(
+                _handle_component_safe, payload, allowed, public_key, gid, bot_id
+            )
+
         asyncio.run(
             _gateway_loop(
-                allowed, public_key, guild_id, bot_id, dispatch, dispatch_reaction
+                allowed,
+                public_key,
+                guild_id,
+                bot_id,
+                dispatch,
+                dispatch_reaction,
+                dispatch_interaction,
             )
         )
 
