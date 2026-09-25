@@ -12,14 +12,21 @@ import app.main as m
 import app.telegram_adapter as ta
 
 
-def test_thread_id_from_session_id_telegram():
-    assert m._thread_id_from_session_id("tg:-1003919341801:35765") == 35765
+def test_registry_id_from_session_id_telegram():
+    assert m._registry_id_from_session_id("tg:-1003919341801:35765") == 35765
 
 
-def test_thread_id_from_session_id_non_telegram():
-    assert m._thread_id_from_session_id("dc:123:456") is None
-    assert m._thread_id_from_session_id(None) is None
-    assert m._thread_id_from_session_id("garbage") is None
+def test_registry_id_from_session_id_discord():
+    assert (
+        m._registry_id_from_session_id("dc:923008087315587072:1548885989412573235")
+        == 1548885989412573235
+    )
+
+
+def test_registry_id_from_session_id_other():
+    assert m._registry_id_from_session_id(None) is None
+    assert m._registry_id_from_session_id("garbage") is None
+    assert m._registry_id_from_session_id("cli:xyz") is None
 
 
 def test_registry_first_wins_when_history_has_no_literal(monkeypatch):
@@ -62,7 +69,7 @@ def test_falls_back_to_history_literal_when_unregistered(monkeypatch):
     )
 
 
-def test_non_telegram_session_uses_history_literal(monkeypatch):
+def test_unsupported_session_uses_history_literal(monkeypatch):
     called = {"n": 0}
 
     def boom(tid):
@@ -71,5 +78,27 @@ def test_non_telegram_session_uses_history_literal(monkeypatch):
 
     monkeypatch.setattr(ta, "_handoff_plan_for_thread", boom)
     hist = [{"role": "user", "content": "the active handoff for `X.md`."}]
-    assert m._resolve_plan_for_signals(hist, "dc:1:2") == "X.md"
+    # cli:/other sessions have no registry id -> literal fallback, registry untouched.
+    assert m._resolve_plan_for_signals(hist, "cli:1:2") == "X.md"
     assert called["n"] == 0
+
+
+def test_discord_channel_resolves_registry_first(monkeypatch):
+    """A dc:<guild>:<channel> session resolves its plan from the manifest's
+    Discord channel column, NOT the (possibly compaction-mangled) history."""
+    monkeypatch.setattr(
+        ta,
+        "_handoff_plan_for_thread",
+        lambda cid: "plans/DISCORD_ADAPTER_PLAN.md",
+    )
+    hist = [{"role": "user", "content": "[CONTEXT SUMMARY] compacted, no prefix"}]
+    assert (
+        m._resolve_plan_for_signals(hist, "dc:923008087315587072:1548885989412573235")
+        == "plans/DISCORD_ADAPTER_PLAN.md"
+    )
+
+
+def test_discord_falls_back_to_literal_when_unregistered(monkeypatch):
+    monkeypatch.setattr(ta, "_handoff_plan_for_thread", lambda cid: None)
+    hist = [{"role": "user", "content": "the active handoff for `X.md`."}]
+    assert m._resolve_plan_for_signals(hist, "dc:1:2") == "X.md"
