@@ -2953,7 +2953,7 @@ def _handle_resume_option_tap(
     # Edit first (thread_id omitted so the edit does not re-arm an emoji-go on
     # this now-consumed menu), then dispatch.
     if chat_id and message_id:
-        edit_message_text(chat_id, message_id, f"\u2705 picked: {label}", None)
+        edit_message_text(chat_id, message_id, f"\u2705 Picked: {label}", None)
     go_text = f'[resume-option: "{label}" from user {user_id}] go for it'
     _dispatch_synthesized_go(chat_id, thread_id, message_id, go_text, origin="button")
 

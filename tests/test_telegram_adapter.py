@@ -1673,6 +1673,31 @@ def test_callback_resume_option_tap_dispatches_synthesized_go(monkeypatch):
     assert "go for it" in dispatched["go_text"]
 
 
+def test_callback_resume_option_pick_edits_message(monkeypatch):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(rr, "lookup_options", lambda tok: ["Run unit 2", "Run unit 3"])
+    edits: list = []
+    monkeypatch.setattr(ta, "answer_callback", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ta, "edit_message_text", lambda c, m, t, th=None: edits.append(t)
+    )
+    monkeypatch.setattr(ta, "_dispatch_synthesized_go", lambda *a, **k: None)
+    cb = {
+        "id": "cb3",
+        "from": {"id": 9},
+        "data": "ro:TOK:1",
+        "message": {
+            "message_id": 57,
+            "is_topic_message": True,
+            "message_thread_id": 36518,
+            "chat": {"id": -1003919341801},
+        },
+    }
+    ta.handle_callback_query(cb, {9})
+    assert edits and "Picked: Run unit 3" in edits[0]
+
+
 def test_callback_resume_option_expired_menu(monkeypatch):
     import app.resume_registry as rr
 
