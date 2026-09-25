@@ -23,10 +23,31 @@ def test_registry_id_from_session_id_discord():
     )
 
 
+def test_registry_id_from_session_id_governor_prefixed():
+    """REGRESSION (2026-09-25): the /chat-blocking path prefixes the governor key
+    -- main._session_key builds ``<public_key[:20]>:<X-Session-Id>`` -- so the
+    ``tg:``/``dc:`` component is NOT first. A naive split-on-colon returned None,
+    so the registry-first path #506/#507 introduced silently NEVER fired in
+    production (the live log showed ``auto-advance: session=<pubkey>:tg:-100...:35189
+    plan_file=None``). The live string is asserted verbatim."""
+    assert (
+        m._registry_id_from_session_id("MIIBIjANBgkqhkiG9w0B:tg:-1003919341801:35189")
+        == 35189
+    )
+    assert (
+        m._registry_id_from_session_id(
+            "MIIBIjANBgkqhkiG9w0B:dc:923008087315587072:1548885989412573235"
+        )
+        == 1548885989412573235
+    )
+
+
 def test_registry_id_from_session_id_other():
     assert m._registry_id_from_session_id(None) is None
     assert m._registry_id_from_session_id("garbage") is None
     assert m._registry_id_from_session_id("cli:xyz") is None
+    # A bare governor key with no session component must not fabricate an id.
+    assert m._registry_id_from_session_id("MIIBIjANBgkqhkiG9w0B") is None
 
 
 def test_registry_first_wins_when_history_has_no_literal(monkeypatch):

@@ -2951,13 +2951,22 @@ def _registry_id_from_session_id(session_id: str | None) -> int | None:
     literal -- the same prefix-loss / wrong-plan-bleed bugs #506 fixed for
     Telegram, which a ``dc:`` session otherwise still hit.
 
+    The session key is often PREFIXED by the API layer -- main._session_key
+    builds ``<public_key[:20]>:<X-Session-Id>`` for the /chat-blocking path -- so
+    the ``tg:``/``dc:`` component is NOT necessarily first (the same trap
+    documented on _thread_from_session). We therefore regex for the component
+    ANYWHERE in the key rather than assuming position.
+
     Returns None for any other session key (CLI/other), so callers fall back to
     history parsing."""
     if not session_id:
         return None
-    parts = session_id.split(":")
-    if len(parts) >= 3 and parts[0] in ("tg", "dc") and parts[2].isdigit():
-        return int(parts[2])
+    for prefix in ("tg", "dc"):
+        m = re.search(rf"(?:^|:){prefix}:(-?\d+):(-?\d+)", session_id)
+        if m:
+            # Manifest ids (message_thread_id, Discord channel id) are positive;
+            # normalise the sign in case a session encodes the id negative.
+            return abs(int(m.group(2)))
     return None
 
 
