@@ -207,6 +207,15 @@ _HANDOFF_REGISTRY_RAW = "https://raw.githubusercontent.com/TrueSightDAO/agentic_
 # actually used — silently making this resolver dead code since #128 (found
 # 2026-07-18 while investigating a thread that got a generic reply instead of
 # its plan context; see agentic_ai_context/plans/HANDOFF_REGISTRY_CONSOLIDATION_PLAN.md).
+# Terminal-status markers, matched ONLY against the row's Status *cell* (not the
+# whole row). Scanning every cell made any plan whose handoff title or resume
+# state merely mentioned one of these words resolve as "finished" — the 2026-09-25
+# capoeira-i18n incident: its Resume-tracker cell said the (stale) PROJECT_INDEX
+# entry had been ignored, and the substring "stale" silently voided the whole
+# handoff, so threads 35336/36801 got the generic fallback ("may be an execution
+# handoff") with NO plan file, auto-advance emitted plan_file=None forever, and
+# Sophia kept stopping for a governor prompt after every single PR. Match on the
+# Status cell only. The marker set is intentionally unchanged — only its scope.
 _TERMINAL_STATUS_MARKERS = (
     "completed",
     "superseded",
@@ -277,6 +286,27 @@ def _handoff_plan_for_thread(thread_id: int | None) -> str | None:
     return result[0] if result else None
 
 
+def _status_column_index(registry_text: str) -> int | None:
+    """Index of the `Status` column in the registry header, or None.
+
+    Reuses the same first-pipe-line-is-the-header heuristic as
+    :func:`_find_column_index`; returns None for header-less fixtures so callers
+    fall back to a whole-row scan."""
+    return _find_column_index(registry_text, "Status")
+
+
+def _row_is_terminal(registry_text: str, cells: list[str]) -> bool:
+    """True when the row's *Status cell* carries a terminal marker.
+
+    Scoped to the Status column when the header is parseable; otherwise falls
+    back to scanning all cells (old behavior, safe for ad-hoc fixtures). This is
+    the 2026-09-25 capoeira-incident fix: a non-Status cell merely containing the
+    word "stale" must NOT void the handoff."""
+    idx = _status_column_index(registry_text)
+    scope = [cells[idx]] if (idx is not None and idx < len(cells)) else cells
+    return any(marker in c.lower() for c in scope for marker in _TERMINAL_STATUS_MARKERS)
+
+
 def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
     """Pure parse: find the active handoff plan file for thread_id in the
     HANDOFF_MANIFEST.md registry table. Matches the bare thread_id column or the
@@ -292,9 +322,7 @@ def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
         )
         if not matched:
             continue
-        if any(
-            marker in c.lower() for c in cells for marker in _TERMINAL_STATUS_MARKERS
-        ):
+        if _row_is_terminal(registry_text, cells):
             continue
         m = _HANDOFF_PLAN_RE.search(line)
         if m:
@@ -339,11 +367,7 @@ def _parse_handoff_plan_and_flags(
             )
             if not matched:
                 continue
-            if any(
-                marker in c.lower()
-                for c in cells
-                for marker in _TERMINAL_STATUS_MARKERS
-            ):
+            if _row_is_terminal(registry_text, cells):
                 continue
             if idx < len(cells):
                 auto_start = cells[idx].strip().lower() == "yes"

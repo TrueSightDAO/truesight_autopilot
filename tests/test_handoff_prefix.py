@@ -92,3 +92,56 @@ def test_auto_start_no_header_row_defaults_false():
 
 def test_auto_start_unknown_thread_is_none():
     assert _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 9999) is None
+
+
+# ── 2026-09-25 capoeira-i18n incident: non-Status cell containing "stale" ────
+
+# Mirrors the exact row shape that silently voided the capoeira handoff. The
+# Resume-tracker cell says the *stale* PROJECT_INDEX entry was ignored — an
+# incidental use of the word "stale" in a NON-Status cell. Before the fix the
+# whole-row marker scan matched it and returned None (plan_file=None forever in
+# the auto-advance log), so Sophia never auto-advanced and stopped for a governor
+# prompt after every PR.
+INCIDENT_REGISTRY = """\
+| Plan file | Handoff title | Handoff date | Status | Telegram topic | message_thread_id | Auto-start | Resume tracker state | Last manifest update | Discord channel id | Discord thread id |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `plans/CAPOEIRA_I18N_PLAN.md` | Capoeira site i18n | 2026-09-24 | triggered — PR1 in progress | Exec: Capoeira i18n | 35336 | no | Drafted from live repo inspection (not from the stale `PROJECT_INDEX.md` capoeira entry). RESUME HERE -> PR1 | 2026-09-24 |  |  |
+"""
+
+
+def test_non_status_cell_containing_stale_does_not_void_handoff():
+    # The bug: "stale" appeared only in the Resume-tracker cell, yet the
+    # whole-row scan treated the handoff as finished.
+    assert _parse_handoff_plan(INCIDENT_REGISTRY, 35336) == "plans/CAPOEIRA_I18N_PLAN.md"
+    assert _parse_handoff_plan_and_flags(INCIDENT_REGISTRY, 35336) == (
+        "plans/CAPOEIRA_I18N_PLAN.md",
+        False,
+    )
+
+
+def test_non_status_cell_containing_completed_does_not_void_handoff():
+    reg = (
+        "| Plan file | Handoff title | Handoff date | Status | Telegram topic | "
+        "message_thread_id | Resume tracker state |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| `P.md` | thing | d | in progress | t | 7777 | "
+        "blocked on the completed migration |\n"
+    )
+    assert _parse_handoff_plan(reg, 7777) == "P.md"
+
+
+def test_terminal_status_cell_still_ignored():
+    reg = (
+        "| Plan file | Handoff title | Handoff date | Status | Telegram topic | "
+        "message_thread_id | Resume tracker state |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| `P.md` | thing | d | completed | t | 8888 | no stale words here |\n"
+    )
+    assert _parse_handoff_plan(reg, 8888) is None
+
+
+def test_headerless_fixture_falls_back_to_whole_row_scan():
+    # No Status header -> keep the conservative all-cells scan. An incidental
+    # terminal word in a header-less fixture must still void it (old behavior).
+    reg = "| `P.md` | y | d | in progress | t | 9999 | stale |"
+    assert _parse_handoff_plan(reg, 9999) is None
