@@ -61,7 +61,9 @@ def _wire(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_maybe_auto_compact", lambda history, sid: False)
     monkeypatch.setattr(m, "_trim_history_to_budget", lambda history: None)
     monkeypatch.setattr(m, "_append_turn_report", lambda text, state: text)
-    monkeypatch.setattr(m, "_compute_advance_signal", lambda history, trace: None)
+    monkeypatch.setattr(
+        m, "_compute_advance_signal", lambda history, trace, session_id=None: None
+    )
     m._sessions.clear()
 
 

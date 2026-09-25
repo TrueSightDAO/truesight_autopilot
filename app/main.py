@@ -2940,7 +2940,61 @@ def _extract_plan_file(history: list[dict]) -> str | None:
     return plan
 
 
-def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict | None:
+def _thread_id_from_session_id(session_id: str | None) -> int | None:
+    """Extract the Telegram thread id from a ``tg:<chat>:<thread>`` session id.
+
+    Returns None for anything that is not a 3-part Telegram session key (e.g. a
+    Discord or CLI session), in which case callers fall back to history parsing."""
+    if not session_id:
+        return None
+    parts = session_id.split(":")
+    if len(parts) >= 3 and parts[0] == "tg" and parts[2].isdigit():
+        return int(parts[2])
+    return None
+
+
+def _resolve_plan_for_signals(
+    history: list[dict], session_id: str | None = None
+) -> str | None:
+    """Which handoff plan (if any) scopes this turn's auto-advance signal.
+
+    REGISTRY-FIRST: for a Telegram topic, resolve ``thread_id -> plan`` via
+    ``HANDOFF_MANIFEST.md`` (single source of truth) through
+    telegram_adapter._handoff_plan_for_thread. This is the durable fix for two
+    failure modes of the old history-literal-only lookup:
+
+    1. prefix-loss -- compaction folds the injected
+       ``...is the active handoff for X.md`` block into a summary, deleting the
+       only literal the old code keyed on; plan_file then became None and a
+       mid-plan thread silently stopped advancing (chained parks after a PR).
+    2. wrong-plan bleed -- the old last-wins scan over ALL history picked up any
+       later turn quoting a DIFFERENT plan's filename, scoping the turn to the
+       wrong plan.
+
+    Falls back to the history literal when the registry yields nothing (a
+    brand-new handoff not yet registered, a non-Telegram session, or a
+    non-handoff topic). Fails CLOSED -- any error falls through to the literal
+    path, never raising."""
+    thread_id = _thread_id_from_session_id(session_id)
+    if thread_id is not None:
+        try:
+            from .telegram_adapter import _handoff_plan_for_thread
+
+            plan = _handoff_plan_for_thread(thread_id)
+            if plan:
+                return plan
+        except Exception:  # noqa: BLE001 -- enrichment must never break a turn
+            logger.debug(
+                "registry plan lookup failed for thread %s", thread_id, exc_info=True
+            )
+    return _extract_plan_file(history)
+
+
+def _compute_advance_signal(
+    history: list[dict],
+    tool_trace: list[dict],
+    session_id: str | None = None,
+) -> dict | None:
     """Auto-advance signal for the turn just completed (or None).
 
     Returns None when auto-advance is off. Fails CLOSED — any error yields None
@@ -2954,7 +3008,7 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
     if not settings.auto_advance:
         return None
     try:
-        plan_file = _extract_plan_file(history)
+        plan_file = _resolve_plan_for_signals(history, session_id)
         names = [(t or {}).get("name") for t in (tool_trace or [])]
         # pr_opened: one of the three PR tools fired. Distinct from made_progress
         # below because it is what the one-PR-per-turn pr_boundary in
@@ -2968,7 +3022,8 @@ def _compute_advance_signal(history: list[dict], tool_trace: list[dict]) -> dict
         if settings.auto_advance_until_uat and not made_progress:
             made_progress = any(n in _UAT_PROGRESS_TOOLS for n in names)
         logger.info(
-            "auto-advance: plan_file=%s pr_opened=%s made_progress=%s tool_trace_len=%d",
+            "auto-advance: session=%s plan_file=%s pr_opened=%s made_progress=%s tool_trace_len=%d",
+            session_id,
             plan_file,
             pr_opened,
             made_progress,
@@ -3530,7 +3585,7 @@ async def _stream_chat(
         done_data["proposals"] = proposals
     elif proposal:
         done_data["proposal"] = proposal
-    advance = _compute_advance_signal(history, state.get("tool_trace", []))
+    advance = _compute_advance_signal(history, state.get("tool_trace", []), session_id)
     if advance:
         done_data["advance"] = advance
     yield f"data: {json.dumps({'type': 'done', **done_data})}\n\n"
@@ -5117,7 +5172,7 @@ async def _chat_blocking_turn(
     response_data: dict[str, Any] = {"response": assistant_text}
     if proposal:
         response_data["proposal"] = proposal
-    advance = _compute_advance_signal(history, tool_trace)
+    advance = _compute_advance_signal(history, tool_trace, session_id)
     if advance:
         response_data["advance"] = advance
     return JSONResponse(response_data)

@@ -59,7 +59,9 @@ def _wire(monkeypatch, tmp_path, reply="assistant reply"):
     monkeypatch.setattr(m, "_trim_history_to_budget", lambda history: None)
     monkeypatch.setattr(m, "_compact_old_tool_chains", lambda history: None)
     monkeypatch.setattr(m, "_append_turn_report", lambda text, state: text)
-    monkeypatch.setattr(m, "_compute_advance_signal", lambda history, trace: None)
+    monkeypatch.setattr(
+        m, "_compute_advance_signal", lambda history, trace, session_id=None: None
+    )
     monkeypatch.setattr(m, "get_system_prompt_for_role", lambda role: "sys")
     monkeypatch.setattr(m, "get_tool_schemas_for_role", lambda role: [])
     monkeypatch.setattr(m, "LLMClient", lambda *a, **k: _FakeLLMClient(reply))
