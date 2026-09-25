@@ -304,7 +304,9 @@ def _row_is_terminal(registry_text: str, cells: list[str]) -> bool:
     word "stale" must NOT void the handoff."""
     idx = _status_column_index(registry_text)
     scope = [cells[idx]] if (idx is not None and idx < len(cells)) else cells
-    return any(marker in c.lower() for c in scope for marker in _TERMINAL_STATUS_MARKERS)
+    return any(
+        marker in c.lower() for c in scope for marker in _TERMINAL_STATUS_MARKERS
+    )
 
 
 def _parse_handoff_plan(registry_text: str, thread_id: int) -> str | None:
@@ -1653,20 +1655,35 @@ def _run_turn_with_auto_advance(
                 f"(auto-advance {auto_count}/{settings.auto_advance_max_turns}).",
                 thread_id,
             )
-            plan_ref = advance.get("plan") or "the plan"
-            # The brain only emits auto signals for plan-scoped threads (no
-            # plan-less fallback since 2026-08-21), so the synthetic turn must
-            # carry the SAME handoff prefix as the original dispatch — this
-            # re-scopes every continued turn to THIS thread's plan and prevents
-            # it from picking up units from other threads' plans.
-            current_msg = (
-                f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
-                f"RESUME HERE marker in {plan_ref} points at. "
-                f"Do exactly that one unit (make the change, open and merge the PR "
-                f"yourself when the unit calls for it, run any tests, report the "
-                f"contribution, tick the resume tracker), then stop. Honor any gate "
-                f"marker. Never deploy to production or move money on your own."
-            )
+            if advance.get("goal"):
+                # Goal-loop (Track A / A2): a PLAN-LESS thread continuing toward a
+                # stated goal (set via set_thread_goal). There is no RESUME HERE
+                # marker to anchor on -- the goal text IS the scope. The handoff
+                # prefix is still prepended below, so a goal thread that ALSO has a
+                # handoff keeps its scoping.
+                current_msg = (
+                    f"[GOAL LOOP] Continue this thread's goal: “{nxt}”. "
+                    f"Take the single next concrete step toward it (make the change, "
+                    f"open and merge the PR yourself when the step calls for it, run "
+                    f"any tests, report the contribution), then stop. If the goal is "
+                    f"now fully met, call complete_thread_goal. Honor any gate "
+                    f"marker. Never deploy to production or move money on your own."
+                )
+            else:
+                plan_ref = advance.get("plan") or "the plan"
+                # The brain only emits plan-scoped auto signals (no plan-less
+                # fallback since 2026-08-21), so the synthetic turn must carry the
+                # SAME handoff prefix as the original dispatch -- this re-scopes
+                # every continued turn to THIS thread's plan and prevents it from
+                # picking up units from other threads' plans.
+                current_msg = (
+                    f"[AUTO-ADVANCE] Execute only the next unit ({nxt}) — the one the "
+                    f"RESUME HERE marker in {plan_ref} points at. "
+                    f"Do exactly that one unit (make the change, open and merge the PR "
+                    f"yourself when the unit calls for it, run any tests, report the "
+                    f"contribution, tick the resume tracker), then stop. Honor any gate "
+                    f"marker. Never deploy to production or move money on your own."
+                )
             current_msg = _handoff_prefix(thread_id, current_msg) + current_msg
             continue
         if decision == "gate":

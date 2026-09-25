@@ -166,6 +166,14 @@ class Settings(BaseSettings):
         default=False, validation_alias="AUTO_ADVANCE_UNTIL_UAT"
     )
 
+    # Goal-loop (Track A / unit A2, SOPHIA_GOAL_LOOP_AND_BRAIN_PLAN.md): when ON
+    # *and* AUTO_ADVANCE is ON, a PLAN-LESS thread that has an OPEN thread goal
+    # (set via the ``set_thread_goal`` tool) also auto-continues -- one step per
+    # turn, until the goal is completed (``complete_thread_goal``), stalls, hits
+    # the ceiling, or an always-stop. OFF by default => behavior is byte-
+    # identical; flipped only after a soak (the plan's A2 gate).
+    goal_loop_enabled: bool = Field(default=False, validation_alias="GOAL_LOOP_ENABLED")
+
     # Catalog-driven field normalizer. When ON, _normalize_submission_labels uses
     # the live events catalog's canonical_labels to map LLM-supplied attribute keys
     # to canonical labels via exact/case-insensitive/space-underscore-hyphen matching,
