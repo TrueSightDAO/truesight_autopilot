@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 
 import httpx
 
@@ -27,6 +28,41 @@ from .telegram_topic import _API, _TIMEOUT, _chat_id_from_session, _deep_link
 
 logger = logging.getLogger("autopilot.tools.telegram_post")
 
+# Token alphabet for resume-option refs -- excludes 0/O/1/I so a governor can
+# retype a ref (e.g. "K7QM-2") unambiguously when they reply by text instead
+# of tapping a button.
+_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def _new_option_token() -> str:
+    """A short, unambiguous ref token not currently live in the registry."""
+    for _ in range(8):
+        tok = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(4))
+        if not resume_registry.peek_options(tok):
+            return tok
+    return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(6))
+
+
+def _build_options_keyboard(token: str, options: list[str]) -> dict:
+    """One button per option (numbered), plus a non-decision 'Other' button.
+
+    callback_data is ``ro:<token>:<index>`` -- kept well under Telegram's
+    64-byte cap because the *labels* live server-side in the registry.
+    """
+    rows: list[list[dict]] = []
+    for i, opt in enumerate(options):
+        label = opt if len(opt) <= 56 else opt[:55] + "\u2026"
+        rows.append([{"text": f"{i + 1}. {label}", "callback_data": f"ro:{token}:{i}"}])
+    rows.append(
+        [
+            {
+                "text": "\u270d\ufe0f Other (type a message)",
+                "callback_data": f"ro:{token}:o",
+            }
+        ]
+    )
+    return {"inline_keyboard": rows}
+
 
 def post_to_telegram_topic(
     message: str,
@@ -34,6 +70,7 @@ def post_to_telegram_topic(
     chat_id: str | None = None,
     session_id: str | None = None,
     resume_awaiting: bool = False,
+    options: list[str] | None = None,
 ) -> dict:
     message = (message or "").strip()
     if not message:
@@ -69,10 +106,27 @@ def post_to_telegram_topic(
             "TELEGRAM_HOME_GROUP_ID is unset. Pass chat_id.",
         }
 
+    # Optional multiple-choice menu: numbered inline buttons + a ref code the
+    # governor can retype. Labels are stored server-side (Telegram caps
+    # callback_data at 64 bytes), keyed by an opaque token.
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()]
+    opt_token = _new_option_token() if opts else ""
+    if opts:
+        message = (
+            f"{message}\n\n\u21a9\ufe0f Reply [{opt_token}-1]\u2026[{opt_token}-"
+            f"{len(opts)}] \u2014 or tap a button below."
+        )
+    payload: dict = {
+        "chat_id": target,
+        "message_thread_id": thread,
+        "text": message,
+    }
+    if opts:
+        payload["reply_markup"] = _build_options_keyboard(opt_token, opts)
     try:
         r = httpx.post(
             f"{_API}/bot{token}/sendMessage",
-            json={"chat_id": target, "message_thread_id": thread, "text": message},
+            json=payload,
             timeout=_TIMEOUT,
         )
         data = r.json()
@@ -98,6 +152,8 @@ def post_to_telegram_topic(
     # means "continue", not just specially-flagged ones.
     if data.get("ok"):
         mid = (data.get("result") or {}).get("message_id")
+        if opts:
+            resume_registry.mark_options(opt_token, thread, opts)
         if mid:
             resume_registry.mark_resume_awaiting(mid, thread, message)
 
@@ -107,6 +163,8 @@ def post_to_telegram_topic(
         "message_thread_id": thread,
         "chat_id": target,
         "message_id": (data.get("result") or {}).get("message_id"),
+        "option_token": opt_token or None,
+        "options": opts or None,
         "link": _deep_link(target, thread),
     }
 
@@ -140,6 +198,11 @@ TOOL_SPEC = ToolSpec(
                 "type": "boolean",
                 "description": "If true, flag the posted message as resume-awaiting so a governor's emoji reaction on it can act as a go-signal.",
             },
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional multiple-choice menu: renders one tap-button per option plus a non-decision 'Other' button, so the governor can answer a branching resume with one tap instead of typing. Use for GENUINELY mutually-exclusive choices; still include the recommended option so a plain 'go' works.",
+            },
         },
         "required": ["message", "thread_id"],
     },
@@ -150,6 +213,7 @@ TOOL_SPEC = ToolSpec(
             chat_id=args.get("chat_id"),
             session_id=ctx.get("session_id"),
             resume_awaiting=bool(args.get("resume_awaiting", False)),
+            options=list(args.get("options") or []),
         ),
         indent=2,
     ),

@@ -87,3 +87,28 @@ def test_corrupt_file_does_not_raise(tmp_path, monkeypatch):
     # and a new mark still works
     rr.mark_resume_awaiting(4, 40, "ok")
     assert rr.lookup(4) is not None
+
+
+def test_mark_and_lookup_options_roundtrip(tmp_path, monkeypatch):
+    path = tmp_path / "reg.json"
+    monkeypatch.setattr(rr, "_PATH", path)
+    monkeypatch.setattr(rr, "_lock", __import__("threading").Lock())
+    rr.mark_options("AB12", 36518, ["Run unit 2", "Run unit 3"])
+    assert rr.peek_options("AB12") == ["Run unit 2", "Run unit 3"]  # non-consuming
+    assert rr.lookup_options("AB12") == ["Run unit 2", "Run unit 3"]
+    assert rr.lookup_options("AB12") is None  # consumed -> single-fire
+    assert rr.peek_options("AB12") is None
+
+
+def test_lookup_options_unknown_is_none():
+    assert rr.lookup_options("ZZZZ") is None
+    assert rr.peek_options("ZZZZ") is None
+
+
+def test_mark_options_ignores_blank(tmp_path, monkeypatch):
+    path = tmp_path / "reg.json"
+    monkeypatch.setattr(rr, "_PATH", path)
+    monkeypatch.setattr(rr, "_lock", __import__("threading").Lock())
+    rr.mark_options("", 1, ["x"])
+    rr.mark_options("QW34", 1, [])
+    assert rr.peek_options("QW34") is None

@@ -2637,6 +2637,12 @@ def handle_callback_query(cb: dict[str, Any], allowed: set[int]) -> None:
         answer_callback(cb_id, "Not authorized")
         return
 
+    # Generic resume-option menus (ro:<token>:<sel>) share this callback
+    # namespace with the beta-deploy buttons; dispatch on the prefix.
+    if data.startswith("ro:"):
+        _handle_resume_option_tap(cb_id, user_id, data, chat_id, message_id, thread_id)
+        return
+
     action, repo, pr = beta_deploy.parse_callback_data(data)
     if action != "ship" or not repo or not pr:
         if chat_id and message_id:
@@ -2844,6 +2850,112 @@ def _handle_reaction_safe(reaction: dict[str, Any], allowed: set[int]) -> None:
         handle_message_reaction(reaction, allowed)
     except Exception:  # noqa: BLE001
         logger.exception("handle_message_reaction crashed")
+
+
+def _dispatch_synthesized_go(
+    chat_id: int,
+    thread_id: int | None,
+    message_id: int | None,
+    go_text: str,
+    origin: str,
+) -> None:
+    """Run a synthesized go-signal turn (shared by button taps / reactions).
+
+    Mirrors the emoji-go path exactly: same governor-identity guard, same
+    ``[Telegram context: ...]`` framing, same direct call into
+    ``_run_turn_with_auto_advance`` (which acquires the dispatch lock itself --
+    never wrap this in that lock or it self-deadlocks, see the 2026-08-29 fix).
+    """
+    public_key = resolve_governor_public_key()
+    if public_key is None:
+        send_message(
+            chat_id,
+            "\u26a0\ufe0f No governor identity configured \u2014 cannot resume.",
+            thread_id,
+        )
+        return
+    dispatch = _handoff_prefix(thread_id, go_text) + go_text
+    if thread_id:
+        dispatch = (
+            f"[Telegram context: chat_id={chat_id}, thread_id={thread_id}] {dispatch}"
+        )
+    else:
+        dispatch = f"[Telegram context: chat_id={chat_id}] {dispatch}"
+    session_id = build_session_id(chat_id, thread_id)
+    logger.info(
+        "resume-by-%s: msg=%s thread=%s -> dispatching turn",
+        origin,
+        message_id,
+        thread_id,
+    )
+    try:
+        _run_turn_with_auto_advance(
+            chat_id,
+            thread_id,
+            dispatch,
+            session_id,
+            public_key,
+            is_voice=False,
+            transcribed_text=None,
+        )
+    except Exception:  # noqa: BLE001 -- never let a tap crash the poll loop
+        logger.exception("resume-by-%s dispatch failed", origin)
+        send_message(
+            chat_id,
+            "\u26a0\ufe0f Failed to resume after your selection \u2014 please retype the go-signal.",
+            thread_id,
+        )
+
+
+def _handle_resume_option_tap(
+    cb_id: str,
+    user_id: int,
+    data: str,
+    chat_id: int | None,
+    message_id: int | None,
+    thread_id: int | None,
+) -> None:
+    """A tap on a resume-option button -> a synthesized go-signal.
+
+    Single-fire: the option set is consumed on lookup, so the same menu cannot
+    be answered twice. The non-decision 'Other' button just flips the message
+    to 'awaiting your typed reply' (the governor still gets the escape hatch).
+    """
+    parts = data.split(":")
+    token = parts[1] if len(parts) > 1 else ""
+    sel = parts[2] if len(parts) > 2 else ""
+    options = resume_registry.lookup_options(token) if token else None
+    if not options:
+        answer_callback(cb_id, "This menu has expired.")
+        if chat_id and message_id:
+            edit_message_text(
+                chat_id,
+                message_id,
+                "\u231b This menu has expired \u2014 please re-ask.",
+                None,
+            )
+        return
+    if sel in ("o", "other"):
+        answer_callback(cb_id, "Type your reply")
+        if chat_id and message_id:
+            edit_message_text(
+                chat_id,
+                message_id,
+                "\u270d\ufe0f Awaiting your typed reply\u2026",
+                None,
+            )
+        return
+    try:
+        label = options[int(sel)]
+    except (ValueError, IndexError):
+        answer_callback(cb_id, "Unknown option.")
+        return
+    # Edit first (thread_id omitted so the edit does not re-arm an emoji-go on
+    # this now-consumed menu), then dispatch.
+    if chat_id and message_id:
+        edit_message_text(chat_id, message_id, f"\u2705 picked: {label}", None)
+    go_text = f'[resume-option: "{label}" from user {user_id}] go for it'
+    _dispatch_synthesized_go(chat_id, thread_id, message_id, go_text, origin="button")
 
 
 def _handle_callback_safe(cb: dict[str, Any], allowed: set[int]) -> None:

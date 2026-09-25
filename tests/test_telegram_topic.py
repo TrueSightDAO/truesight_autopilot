@@ -293,3 +293,37 @@ def test_checked_close_delete_proceeds_for_governor(monkeypatch):
     )
     out = tt.close_telegram_topic_checked(4242, delete=True, governor_name="Gary Teh")
     assert out["status"] == "ok" and calls == [4242]
+
+
+def test_post_with_options_renders_buttons(monkeypatch, tmp_path):
+    import app.resume_registry as rr
+
+    monkeypatch.setattr(rr, "_PATH", tmp_path / "reg.json")
+    monkeypatch.setattr(rr, "_lock", __import__("threading").Lock())
+    monkeypatch.setattr(tp.settings, "telegram_bot_api_key", "dummy", raising=False)
+    monkeypatch.setattr(tp.settings, "telegram_home_group_id", "-100", raising=False)
+    captured: dict = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["json"] = dict(json)
+
+        class _R:
+            def json(self):
+                return {"ok": True, "result": {"message_id": 777}}
+
+        return _R()
+
+    monkeypatch.setattr(tp.httpx, "post", fake_post)
+    out = tp.post_to_telegram_topic(
+        message="Where should I focus?",
+        thread_id=36518,
+        options=["Run unit 2", "Run unit 3"],
+    )
+    assert out["status"] == "ok"
+    kb = captured["json"]["reply_markup"]["inline_keyboard"]
+    tok = out["option_token"]
+    assert kb[0][0]["callback_data"] == f"ro:{tok}:0"
+    assert kb[1][0]["callback_data"] == f"ro:{tok}:1"
+    assert kb[2][0]["callback_data"] == f"ro:{tok}:o"  # non-decision Other
+    assert f"{tok}-1" in captured["json"]["text"]  # retype ref present
+    assert rr.peek_options(tok) == ["Run unit 2", "Run unit 3"]
