@@ -47,7 +47,9 @@ def _wire_common(monkeypatch):
     monkeypatch.setattr(m, "_log_session", lambda sid, history: None)
     monkeypatch.setattr(m, "_sanitise_tool_messages", lambda history: None)
     monkeypatch.setattr(m, "_append_turn_report", lambda text, state: text)
-    monkeypatch.setattr(m, "_compute_advance_signal", lambda history, trace: None)
+    monkeypatch.setattr(
+        m, "_compute_advance_signal", lambda history, trace, session_id=None: None
+    )
 
     async def _fake_run_tool(
         func_name, func_args, history, session_id, gov_name, author_role="governor"
