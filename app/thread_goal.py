@@ -250,12 +250,26 @@ def should_continue(
     made_progress: bool,
     pending_text: str = "",
     max_turns: int = DEFAULT_MAX_GOAL_TURNS,
+    stall_seconds: float = 0.0,
+    prev_progress_ts: float | None = None,
     now: float | None = None,
 ) -> GoalDecision:
     """Decide whether the loop may take another turn for this goal.
 
     Fails closed -- any uncertainty (no goal, no session key) returns ``stop``.
     Order: no-goal -> completion -> always-stop -> ceiling -> stall -> continue.
+
+    ``stall_seconds`` (A3): when > 0, force-stop if the goal has made no progress
+    for that many wall-clock seconds. 0 (default) disables the check, so behavior
+    is unchanged until a governor opts in.
+
+    ``prev_progress_ts`` (A3): the last-progress timestamp to measure the stall
+    from. The wired caller records *this* turn (which, for a progress turn, bumps
+    ``goal.last_progress_ts`` to now) **before** calling here -- so measuring from
+    ``goal.last_progress_ts`` would always see ~0 idle and never fire. Passing the
+    PRE-turn snapshot makes the check mean "time since the last turn that actually
+    made progress", which is the useful guard. ``None`` falls back to the goal's
+    own ``last_progress_ts`` (pure-primitive callers).
     """
     if goal is None:
         return GoalDecision("stop", "no open goal for this thread")
@@ -270,6 +284,18 @@ def should_continue(
 
     if max_turns and goal.turns >= max_turns:
         return GoalDecision("stop", f"turn ceiling reached ({goal.turns}/{max_turns})")
+
+    stall_ref_ts = (
+        goal.last_progress_ts if prev_progress_ts is None else prev_progress_ts
+    )
+    if stall_seconds and stall_seconds > 0 and stall_ref_ts > 0:
+        ref = time.time() if now is None else now
+        idle = ref - stall_ref_ts
+        if idle > stall_seconds:
+            return GoalDecision(
+                "stop",
+                f"stall: no progress for {int(idle)}s (limit {int(stall_seconds)}s)",
+            )
 
     if not made_progress:
         return GoalDecision("stop", "no progress this turn (stall)")

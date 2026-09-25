@@ -155,7 +155,10 @@ def test_no_cross_thread_bleed(goal_file, monkeypatch):
 def test_ceiling_stops_the_loop(goal_file, monkeypatch):
     monkeypatch.setattr(settings, "auto_advance", True)
     monkeypatch.setattr(settings, "goal_loop_enabled", True)
-    monkeypatch.setattr(tg, "DEFAULT_MAX_GOAL_TURNS", 3)
+    # A3: the ceiling is now the CHAT_MAX_GOAL_TURNS *setting* (the call site
+    # reads it at call time), so patch the setting -- patching the module
+    # constant no longer has any effect and would silently stop testing this.
+    monkeypatch.setattr(settings, "chat_max_goal_turns", 3)
     tg.open_goal(SID, "ship it")
     assert _signal(SID) is not None  # turn 1 (auto)
     assert _signal(SID) is not None  # turn 2 (auto)
