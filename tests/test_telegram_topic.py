@@ -326,4 +326,6 @@ def test_post_with_options_renders_buttons(monkeypatch, tmp_path):
     assert kb[1][0]["callback_data"] == f"ro:{tok}:1"
     assert kb[2][0]["callback_data"] == f"ro:{tok}:o"  # non-decision Other
     assert f"{tok}-1" in captured["json"]["text"]  # retype ref present
+    assert "pick one below" in captured["json"]["text"]  # clearer call to action
+    assert "just reply" in kb[2][0]["text"]  # Other button wording
     assert rr.peek_options(tok) == ["Run unit 2", "Run unit 3"]

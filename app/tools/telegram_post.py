@@ -56,7 +56,7 @@ def _build_options_keyboard(token: str, options: list[str]) -> dict:
     rows.append(
         [
             {
-                "text": "\u270d\ufe0f Other (type a message)",
+                "text": "\u270d\ufe0f Other — just reply",
                 "callback_data": f"ro:{token}:o",
             }
         ]
@@ -114,7 +114,7 @@ def post_to_telegram_topic(
     if opts:
         message = (
             f"{message}\n\n\u21a9\ufe0f Reply [{opt_token}-1]\u2026[{opt_token}-"
-            f"{len(opts)}] \u2014 or tap a button below."
+            f"{len(opts)}] \u2014 or pick one below:"
         )
     payload: dict = {
         "chat_id": target,
