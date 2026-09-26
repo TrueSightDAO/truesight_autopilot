@@ -28,6 +28,12 @@ These are excluded UNCONDITIONALLY at build time (see HARD_EXCLUDED_MARKERS); th
 that consumes them writes a private, governor-only sheet instead. See
 plans/CRF_ANAPU_SUNMINT_COHORT_PROPOSAL.md section 11.4.
 
+Personal financial PII (governor decision 2026-09-26, Gary, thread 35944):
+a raw CPF in a signed payload is excluded UNCONDITIONALLY at build time too,
+again ahead of --allow-pii. CNPJ is deliberately NOT treated as PII -- it is
+a business identifier, publicly searchable, legitimate in contribution and
+proposal events. See CPF_PII_RES / _has_cpf_pii.
+
 Usage:
     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json python3 scripts/sync_sunmint_signatures.py --dry-run
     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json GITHUB_TOKEN=... python3 scripts/sync_sunmint_signatures.py --push
@@ -111,6 +117,25 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # 2026-09-17 (Gary, thread 30026). See
 # plans/CRF_ANAPU_SUNMINT_COHORT_PROPOSAL.md section 11.4.
 HARD_EXCLUDED_MARKERS = {"[PAYOUT REGISTRATION]"}
+
+
+# --- Personal financial PII (CPF) -------------------------------------------
+# Governor decision 2026-09-26 (Gary, thread 35944), design C: a raw CPF in a
+# signed payload is excluded from the public cache UNCONDITIONALLY -- ahead of
+# the --allow-pii bypass, like HARD_EXCLUDED_MARKERS above. CNPJ is NOT matched:
+# it is a business identifier, publicly searchable, and legitimate in
+# contribution/proposal events. Bare 11-digit runs are not matched on their own
+# (Telegram message/update ids are 10-11 digits); a CPF must be either
+# punctuation-delimited (###.###.###-##) or explicitly CPF/PIX-labelled.
+CPF_PII_RES = [
+    re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),
+    re.compile(r"(?i)\b(?:cpf|pix[\s_-]*key)\b[^\n]{0,20}?\b\d{11}\b"),
+]
+
+
+def _has_cpf_pii(text: str) -> bool:
+    """True if `text` carries a raw CPF (personal financial PII). See above."""
+    return any(rx.search(text) for rx in CPF_PII_RES)
 
 
 def _now_iso() -> str:
@@ -224,6 +249,23 @@ def build_signatures(
                 "signature": parsed["signature"],
             }
             continue
+        if _has_cpf_pii(text):
+            # Personal financial PII (raw CPF) must never reach a public surface
+            # -- UNCONDITIONAL, ahead of the --allow-pii bypass (design C,
+            # governor decision 2026-09-26). The raw text is NOT stashed here.
+            excluded_pii[msg_id] = {
+                "event_type": parsed["marker"],
+                "telegram_message_id": msg_id,
+                "reason": (
+                    "raw CPF embedded in signed_text -- excluded per governor"
+                    " decision 2026-09-26 (financial PII must never reach a"
+                    " public cache)"
+                ),
+                "public_key": parsed["public_key"],
+                "signature": parsed["signature"],
+            }
+            continue
+
         source_tabs = []
         if msg_id in planting_by_msg:
             source_tabs.append(PLANTING_TAB)
@@ -683,7 +725,7 @@ def main() -> None:
     if signatures["excluded_pii_count"]:
         print(
             f"[info] excluded {signatures['excluded_pii_count']} PII-bearing events"
-            f" (email embedded -- governor decision 2026-09-02)"
+            " (email and/or CPF -- see per-event reason)"
         )
 
     files = _ledger_files(signatures, measurements)

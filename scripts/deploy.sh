@@ -121,6 +121,15 @@ else
     echo "  WARN: config/google/ directory missing locally. Skipping. See config/google/README.md for provisioning."
 fi
 
+echo "=== Mirroring repo-managed cron runtimes -> /home/ubuntu/scripts ==="
+# /home/ubuntu/scripts is a PLAIN (non-git) copy the box crontab invokes
+# (sync_sunmint_signatures.py every 30 min). It once drifted into a stale copy
+# missing the [PAYOUT REGISTRATION] PII guard, so raw PIX/CPF reached the public
+# ledger (2026-09-26, thread 35944). Mirror it from the repo on every deploy so a
+# merged guard can never silently lag the running cron. Additive: only overwrites
+# this repo-managed file; never touches box-local (non-repo) scripts.
+ssh -i "$EC2_KEY" "$EC2_HOST" "mkdir -p /home/ubuntu/scripts && cp $REMOTE_DIR/scripts/sync_sunmint_signatures.py /home/ubuntu/scripts/sync_sunmint_signatures.py && echo '  synced /home/ubuntu/scripts/sync_sunmint_signatures.py'"
+
 echo "=== Syncing agentic_ai_context ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     mkdir -p $REMOTE_DIR/context

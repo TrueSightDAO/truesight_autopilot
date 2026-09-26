@@ -12,6 +12,7 @@ pytest.importorskip(
 sys.path.insert(0, "scripts")
 
 from scripts.sync_sunmint_signatures import (  # noqa: E402
+    _has_cpf_pii,
     _ledger_files,
     _scan,
     build_measurements,
@@ -24,6 +25,26 @@ _PK = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA"
 PLANT_PK = _PK + "A" * 200
 GROW_PK = _PK + "B" * 200
 SIG = "x" * 300
+
+CPF_EXTRA_PK = _PK + "C" * 200
+
+CPF_SAMPLE = (
+    "[CONTRIBUTION EVENT]\n"
+    "- PIX key type: CPF\n"
+    "- PIX key: 079.021.202-19\n"
+    "--------\n\n"
+    "My Digital Signature: " + CPF_EXTRA_PK + "\n\n"
+    "Request Transaction ID: " + SIG + "\n"
+)
+
+CNPJ_SAMPLE = (
+    "[CONTRIBUTION EVENT]\n"
+    "- Description: supplier Black King, CNPJ 12.345.678/0001-90\n"
+    "--------\n\n"
+    "My Digital Signature: " + CPF_EXTRA_PK + "\n\n"
+    "Request Transaction ID: " + SIG + "\n"
+)
+
 
 PLANT_SAMPLE = (
     "[TREE PLANTING EVENT]\n"
@@ -210,3 +231,48 @@ def test_ledger_files_never_emits_hard_excluded_marker():
     }
     files = _ledger_files(sigs, {"items": []})
     assert not any("payout" in p for p in files)
+
+
+def test_cpf_events_excluded_under_allow_pii():
+    """A raw CPF excludes the event, even under --allow-pii."""
+    chat = [
+        ["4690", "", "", "901", "employee", "", CPF_SAMPLE, "", "0", "", "", "20260926"]
+    ]
+    out = build_signatures(chat, {}, {}, allow_pii=True)
+    assert out["count"] == 0
+    assert "901" in out["excluded_pii_events"]
+    assert "901" not in out["events"]
+    assert "079.021.202-19" not in str(out["excluded_pii_events"])
+
+
+def test_cnpj_events_are_published():
+    """CNPJ is a business id, not personal PII -- it must NOT be excluded."""
+    chat = [
+        [
+            "4691",
+            "",
+            "",
+            "902",
+            "accountant",
+            "",
+            CNPJ_SAMPLE,
+            "",
+            "0",
+            "",
+            "",
+            "20260926",
+        ]
+    ]
+    out = build_signatures(chat, {}, {}, allow_pii=True)
+    assert out["count"] == 1
+    assert "902" in out["events"]
+
+
+def test_has_cpf_pii_matches_punctuated_and_labelled():
+    assert _has_cpf_pii("- PIX key: 079.021.202-19")
+    assert _has_cpf_pii("- PIX key: 07902120219")
+
+
+def test_has_cpf_pii_ignores_bare_ids_and_cnpj():
+    assert not _has_cpf_pii("- msg id: 4690272682")
+    assert not _has_cpf_pii("(Black King, CNPJ 12.345.678/0001-90)")
