@@ -60,3 +60,12 @@ media_archive_daemon_config.yaml.bak-sr
 # 2026-06-15 vault wipe: a machine-owned file inside the deploy tree.
 data/followups_state.json
 followups/state.json
+
+# Thread-goal store (Track A) + email-inbox watch cursor. Both are
+# machine-owned runtime state written by the running loop into the deploy
+# tree, so they MUST survive `git reset --hard` / `git clean -fd`. Same
+# class as the 2026-06-15 vault wipe / 2026-09-14 followups reset: an
+# untracked-and-unignored state file inside the repo gets deleted on every
+# deploy (thread_goal.py's own docstring already *assumed* it survived).
+data/thread_goals.jsonl
+data/email_inbox_watch_state.json
