@@ -3357,31 +3357,36 @@ async def _run_tool_round_loop(
                         req_id,
                         log_prefix,
                         func_name,
-                        raw_args[:200],
+                        _redact_for_log(raw_args, limit=200),
                     )
                     history.append(
                         {
                             "role": "tool",
                             "tool_call_id": tc["id"],
                             "content": json.dumps(
-                                {"error": "invalid_arguments", "raw": raw_args[:500]}
+                                {
+                                    "error": "invalid_arguments",
+                                    "raw": _redact_for_log(raw_args, limit=500),
+                                }
                             ),
                         }
                     )
                     continue
                 tool_call_id = tc["id"]
                 logger.info(
-                    "[%d] %sTOOL CALL: %s args=%.200s",
+                    "[%d] %sTOOL CALL: %s args=%s",
                     req_id,
                     log_prefix,
                     func_name,
-                    json.dumps(func_args),
+                    _redact_for_log(func_args, limit=200),
                 )
 
                 yield _sse_event("tool", {"tool": func_name, "status": "calling"})
                 # Update live progress
                 _live_progress[session_id]["current_tool"] = func_name
-                _live_progress[session_id]["current_arg"] = str(func_args)[:200]
+                _live_progress[session_id]["current_arg"] = _redact_for_log(
+                    func_args, limit=200
+                )
 
                 tool_task = asyncio.create_task(
                     _run_tool(
@@ -4112,6 +4117,28 @@ def _redact_secrets(text: str) -> tuple[str, list[str]]:
     from .redaction import redact_secrets
 
     return redact_secrets(text)
+
+
+def _redact_for_log(text: str, limit: int = 200) -> str:
+    """Redact secret-shaped strings before writing call data to the log.
+
+    ``_redact_secrets`` was previously applied only on the public-transcript
+    publish path, so raw tool-call args (which can embed an access token in a
+    ``git clone https://x-access-token:...@...`` URL) were written verbatim to
+    the persistent systemd journal -- the hardest place to scrub after the
+    fact. Reuse the same single-source-of-truth rules here, then truncate.
+    """
+    import json
+
+    if not isinstance(text, str):
+        try:
+            text = json.dumps(text, default=str)
+        except (TypeError, ValueError):
+            text = str(text)
+    from .redaction import redact_secrets
+
+    redacted, _ = redact_secrets(text)
+    return redacted[:limit]
 
 
 async def _publish_transcript(

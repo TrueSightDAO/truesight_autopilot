@@ -225,6 +225,15 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     # Stripped on every deploy, so a shadow cannot survive a redeploy.
     git config --global --remove-section 'credential.https://github.com' 2>/dev/null || true
     git config --global --unset-all credential.helper 2>/dev/null || true
+    # Strip any per-branch https remote *override* that embeds a PAT
+    # (branch.<name>.remote = https://...:<token>@github.com/...). These hide
+    # from the [remote "origin"] block that earlier remediation rewrote, so a
+    # token could survive there and re-leak on `git remote -v` / a push.
+    # Idempotent -- swept on every deploy so a per-branch token can't persist.
+    for b in \$(git -C $REMOTE_DIR for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null); do
+        r=\$(git -C $REMOTE_DIR config --get branch.\"\$b\".remote 2>/dev/null || true)
+        case \"\$r\" in *x-access-token*|*://*) git -C $REMOTE_DIR config --unset branch.\"\$b\".remote 2>/dev/null || true ;; esac
+    done
     git config --global credential.helper '$REMOTE_DIR/scripts/git-credential-sophia.sh'
     git config --global init.defaultBranch main
     echo 'git identity + credential helper configured (gh-shadow stripped)'
