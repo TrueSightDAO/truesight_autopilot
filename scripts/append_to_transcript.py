@@ -60,25 +60,35 @@ TRANSCRIPT_REPO = _resolve_transcript_repo()
 GITHUB_API = "https://api.github.com"
 
 
+# Dedicated token for the transcript repo, preferred over the general PAT so a
+# busy general-PAT rate-limit budget cannot starve attachment persistence.
+# NOTE (2026-09-26): fine-grained PATs are per-USER, not per-token - several
+# PATs on the same account share ONE 5000/hr core bucket. Preferring the
+# transcript PAT still helps across accounts and never hurts otherwise.
+_TOKEN_ENV_KEYS = ("GITHUB_TRANSCRIPT_PAT", "TRUESIGHT_DAO_AUTOPILOT", "GITHUB_PAT")
+
+
 def get_github_token() -> str:
-    """Get GitHub PAT from environment."""
-    token = os.environ.get("TRUESIGHT_DAO_AUTOPILOT", "") or os.environ.get(
-        "GITHUB_PAT", ""
-    )
-    if not token:
-        # Try reading from .env
-        env_paths = [
-            Path("/opt/truesight_autopilot/.env"),
-            Path(".env"),
-        ]
-        for env_path in env_paths:
-            if env_path.exists():
-                for line in env_path.read_text().splitlines():
-                    line = line.strip()
-                    if line.startswith("TRUESIGHT_DAO_AUTOPILOT="):
-                        token = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-    return token
+    """Get GitHub PAT from environment (dedicated transcript PAT preferred)."""
+    for key in _TOKEN_ENV_KEYS:
+        val = os.environ.get(key, "")
+        if val:
+            return val
+    # Fall back to reading from .env (first key present wins).
+    env_paths = [
+        Path("/opt/truesight_autopilot/.env"),
+        Path(".env"),
+    ]
+    for env_path in env_paths:
+        if not env_path.exists():
+            continue
+        lines = env_path.read_text().splitlines()
+        for key in _TOKEN_ENV_KEYS:
+            for line in lines:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
 
 
 def github_request(method: str, url: str, data: dict | None = None) -> dict:
@@ -115,6 +125,24 @@ def github_request(method: str, url: str, data: dict | None = None) -> dict:
                 return {
                     "status": "error",
                     "message": f"GitHub validation error: {resp.text[:500]}",
+                }
+            elif resp.status_code in (403, 429) and (
+                resp.status_code == 429
+                or resp.headers.get("x-ratelimit-remaining") == "0"
+                or "rate limit" in resp.text.lower()
+            ):
+                # Surface rate-limiting as its own status so callers retry
+                # rather than treating it as a generic error.
+                return {
+                    "status": "rate_limited",
+                    "message": (
+                        "GitHub rate limit hit "
+                        f"(HTTP {resp.status_code}); reset="
+                        f"{resp.headers.get('x-ratelimit-reset')} "
+                        f"retry_after={resp.headers.get('retry-after')}"
+                    ),
+                    "reset": resp.headers.get("x-ratelimit-reset"),
+                    "retry_after": resp.headers.get("retry-after"),
                 }
             else:
                 return {
@@ -166,6 +194,22 @@ def append_to_transcript(
     existing = github_request("GET", url)
     existing_content = ""
     sha = None
+
+    # Fail loudly instead of PUT-ing without a sha (which GitHub rejects with a
+    # confusing 422 "sha wasn't supplied", masking the real cause). If the
+    # pre-read was rate-limited or errored we cannot safely append yet, so
+    # return the true cause and let the caller retry.
+    if existing.get("status") in ("rate_limited", "error"):
+        return {
+            "status": "error",
+            "message": (
+                "Cannot append transcript: pre-read failed "
+                f"({existing.get('status')}). {existing.get('message', '')}"
+            ),
+            "transcript_url": (
+                f"https://github.com/TrueSightDAO/{TRANSCRIPT_REPO}/blob/main/{path}"
+            ),
+        }
 
     if existing.get("status") != "not_found" and "content" in existing:
         try:
