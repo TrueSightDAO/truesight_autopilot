@@ -233,6 +233,86 @@ def test_ledger_files_never_emits_hard_excluded_marker():
     assert not any("payout" in p for p in files)
 
 
+def _ev(i, txid, marker="[TREE PLANTING EVENT]"):
+    return {
+        "event_type": marker,
+        "telegram_message_id": i,
+        "signature": txid,
+        "signed_payload": "p-" + txid,
+        "signed_text": marker + "\nRequest Transaction ID: " + txid + "\n",
+        "submitted_at": "2026-09-26",
+        "contributor_name": "Gary",
+    }
+
+
+def test_txid_key_is_64_hex_and_stable():
+    import hashlib
+
+    from scripts.sync_sunmint_signatures import _txid_key
+
+    txid = "x" * 300 + "/+="
+    k = _txid_key(txid)
+    assert len(k) == 64
+    assert all(c in "0123456789abcdef" for c in k)
+    assert k == hashlib.sha256(txid.encode()).hexdigest()
+    assert _txid_key(txid) == _txid_key(txid)  # deterministic
+
+
+def test_txid_mirror_created_and_message_id_alias_preserved():
+    from scripts.sync_sunmint_signatures import _ledger_files, _txid_key
+
+    txid = "SIGA" * 80
+    sigs = {"events": {"171": _ev("171", txid), "172": _ev("172", txid)}}
+    files = _ledger_files(sigs, {"items": []})
+    folder = "tree_planting"
+    # (4) BOTH names written: message-id alias files + the txid mirror.
+    assert f"{folder}/171.json" in files
+    assert f"{folder}/172.json" in files
+    mirror = f"{folder}/{_txid_key(txid)}.json"
+    assert mirror in files
+    # mirror carries the txid as a JSON field so it can be round-tripped.
+    assert files[mirror]["request_transaction_id"] == txid
+    # (2)/(3) two message ids, one txid -> exactly ONE mirror (collapse),
+    # canonical = earliest message id (171).
+    assert len([p for p in files if p.split("/")[-1] == _txid_key(txid) + ".json"]) == 1
+    idx = files[f"{folder}/index.json"]
+    assert idx["txid_count"] == 1
+    assert idx["txids"][_txid_key(txid)]["telegram_message_id"] == "171"
+    # alias files carry NO request_transaction_id field -> per-event schema
+    # stays byte-identical to before (no drift in existing published files).
+    assert "request_transaction_id" not in files[f"{folder}/171.json"]
+
+
+def test_txid_root_index_counts():
+    from scripts.sync_sunmint_signatures import _ledger_files
+
+    sigs = {
+        "events": {
+            "171": _ev("171", "T1" * 100),
+            "172": _ev("172", "T1" * 100),
+            "180": _ev("180", "T2" * 100),
+        }
+    }
+    root = _ledger_files(sigs, {"items": []})["index.json"]
+    assert root["total_txid_count"] == 2
+    assert root["txid_mirror_count"] == 2
+    assert root["txid_dup_groups"] == 1
+    assert root["txid_extra_files_collapsed"] == 1
+    assert root["txid_mirror_collisions"] == 0
+
+
+def test_events_without_txid_get_no_mirror():
+    from scripts.sync_sunmint_signatures import _ledger_files
+
+    ev = _ev("200", "")
+    sigs = {"events": {"200": ev}}
+    files = _ledger_files(sigs, {"items": []})
+    assert "tree_planting/200.json" in files
+    # no txid -> no mirror, and the alias file is untouched.
+    assert "request_transaction_id" not in files["tree_planting/200.json"]
+    assert files["tree_planting/index.json"]["txid_count"] == 0
+
+
 def test_cpf_events_excluded_under_allow_pii():
     """A raw CPF excludes the event, even under --allow-pii."""
     chat = [

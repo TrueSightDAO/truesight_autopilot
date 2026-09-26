@@ -9,7 +9,11 @@ Writes one immutable JSON file per event to TrueSightDAO/verify_public_signature
                                             per Tree Growth Measurements row (public link-share)
   tree_planting_link/<msg_id>.json       -- [TREE PLANTING LINK EVENT]
   tree_planting_reject/<msg_id>.json     -- [TREE PLANTING REJECT EVENT]
+  <folder>/<sha256(txid)>.json           -- canonical mirror keyed on request_transaction_id
+                                            (additive; collapses the same event re-posted under
+                                            several telegram message ids onto one path)
   <folder>/index.json                    -- per-folder registry (message_id -> url, submitted_at)
+                                            plus txid -> canonical path (txids block)
   index.json                             -- org-wide root index (event_type -> count, links)
 
 Each event file carries a self-verifying triple: public_key, signature, signed_payload
@@ -501,6 +505,46 @@ def _folder_for(marker: str) -> str:
     return slug or "other"
 
 
+def _txid_key(txid: str) -> str:
+    """Stable, filename-safe key for a request_transaction_id.
+
+    The raw txid is a base64 RSA-2048 signature (~344 chars incl. '/', '+', '=')
+    -- illegal in a path segment AND over the 255-byte filesystem limit. sha256
+    gives 64 lowercase-hex (charset [0-9a-f]), which is filesystem- and
+    case-insensitive-safe and had 0 collisions over the 4,431 distinct txids.
+    Governor decision 2026-09-26 (Gary, thread 37982), decision (1).
+    """
+    return hashlib.sha256(txid.encode("utf-8")).hexdigest()
+
+
+def _txid_groups(evs: dict) -> dict:
+    """Group {msg_id: ev} by sha256(request_transaction_id) -> [msg_ids].
+
+    Keying on the txid (not the transport message id) means the same event
+    re-posted under several message ids lands in ONE group and collapses onto
+    a single mirror path for free (decisions (2) and (4)).
+    """
+    groups: dict[str, list] = {}
+    for mid, ev in evs.items():
+        txid = ev.get("signature", "")
+        if txid:
+            groups.setdefault(_txid_key(txid), []).append(mid)
+    return groups
+
+
+def _canonical_member(mids: list) -> str:
+    """Earliest telegram_message_id in a duplicate group wins (decision (3)).
+
+    Telegram message ids are monotonically increasing integers, so 'earliest'
+    == numerically smallest. Non-numeric ids sort last (defensive).
+    """
+
+    def key(m: str):
+        return (0, int(m), "") if m.isdigit() else (1, 0, m)
+
+    return min(mids, key=key)
+
+
 def _ledger_files(signatures: dict, measurements: dict) -> dict:
     """Return {repo_path: payload} for the per-event ledger layout.
 
@@ -532,6 +576,11 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
         folders.setdefault("tree_growth_monitoring", {})[mid] = rec
 
     files: dict[str, dict] = {}
+    distinct_txids: set = set()
+    mirrors = 0
+    dup_groups = 0
+    extra_files = 0
+    collisions = 0
     for folder, evs in sorted(folders.items()):
         entries = {
             mid: {
@@ -542,8 +591,40 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
             }
             for mid, ev in sorted(evs.items())
         }
+        # (1) message-id alias files -- UNCHANGED paths/content, so every current
+        # consumer (dapp, link_tree_planting.html, verifiers) keeps working
+        # during the transition. Governor decision 2026-09-26 (Gary, thread
+        # 37982), decision (4): write BOTH names.
         for mid, ev in sorted(evs.items()):
             files[f"{folder}/{mid}.json"] = ev
+        # (2) txid-keyed canonical mirrors -- sha256(request_transaction_id). A
+        # duplicate group (one txid, several message ids) collapses to ONE
+        # mirror, because the key is the txid, not the transport id.
+        txid_index: dict[str, dict] = {}
+        for tkey, mids in sorted(_txid_groups(evs).items()):
+            canonical = _canonical_member(mids)
+            ev = dict(evs[canonical])
+            ev["request_transaction_id"] = ev.get("signature", "")
+            mirror_path = f"{folder}/{tkey}.json"
+            if mirror_path in files:
+                # A real message id that happens to equal a 64-hex hash -- refuse
+                # to clobber it and SURFACE the collision rather than silently
+                # dropping an event.
+                collisions += 1
+                continue
+            files[mirror_path] = ev
+            txid_index[tkey] = {
+                "url": f"{RAW_BASE}{mirror_path}",
+                "request_transaction_id": ev.get("signature", ""),
+                "telegram_message_id": canonical,
+                "event_type": ev.get("event_type", ""),
+                "submitted_at": ev.get("submitted_at", ""),
+            }
+            distinct_txids.add(tkey)
+            mirrors += 1
+            if len(mids) > 1:
+                dup_groups += 1
+                extra_files += len(mids) - 1
         files[f"{folder}/index.json"] = {
             "status": "success",
             "schema_version": 1,
@@ -551,6 +632,11 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
             "event_type": next(iter(entries.values()), {}).get("event_type", ""),
             "count": len(entries),
             "events": entries,
+            # txid -> canonical mirror path, so a verifier can hash their
+            # request_transaction_id, resolve the path, and round-trip the value
+            # carried as a JSON field in the mirror body.
+            "txid_count": len(txid_index),
+            "txids": txid_index,
         }
 
     # Non-RSA attestations (e.g. reviewer sha256 keys) get their own honest folder.
@@ -565,6 +651,11 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
         "test_events_count": signatures.get("test_events_count", 0),
         "excluded_pii_count": signatures.get("excluded_pii_count", 0),
         "other_signed_count": signatures.get("other_signed_count", 0),
+        "total_txid_count": len(distinct_txids),
+        "txid_mirror_count": mirrors,
+        "txid_dup_groups": dup_groups,
+        "txid_extra_files_collapsed": extra_files,
+        "txid_mirror_collisions": collisions,
         "event_types": {
             folder: {
                 "count": len(evs),
@@ -729,6 +820,14 @@ def main() -> None:
         )
 
     files = _ledger_files(signatures, measurements)
+    _root = files.get("index.json", {})
+    print(
+        f"[info] txid mirrors: {_root.get('total_txid_count', 0)} distinct txids -> "
+        f"{_root.get('txid_mirror_count', 0)} canonical sha256 mirrors; "
+        f"{_root.get('txid_dup_groups', 0)} dup groups "
+        f"({_root.get('txid_extra_files_collapsed', 0)} extra files collapse); "
+        f"collisions={_root.get('txid_mirror_collisions', 0)}"
+    )
     if args.allow_pii:
         n = _count_emails(files)
         print(
