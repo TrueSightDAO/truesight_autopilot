@@ -1,0 +1,28 @@
+# Media Archive Daemon config — TEMPLATE (no secrets)
+# Copy to media_archive_daemon_config.yaml and fill in paths.
+# Credentials NEVER go in this repo — they stay on the box (config/youtube/*.json, gitignored).
+daily_budget: 50  # YouTube uploads/day (Jun-2026 bucket ~100/day; hidden cap may bind)
+projects:
+- name: truesight-main
+  credentials: /opt/truesight_autopilot/config/youtube/youtube_token.json
+  client_secrets: /opt/truesight_autopilot/config/youtube/client_secret.json
+inboxes:
+- farm_id: cleide
+  path: /home/ubuntu/media_archive_inbox/farm-media/cleide
+  priority: 2
+- farm_id: paulo-la-do-sitio
+  path: /home/ubuntu/media_archive_inbox/farm-media/paulo-la-do-sitio
+  priority: 1
+- farm_id: santa-anna-fazenda
+  path: /home/ubuntu/media_archive_inbox/farm-media/santa-anna-fazenda
+  priority: 1
+- farm_id: jedielcio
+  path: /home/ubuntu/media_archive_inbox/farm-media/jedielcio
+  priority: 1
+quota_reset_utc: 07:05
+defaults:
+  privacy: public
+  tags:
+  - cacao
+  - agroverse
+  description_footer: Cacao farm visit, CEPOTX, Para, Brazil.

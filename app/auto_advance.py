@@ -1,0 +1,382 @@
+"""Pure helpers for the Sophia auto-advance loop.
+
+See ``agentic_ai_context/plans/SOPHIA_AUTO_ADVANCE_PLAN.md``. A roadmap's *resume
+tracker* (a markdown table with an ``Advance`` column) tells Sophia whether,
+after finishing one unit (PR), she may immediately continue to the next unit or
+must STOP at a gate. These helpers are PURE (no I/O, no network) so they are
+trivially unit-testable; the brain calls :func:`next_action` at turn-end and the
+adapter obeys the returned decision.
+
+Marker semantics — the ``Advance`` cell on a unit row answers *"may Sophia
+auto-START this unit?"*:
+
+- ``auto``           -> yes; when the previous unit completes, start this one.
+- ``gate: <reason>`` -> no; STOP before this unit and surface ``<reason>``.
+
+The brain reads the plan's ``RESUME HERE`` pointer (which the executing turn
+advances as each unit lands) to find *the next unit to run*, then reads that
+unit's marker.
+
+**Default = auto (revised 2026-06-23, see OPERATING_INSTRUCTIONS §5c).** A unit with
+no / blank / unknown ``Advance`` marker, or a plan with no ``Advance`` column at all,
+**auto-advances**. Sophia STOPS only when:
+
+- the next unit is **irreversible / outward-facing** — an always-stop category gated by
+  RULE not annotation (deploy / promote / merge-to-main / TDG-or-money issuance / UAT);
+- its marker is an explicit ``gate: <reason>``;
+- the turn **made no progress at all** — neither opened a PR nor did any
+  side-effecting action (non-convergence — handled in :func:`next_action`); or
+- she **cannot locate** the next unit (no ``RESUME HERE`` pointer, or the unit is not
+  found in a present tracker). Ambiguity about *where she is* still fails closed;
+  ambiguity about *whether a plain unit may run* now resolves to ``auto``.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+# Words in a RESUME-HERE target that mean "the plan is finished".
+_DONE_RE = re.compile(r"\b(done|complete|completed|finished|all units|none left)\b", re.I)
+# A RESUME HERE *pointer* is followed by a connector (`:`, `=`, `→`); an
+# optional "(§4)" section ref may precede it. Requiring the connector excludes
+# the many prose / citation mentions of the phrase ("the RESUME HERE pointer",
+# "markers disagree:", a backtick-quoted example) that would otherwise
+# masquerade as pointers — the 2026-09-15 incident #2 root cause.
+_RESUME_RE = re.compile(
+    r"RESUME\s+HERE\s*(?:\*\*)?\s*(?:\([^)]*\)\s*)?[:=→]\s*(.*)", re.I
+)
+# Irreversible / outward-facing work that ALWAYS gates (by rule, even with no/`auto`
+# marker), matched against the next unit's text. A forgetful author cannot arm these
+# for unattended auto-run. Explicit `gate:` markers remain the primary mechanism.
+#
+# NOTE (Gary 2026-08-20): "merge to main/master" is deliberately ABSENT — PR merges
+# are no longer gated; Sophia merges her own PRs and keeps going (the `merge_pr` tool
+# still refuses prod repos, so prod stays protected). UAT / human-acceptance moved to
+# `_UAT_STOP_RE` and only gates when run-to-UAT mode is off.
+_ALWAYS_STOP_RE = re.compile(
+    r"(?i)("
+    r"\bdeploy|\bpromote\b|gh\s+repo\s+sync|clasp\s+(?:push|deploy)|"
+    r"\bto\s+prod\b|\bproduction\b|"
+    r"issu\w*\s+tdg|tdg\s+issuance|mass[\s-]+approv\w*|\btreasury\b|\bpayout\b|"
+    r"capital\s+injection|move\s+money"
+    r")"
+)
+
+# UAT / human-acceptance units. Gate by default; skipped when run-to-UAT is on
+# (AUTO_ADVANCE_UNTIL_UAT) so Sophia runs the UAT/test steps herself and only
+# stops on a failure, completion, the cap, or an always-stop (deploy/money).
+_UAT_STOP_RE = re.compile(r"(?i)(\bUAT\b|human\s+acceptance)")
+
+
+def _always_stop_reason(text: str) -> str | None:
+    """Return the matched always-stop keyword in ``text``, else None."""
+    m = _ALWAYS_STOP_RE.search(text or "")
+    return m.group(1) if m else None
+
+
+def _uat_stop_reason(text: str) -> str | None:
+    """Return the matched UAT/human-acceptance keyword in ``text``, else None."""
+    m = _UAT_STOP_RE.search(text or "")
+    return m.group(1) if m else None
+# Separators between a unit's short label and its description ("PR1 — parser").
+_UNIT_SEPARATORS = ("—", "–", " - ")
+
+
+@dataclass
+class TrackerRow:
+    """One data row of a resume tracker: a unit and its raw Advance marker."""
+
+    unit: str
+    advance: str
+
+
+@dataclass
+class AdvanceDecision:
+    """The decision for what to do after a unit completes.
+
+    ``decision`` is one of ``"auto"`` | ``"gate"`` | ``"done"``.
+    """
+
+    decision: str
+    gate_reason: str | None = None
+    next_unit: str | None = None
+
+
+def _normalize(s: str) -> str:
+    """Trim whitespace + surrounding markdown emphasis/code marks (``*``, `` ` ``).
+
+    So a bold tracker cell like ``**PR1 — parser**`` or a pointer like
+    ``**RESUME HERE**`` reduces to its plain text. Markdown bold/italic in unit
+    labels was silently breaking unit-key matching (→ fail-closed gate)."""
+    return (s or "").strip().strip("*`").strip("*` ")
+
+
+def _split_row(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _is_separator_row(cells: list[str]) -> bool:
+    """True for a markdown table separator like ``|---|:--:|``."""
+    nonempty = [c for c in cells if c]
+    return bool(nonempty) and all(set(c) <= set("-: ") for c in nonempty)
+
+
+def _unit_key(label: str) -> str:
+    """Reduce a unit label to its stable short key: the part before the
+    em-dash / hyphen description. ``"PR1 — convention + parser"`` -> ``"pr1"``;
+    ``"Unit 1 — init vault"`` -> ``"unit 1"``; ``"PR2"`` -> ``"pr2"``."""
+    s = _normalize(label).lower()
+    for sep in _UNIT_SEPARATORS:
+        if sep in s:
+            s = s.split(sep, 1)[0]
+            break
+    return s.strip()
+
+
+def parse_resume_tracker(plan_text: str) -> list[TrackerRow]:
+    """Return the resume-tracker rows (unit + advance), in order.
+
+    Locates the first markdown table that has BOTH a ``Unit`` and an
+    ``Advance`` column and returns its data rows. ``[]`` if none is found."""
+    rows: list[TrackerRow] = []
+    header_seen = False
+    unit_col = adv_col = -1
+    for line in plan_text.splitlines():
+        if not line.lstrip().startswith("|"):
+            if header_seen:
+                break  # table ended
+            continue
+        cells = _split_row(line)
+        low = [c.lower() for c in cells]
+        if not header_seen:
+            if "unit" in low and "advance" in low:
+                header_seen = True
+                unit_col = low.index("unit")
+                adv_col = low.index("advance")
+            continue
+        if _is_separator_row(cells):
+            continue
+        if unit_col < len(cells) and adv_col < len(cells):
+            unit = _normalize(cells[unit_col])
+            if unit:
+                rows.append(TrackerRow(unit=unit, advance=_normalize(cells[adv_col])))
+    return rows
+
+
+def _resume_marker_targets(plan_text: str) -> list[str]:
+    """Every ``RESUME HERE`` *pointer* target in the plan, in file order.
+
+    Only real pointers are collected: the marker must be followed by a connector
+    (see :data:`_RESUME_RE`), which naturally skips prose/citation mentions, and
+    must not sit inside an inline code span (a quoted example is not a pointer)."""
+    targets: list[str] = []
+    for line in plan_text.splitlines():
+        m = _RESUME_RE.search(line)
+        if not m:
+            continue
+        # Skip markers quoted inside an inline code span (odd number of
+        # backticks before the match) — e.g. a plan citing the convention as
+        # "`**RESUME HERE:** PR2`". Those are examples, not pointers.
+        if line[: m.start()].count("`") % 2 == 1:
+            continue
+        raw = m.group(1)
+        # Drop leading emphasis opened just before the target ("** PR1…").
+        raw = raw.lstrip("*` ").strip()
+        # Cut at the first clause boundary (closing bold, comma, semicolon, or a
+        # parenthetical description) so "RESUME HERE (§8) = PR1**, driven by …"
+        # yields "PR1" and "PR-INTEGRATION (close the gap), then …" yields
+        # "PR-INTEGRATION" — not the trailing prose that would defeat key-matching.
+        raw = re.split(r"\*\*|[,;(]", raw, maxsplit=1)[0]
+        tail = _normalize(raw).strip()
+        if tail:
+            # strip trailing markdown emphasis *and* sentence punctuation
+            # ("PR1a." -> "PR1a") so a pointer sentence still keys to its row.
+            tail = tail.strip("*").strip().rstrip(".,;:").strip()
+            if tail:
+                targets.append(tail)
+    return targets
+
+
+def find_resume_here(plan_text: str) -> str | None:
+    """Return the target text after the LAST ``RESUME HERE`` pointer, or None.
+
+    The last occurrence wins because plans repeat the pointer (a top-of-file
+    hint plus the authoritative one in the resume tracker)."""
+    targets = _resume_marker_targets(plan_text)
+    return targets[-1] if targets else None
+
+
+def resume_marker_drift(plan_text: str) -> tuple[str, str] | None:
+    """Detect the duplicate-``RESUME HERE`` drift class (incident #2, 2026-09-15).
+
+    Returns ``(valid, stale)`` when the LAST ``RESUME HERE`` pointer does NOT
+    resolve to a resume-tracker unit, but an EARLIER pointer does — the exact
+    shape that otherwise fails key-lookup downstream as an opaque "unit not
+    found". Returns ``None`` when only one pointer exists, when the pointers are
+    consistent, or when the authoritative (last) pointer resolves (the normal
+    top-hint + tracker duplication, where last-wins is correct even if the
+    earlier hint names a different unit). Scoped to resolvable disagreement so
+    prose mentions can never manufacture a spurious gate."""
+    targets = _resume_marker_targets(plan_text)
+    if len(targets) < 2:
+        return None
+    if _DONE_RE.search(targets[-1]):
+        return None  # the authoritative marker says "done" — not drift
+    rows = parse_resume_tracker(plan_text)
+    if not rows:
+        return None
+    if find_unit_row(rows, targets[-1]) is not None:
+        return None  # authoritative marker resolves — last-wins stands
+    for earlier in reversed(targets[:-1]):
+        if find_unit_row(rows, earlier) is not None:
+            return (earlier, targets[-1])
+    return None
+
+
+def classify_marker(marker: str) -> AdvanceDecision:
+    """Classify a single ``Advance`` cell value.
+
+    Only an explicit ``gate:`` forces a stop here; blank / ``auto`` / unknown all
+    resolve to ``auto`` (the default, revised 2026-06-23). Always-stop-by-rule is
+    applied separately in :func:`decision_for_unit` from the unit's text."""
+    raw = _normalize(marker)
+    low = raw.lower()
+    if low.startswith("gate"):
+        reason = raw.split(":", 1)[1].strip() if ":" in raw else ""
+        return AdvanceDecision(
+            decision="gate", gate_reason=reason or "(no reason given)"
+        )
+    return AdvanceDecision(decision="auto")
+
+
+def find_unit_row(rows: list[TrackerRow], target: str) -> int | None:
+    """Index of the row whose unit key equals ``target``'s key, else None.
+
+    Exact key match only (``"PR1"`` does NOT match ``"PR10"``)."""
+    tkey = _unit_key(target)
+    if not tkey:
+        return None
+    for i, r in enumerate(rows):
+        if _unit_key(r.unit) == tkey:
+            return i
+    return None
+
+
+def decision_for_unit(plan_text: str, unit: str, *, run_to_uat: bool = False) -> AdvanceDecision:
+    """Decision for running ``unit`` (the next unit to do).
+
+    Default is ``auto`` (revised 2026-06-23). Forces ``gate`` when: the unit's text
+    is an always-stop (irreversible/outward) category, its marker is an explicit
+    ``gate:``, or — when a tracker is present — the unit cannot be located in it
+    (ambiguity about *where she is* still fails closed). A plan with no tracker /
+    no ``Advance`` column defaults to ``auto`` for the located unit.
+
+    ``run_to_uat`` (AUTO_ADVANCE_UNTIL_UAT) suppresses the UAT / human-acceptance
+    always-stop so Sophia runs UAT/test units herself. PR merges are never gated
+    here; prod deploys / TDG / money always are."""
+    rows = parse_resume_tracker(plan_text)
+    if rows:
+        idx = find_unit_row(rows, unit)
+        if idx is None:
+            return AdvanceDecision(
+                decision="gate", gate_reason=f"unit {unit!r} not found in resume tracker"
+            )
+        next_unit = rows[idx].unit
+        marker_dec = classify_marker(rows[idx].advance)
+        unit_text = f"{rows[idx].unit} {rows[idx].advance}"
+    else:
+        # No tracker / no Advance column -> default auto, but still honor always-stop
+        # detected from the RESUME-HERE target text.
+        next_unit = unit
+        marker_dec = AdvanceDecision(decision="auto")
+        unit_text = unit
+
+    # An explicit gate marker wins — unless run-to-UAT suppresses a purely-UAT gate
+    # (its reason names UAT/acceptance and NOT an irreversible always-stop keyword).
+    if marker_dec.decision == "gate":
+        if run_to_uat and _uat_stop_reason(marker_dec.gate_reason or "") and not (
+            _always_stop_reason(marker_dec.gate_reason or "")
+            or _always_stop_reason(unit_text)
+            or _always_stop_reason(unit)
+        ):
+            pass  # UAT-only gate suppressed; fall through to auto
+        else:
+            marker_dec.next_unit = next_unit
+            return marker_dec
+
+    # Always-stop by rule: irreversible / outward-facing units gate even without a marker.
+    reason = _always_stop_reason(unit_text) or _always_stop_reason(unit)
+    if reason:
+        return AdvanceDecision(
+            decision="gate",
+            gate_reason=f"always-stop: irreversible/outward unit ({reason})",
+            next_unit=next_unit,
+        )
+
+    # UAT / human-acceptance gates by default; skipped in run-to-UAT mode.
+    if not run_to_uat:
+        uat_reason = _uat_stop_reason(unit_text) or _uat_stop_reason(unit)
+        if uat_reason:
+            return AdvanceDecision(
+                decision="gate",
+                gate_reason=f"always-stop: UAT/human-acceptance unit ({uat_reason})",
+                next_unit=next_unit,
+            )
+
+    return AdvanceDecision(decision="auto", next_unit=next_unit)
+
+
+def next_action(
+    plan_text: str,
+    *,
+    pr_opened: bool,
+    made_progress: bool,
+    run_to_uat: bool = False,
+) -> AdvanceDecision:
+    """High-level decision the brain emits at turn-end.
+
+    Fails closed to ``gate`` only when the turn made NO progress at all
+    (``not pr_opened and not made_progress``). A unit whose work is PR-less by
+    design (DNS/Pages verification, a read-only pre-flight, a walk) still
+    converges when it did a real side-effecting action, so it auto-advances
+    instead of demanding a human "go" every time. Genuine non-convergence — a
+    turn that neither opened a PR nor did any useful work — still gates, exactly
+    as before (the case the ``no_progress`` guard exists to catch).
+
+    Args:
+        plan_text: the active roadmap's full markdown.
+        pr_opened: this turn fired one of the three PR tools. Also the signal the
+            one-PR-per-turn ``pr_boundary`` stop keys on — kept separate from
+            ``made_progress`` so that boundary is untouched.
+        made_progress: this turn did a genuine side-effecting action (write/journal
+            tool, or UAT/test tooling under run-to-UAT), even with no PR.
+        run_to_uat: suppress the UAT/human-acceptance always-stop.
+    """
+    if not pr_opened and not made_progress:
+        return AdvanceDecision(
+            decision="gate",
+            gate_reason=(
+                "turn made no progress — no PR opened and no side-effecting "
+                "action — halting auto-advance"
+            ),
+        )
+    drift = resume_marker_drift(plan_text)
+    if drift:
+        valid, stale = drift
+        return AdvanceDecision(
+            decision="gate",
+            gate_reason=(
+                f"multiple RESUME HERE markers disagree: '{valid}' vs '{stale}' "
+                "— fix the plan before continuing (the authoritative marker "
+                "matches no tracker row)"
+            ),
+        )
+    resume = find_resume_here(plan_text)
+    if not resume:
+        return AdvanceDecision(
+            decision="gate", gate_reason="no RESUME HERE pointer in plan"
+        )
+    if _DONE_RE.search(resume):
+        return AdvanceDecision(decision="done")
+    return decision_for_unit(plan_text, resume, run_to_uat=run_to_uat)

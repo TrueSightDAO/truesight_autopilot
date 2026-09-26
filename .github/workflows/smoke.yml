@@ -1,0 +1,64 @@
+name: Tool smoke tests
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'scripts/smoke_tools.py'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - '.github/workflows/smoke.yml'
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Cheap syntax-only sanity net. compileall catches SyntaxError across
+      # every .py file in the tree — including files the import smoke wouldn't
+      # touch — without needing them to be importable. Runs in <2s. Catches
+      # the kind of half-pasted snippet an LLM might leave in a non-imported
+      # file (unfinished docstring, dangling parenthesis, etc.). Won't catch
+      # AttributeError-class bugs like @app.route — that's what the import
+      # smoke below is for.
+      - name: Syntax check (compileall)
+        run: python -m compileall -q app scripts
+
+      - name: Lint (ruff)
+        run: |
+          pip install -r requirements-dev.txt
+          ruff check app tests scripts
+
+      - name: Format check (ruff)
+        # Non-fatal: matches test.yml's treatment. The repo carries 32 legacy
+        # files unformatted under ruff 0.15.x (version drift); failing hard on
+        # them blocks every merge. Gate is on lint + tests; format is advisory.
+        run: ruff format --check app tests scripts 2>/dev/null || echo "Ruff format check skipped (not critical)" 
+
+      - name: Run tool smoke tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/smoke_tools.py
+
+      - name: Unit tests (pytest)
+        run: |
+          pip install -r requirements-dev.txt
+          # Full unit suite gates CI — all tests are now hermetic.
+          pytest -xvs

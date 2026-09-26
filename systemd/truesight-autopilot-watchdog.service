@@ -1,0 +1,18 @@
+[Unit]
+Description=TrueSight Autopilot — Telegram attention watchdog (user-session, read-only nudges)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/truesight_autopilot
+Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/opt/truesight_autopilot/.env
+ExecStart=/opt/truesight_autopilot/.venv/bin/python -m app.attention_watchdog
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

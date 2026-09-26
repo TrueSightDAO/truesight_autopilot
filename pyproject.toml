@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "truesight-autopilot"
+version = "0.1.0"
+description = "Autonomous SRE + developer for TrueSight DAO"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "httpx>=0.27.0",
+    "google-auth-oauthlib>=1.2.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-api-python-client>=2.120.0",
+    "PyGithub>=2.3.0",
+    "boto3>=1.34.0",
+    "tencentcloud-sdk-python>=3.0.1000",
+    "cos-python-sdk-v5>=1.9.0",
+    "schedule>=1.2.0",
+    "python-dotenv>=1.0.0",
+    "pyzbar>=0.1.9",
+    "Pillow>=10.0.0",
+    "pillow_heif>=1.0.0",
+]
+
+[project.scripts]
+truesight-autopilot = "app.main:main"
+
+[tool.pytest.ini_options]
+# Default `pytest` runs the hermetic UNIT suite. Integration + e2e are excluded
+# here because they need a running server / playwright (run them explicitly with
+# their own setup). Test deps live in requirements-dev.txt; CI runs them in smoke.yml.
+# pythonpath = repo root so `import app` resolves under a bare `pytest`
+# invocation (CI), not just `python -m pytest` (which adds CWD itself).
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "--ignore=tests/integration --ignore=tests/test_upload_e2e.py"
+
+
+[tool.ruff]
+# Baseline: ignore pre-existing violations that would block CI on every PR.
+# These are known issues in legacy code that should be fixed incrementally.
+# New code must be clean — the local-test-before-push rule enforces this.
+lint.ignore = [
+    "E402",  # module-import-not-at-top-of-file (15 occurrences in app/main.py, tests)
+    "E741",  # ambiguous-variable-name (4 occurrences in app/daily_briefing.py, app/tools/gmail_tools.py)
+]
+
+[tool.ruff.format]
+# Match the project's existing style
+quote-style = "double"

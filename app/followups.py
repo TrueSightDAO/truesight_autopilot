@@ -1,0 +1,465 @@
+"""
+Durable follow-up registry — parser + state sidecar.
+
+Parses ```followup blocks from OPEN_FOLLOWUPS.md (leaves all prose
+untouched), manages mutable scheduling state in a git-ignored, non-deploy
+sidecar (`data/followups_state.json`; the legacy `followups/state.json`
+is still read as a migration fallback),
+and provides atomic read/write access for the follow-up comb loop.
+
+Schema (the fenced block in .md):
+
+```followup
+id: matheus-nota-fiscal
+chat_id: -1003919341801
+thread_id: 10
+title: Chase Matheus for the Nota Fiscal
+created_at: 2026-06-11
+condition:
+  kind: gmail_reply
+  from: matheus@example.com
+  subject_contains: Nota Fiscal
+schedule:
+  check: daily
+  escalate_after_days: 2
+  on_escalate: ping_thread
+status: open
+```
+
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import tempfile
+import yaml
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any
+
+# ── paths ────────────────────────────────────────────────────────────────
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_followups_md() -> Path:
+    """Locate OPEN_FOLLOWUPS.md across the known layouts.
+
+    Mirrors app.context.get_context_file: the configured context mirror first
+    (the box syncs settings.own_repos["followups"] to
+    ``<context_repos_dir>/<that repo>``, e.g.
+    ``/opt/truesight_autopilot/context/agentic_ai_context`` for Sophia), then
+    a dev-convenience fallback next to this checkout, then the developer's
+    ``~/Applications`` clone (both fallbacks assume the public
+    agentic_ai_context — a sibling instance's own followups repo only
+    resolves via the first, deployed-box candidate). Falls back to the
+    configured location so a missing-file error points at the canonical
+    path. Resolving against the live config (rather than a hard-coded
+    ``<repo>/agentic_ai_context``) is what stopped /vault/followups 500-ing on
+    the box, where the repo isn't a sibling of this checkout.
+    """
+    from .config import settings
+
+    followups_repo = settings.own_repos["followups"]
+    candidates = [
+        settings.context_repos_dir / followups_repo,
+        _REPO_ROOT / "agentic_ai_context",
+        _REPO_ROOT.parent / "agentic_ai_context",
+        Path.home() / "Applications" / "agentic_ai_context",
+    ]
+    for c in candidates:
+        if (c / "OPEN_FOLLOWUPS.md").exists():
+            return c / "OPEN_FOLLOWUPS.md"
+    return settings.context_repos_dir / followups_repo / "OPEN_FOLLOWUPS.md"
+
+
+_FOLLOWUPS_MD = _resolve_followups_md()
+
+
+def _resolve_state_dir() -> Path:
+    """Directory that holds the mutable follow-up state sidecar.
+
+    Runtime state must live OUTSIDE the tracked deploy tree: the box's deploy
+    runs ``git reset --hard`` + ``git clean -fd``, so a *tracked* state file is
+    reset to its stale committed snapshot on every deploy -- silently
+    un-resolving follow-ups and re-firing them each hourly pass (the 2026-09-14
+    ``warmup-conversion-30day-readout`` re-strike storm). ``data/`` is
+    git-ignored for this file and survives both reset and clean (same class as
+    ``data/attention_watchdog_state.json``). Override with
+    ``TRUESIGHT_FOLLOWUP_STATE_DIR`` (e.g. a non-deploy volume).
+    """
+    override = os.getenv("TRUESIGHT_FOLLOWUP_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
+    return _REPO_ROOT / "data"
+
+
+_STATE_DIR = _resolve_state_dir()
+_STATE_FILE = _STATE_DIR / "followups_state.json"
+# Pre-2026-09-14 location -- a *tracked* file that each deploy reset to its
+# stale committed content. Read-only fallback so a box mid-migration still sees
+# its state; never written.
+_LEGACY_STATE_FILE = _REPO_ROOT / "followups" / "state.json"
+
+# ── regex ────────────────────────────────────────────────────────────────
+
+_FOLLOWUP_BLOCK_RE = re.compile(
+    r"^```followup\n(?P<body>.*?)\n```$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+# ── public helpers ───────────────────────────────────────────────────────
+
+
+def _ensure_state_dir() -> None:
+    """Create the sidecar state directory if it doesn't exist."""
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_state() -> dict[str, Any]:
+    """Load mutable scheduling state from disk. Returns {} on first run.
+
+    Reads the durable, non-deploy location first, then the legacy tracked path
+    (pre-2026-09-14) as a migration fallback.
+    """
+    for path in (_STATE_FILE, _LEGACY_STATE_FILE):
+        if not path.exists():
+            continue
+        raw = path.read_text(encoding="utf-8")
+        if not raw.strip():
+            continue
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+def _write_state(state: dict[str, Any]) -> None:
+    """Atomically write state to disk (tmp + os.replace)."""
+    _ensure_state_dir()
+    fd, tmp_path = tempfile.mkstemp(dir=_STATE_DIR, suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, _STATE_FILE)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+
+def _read_md() -> str:
+    """Read the current OPEN_FOLLOWUPS.md content."""
+    return _FOLLOWUPS_MD.read_text(encoding="utf-8")
+
+
+def _write_md(content: str) -> None:
+    """Write OPEN_FOLLOWUPS.md atomically."""
+    fd, tmp_path = tempfile.mkstemp(dir=_FOLLOWUPS_MD.parent, suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, _FOLLOWUPS_MD)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+
+# ── parsing ──────────────────────────────────────────────────────────────
+
+
+def _normalize_yaml_dates(parsed: dict[str, Any]) -> None:
+    """Normalize top-level date/datetime values to ISO strings, in place.
+
+    YAML's default resolver auto-parses an unquoted ``YYYY-MM-DD`` scalar
+    (the natural, documented way to write ``created_at:`` in a followup
+    block) into a Python ``datetime.date``, not a string. Every consumer of
+    a parsed follow-up (``followup_probes.elapsed_days``,
+    ``followup_loop._process_one``, ``_build_escalation_message``) then
+    calls ``datetime.fromisoformat(created_at)`` expecting a string — that
+    raises ``TypeError`` on a ``date``/``datetime`` object, which every one
+    of those call sites catches and treats as "invalid" (logged as
+    ``Invalid created_at: 2026-07-21``, which reads like the date itself was
+    rejected rather than exposing the actual type mismatch). Net effect: a
+    follow-up authored the documented way never strikes and never escalates,
+    silently. Root-caused 2026-07-24 — every existing follow-up in
+    OPEN_FOLLOWUPS.md at the time (chocolate-subscription-phase2,
+    warmup-conversion-30day-readout) was affected.
+    """
+    for key, value in list(parsed.items()):
+        if isinstance(value, datetime):
+            parsed[key] = value.date().isoformat()
+        elif isinstance(value, date):
+            parsed[key] = value.isoformat()
+
+
+def _parse_block(body: str, line_offset: int) -> dict[str, Any] | str:
+    """
+    Parse a single ```followup block body into a dict.
+
+    Returns the dict on success, or an error string on failure.
+    """
+    try:
+        parsed = yaml.safe_load(body)
+    except yaml.YAMLError as e:
+        return f"YAML parse error at line ~{line_offset}: {e}"
+
+    if not isinstance(parsed, dict):
+        return f"Followup block at line ~{line_offset} is not a mapping"
+
+    _normalize_yaml_dates(parsed)
+
+    # Required fields
+    for field in ("id", "chat_id", "thread_id", "title", "created_at", "status"):
+        if field not in parsed:
+            return (
+                f"Followup '{parsed.get('id', '?')}' missing required field '{field}'"
+            )
+
+    # thread_id is REQUIRED — this is the guardrail against silent background loops
+    if not parsed.get("thread_id"):
+        return f"Followup '{parsed.get('id', '?')}' missing required field 'thread_id'"
+
+    # Normalise status
+    status = parsed.get("status", "open").strip().lower()
+    if status not in ("open", "resolved", "aborted", "blocked"):
+        return f"Followup '{parsed['id']}' has invalid status '{status}'"
+    parsed["status"] = status
+
+    return parsed
+
+
+def parse_all() -> list[dict[str, Any]]:
+    """
+    Parse all ```followup blocks from OPEN_FOLLOWUPS.md.
+
+    Returns a list of parsed dicts. Blocks that fail validation are
+    skipped with a warning printed to stderr.
+    """
+    content = _read_md()
+    results: list[dict[str, Any]] = []
+
+    for match in _FOLLOWUP_BLOCK_RE.finditer(content):
+        # Estimate line number for error messages
+        line_offset = content[: match.start()].count("\n") + 1
+        body = match.group("body")
+        parsed = _parse_block(body, line_offset)
+        if isinstance(parsed, str):
+            print(f"[followups] WARNING: {parsed}")
+            continue
+        results.append(parsed)
+
+    return results
+
+
+def get(id: str) -> dict[str, Any] | None:
+    """Get a single follow-up by id from the .md definition."""
+    for f in parse_all():
+        if f["id"] == id:
+            return f
+    return None
+
+
+# Statuses that permanently close a follow-up. The state sidecar is the
+# authority for these: OPEN_FOLLOWUPS.md is a context mirror that gets reset
+# by checkout/resync, so a follow-up resolved in the sidecar but still reading
+# `status: open` in the .md must stay closed.
+_TERMINAL_STATUSES = frozenset({"resolved", "aborted"})
+
+
+def _is_terminally_closed(entry: Any) -> bool:
+    """True iff a sidecar state entry records a terminal (closed) status."""
+    if not isinstance(entry, dict):
+        return False
+    return str(entry.get("status") or "").strip().lower() in _TERMINAL_STATUSES
+
+
+def list_open() -> list[dict[str, Any]]:
+    """Return follow-ups open in BOTH the .md and the state sidecar.
+
+    The sidecar (``data/followups_state.json``) is authoritative for terminal
+    status: an entry whose sidecar records ``resolved``/``aborted`` is
+    excluded even when its .md block still reads ``status: open``. Without
+    this, a resync that restores the .md to ``open`` re-fires the follow-up
+    on every hourly pass -- re-spinning a Sophia turn forever (the
+    2026-09-14 ``warmup-conversion-30day-readout`` storm).
+    """
+    state = _load_state()
+    return [
+        f
+        for f in parse_all()
+        if f.get("status") == "open" and not _is_terminally_closed(state.get(f["id"]))
+    ]
+
+
+# ── state sidecar ────────────────────────────────────────────────────────
+
+
+def upsert_state(id: str, **kwargs: Any) -> dict[str, Any]:
+    """
+    Update mutable scheduling state for a follow-up.
+
+    Merges kwargs into the state entry. Creates a new entry with defaults
+    if one doesn't exist. Returns the full state entry.
+    """
+    state = _load_state()
+    entry = state.get(
+        id,
+        {
+            "id": id,
+            "last_checked": None,
+            "next_check": None,
+            "attempts": 0,
+            "last_pinged": None,
+        },
+    )
+    entry.update(kwargs)
+    state[id] = entry
+    _write_state(state)
+    return entry
+
+
+def get_state(id: str) -> dict[str, Any] | None:
+    """Get mutable state for a follow-up. Returns None if never seen."""
+    state = _load_state()
+    return state.get(id)
+
+
+def set_status(id: str, new_status: str) -> bool:
+    """
+    Set a follow-up's status (open | resolved | aborted | blocked).
+
+    Updates BOTH the .md block AND the state sidecar.
+    For resolved/aborted, moves the block under the appropriate heading.
+    Returns True on success, False if the id wasn't found.
+    """
+    new_status = new_status.strip().lower()
+    if new_status not in ("open", "resolved", "aborted", "blocked"):
+        raise ValueError(f"Invalid status: {new_status}")
+
+    content = _read_md()
+
+    # Find the block
+    pattern = re.compile(
+        r"^```followup\nid: " + re.escape(id) + r".*?\n```$",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(content)
+    if not match:
+        return False
+
+    block_text = match.group(0)
+
+    # Update status in the block body
+    updated_block = re.sub(
+        r"^status: .*$",
+        f"status: {new_status}",
+        block_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+    if new_status in ("open", "blocked"):
+        # Just update in place. `blocked` stays visible in the file but is
+        # excluded from firing (list_open/next_due act only on `open`), so an
+        # item genuinely waiting on a governor decision stops re-nagging weekly
+        # while remaining on the record.
+        new_content = content[: match.start()] + updated_block + content[match.end() :]
+    elif new_status == "resolved":
+        # Move to ## Recently shipped
+        new_content = content[: match.start()] + content[match.end() :]
+        # Find the Recently shipped section and append
+        shipped_marker = "\n## Recently shipped\n"
+        shipped_idx = new_content.find(shipped_marker)
+        if shipped_idx >= 0:
+            # Insert after the section header (find the next blank line or end)
+            insert_point = shipped_idx + len(shipped_marker)
+            new_content = (
+                new_content[:insert_point]
+                + "\n"
+                + updated_block
+                + "\n\n"
+                + new_content[insert_point:]
+            )
+        else:
+            # No Recently shipped section — append at end
+            new_content = (
+                new_content.rstrip()
+                + "\n\n## Recently shipped\n\n"
+                + updated_block
+                + "\n"
+            )
+    else:
+        # aborted — move to ## Closed without shipping
+        new_content = content[: match.start()] + content[match.end() :]
+        closed_marker = "\n## Closed without shipping\n"
+        closed_idx = new_content.find(closed_marker)
+        if closed_idx >= 0:
+            insert_point = closed_idx + len(closed_marker)
+            new_content = (
+                new_content[:insert_point]
+                + "\n"
+                + updated_block
+                + "\n\n"
+                + new_content[insert_point:]
+            )
+        else:
+            new_content = (
+                new_content.rstrip()
+                + "\n\n## Closed without shipping\n\n"
+                + updated_block
+                + "\n"
+            )
+
+    # Record the transition in the sidecar FIRST. list_open()/next_due() treat
+    # a terminal sidecar status as authoritative, so the closure must land in
+    # durable local state even if the .md rewrite below is discarded by a
+    # read-only mirror or checkout resync (the 2026-09-14 re-strike storm).
+    upsert_state(id, status=new_status)
+
+    _write_md(new_content)
+
+    return True
+
+
+# ── convenience ──────────────────────────────────────────────────────────
+
+
+def next_due(now: datetime | None = None) -> list[dict[str, Any]]:
+    """
+    Return open follow-ups whose next_check is due (or None if never checked).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    open_followups = list_open()
+    state = _load_state()
+    due: list[dict[str, Any]] = []
+
+    for f in open_followups:
+        entry = state.get(f["id"])
+        if entry is None:
+            # Never checked — due immediately
+            due.append(f)
+            continue
+        next_check = entry.get("next_check")
+        if next_check is None:
+            due.append(f)
+            continue
+        try:
+            check_dt = datetime.fromisoformat(next_check)
+            if check_dt <= now:
+                due.append(f)
+        except (ValueError, TypeError):
+            due.append(f)
+
+    return due
+
+
+import json  # noqa: E402 — must be at module level after all defs

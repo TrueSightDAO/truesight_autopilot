@@ -1,0 +1,147 @@
+"""Tests for the handoff thread -> plan resolver used to make a bare 'go for it'
+in a Telegram topic resolve to the right plan
+(agentic_ai_context/handoffs/HANDOFF_MANIFEST.md registry — single source of
+truth since the 2026-07-18 registry consolidation; it used to be
+sophia/SOPHIA_HANDOFFS.md).
+
+This fixture mirrors the REAL registry's column layout and Status vocabulary
+(in progress / blocked / parked GO-ready / draft / deployed / completed /
+superseded / demo · live) rather than the old "active"/"done" convention the
+resolver used to require — that mismatch made the resolver dead code for every
+real handoff (see HANDOFF_REGISTRY_CONSOLIDATION_PLAN.md)."""
+
+from app.telegram_adapter import _parse_handoff_plan, _parse_handoff_plan_and_flags
+
+REGISTRY = """\
+| Plan file | Handoff title | Handoff date | Status | Telegram topic | message_thread_id | Resume tracker state | Last manifest update |
+|-----------|---------------|--------------|--------|-----------------|--------------------|----------------------|----------------------|
+| `MORNING_ORACLE_STANDUP_PLAN.md` | Morning Oracle Standup | 2026-06-08 | parked GO-ready | [topic](x) | 1722 | RESUME HERE = PR1 | 2026-06-08 |
+| `DAO_CLIENT_INTEGRATION_FIXES.md` | DAO client fixes | 2026-06-08 | in progress | [topic](x) | 1695 | RESUME HERE = PR2 | 2026-06-08 |
+| `BLOCKED_PLAN.md` | Something waiting on a secret | 2026-06-08 | blocked | [topic](x) | 1800 | RESUME HERE = PR1 | 2026-06-08 |
+| `OLD_PLAN.md` | Old done thing | 2026-06-07 | completed | [topic](x) | 1400 | done | 2026-06-07 |
+| `SUPERSEDED_PLAN.md` | Overtaken by another fix | 2026-06-06 | superseded — already implemented | [topic](x) | 1300 | n/a | 2026-06-06 |
+"""
+
+# Mirrors the real HANDOFF_MANIFEST.md schema (2026-07-21) with the Auto-start
+# column present.
+REGISTRY_WITH_AUTO_START = """\
+| Plan file | Handoff title | Handoff date | Status | Telegram topic | message_thread_id | Auto-start | Resume tracker state | Last manifest update |
+|-----------|---------------|--------------|--------|-----------------|--------------------|---|----------------------|----------------------|
+| `AUTO_PLAN.md` | Auto-start plan | 2026-07-21 | parked GO-ready | [topic](x) | 2001 | yes | RESUME HERE = PR1 | 2026-07-21 |
+| `MANUAL_PLAN.md` | Normal plan | 2026-07-21 | parked GO-ready | [topic](x) | 2002 | no | RESUME HERE = PR1 | 2026-07-21 |
+"""
+
+
+def test_resolves_by_thread_id():
+    assert _parse_handoff_plan(REGISTRY, 1722) == "MORNING_ORACLE_STANDUP_PLAN.md"
+    assert _parse_handoff_plan(REGISTRY, 1695) == "DAO_CLIENT_INTEGRATION_FIXES.md"
+
+
+def test_resolves_blocked_status_too():
+    # 'blocked' is not a terminal status — still resolvable so context can be
+    # injected if the governor messages the thread again.
+    assert _parse_handoff_plan(REGISTRY, 1800) == "BLOCKED_PLAN.md"
+
+
+def test_unknown_thread_returns_none():
+    assert _parse_handoff_plan(REGISTRY, 9999) is None
+
+
+def test_completed_handoff_is_ignored():
+    assert _parse_handoff_plan(REGISTRY, 1400) is None
+
+
+def test_superseded_handoff_is_ignored():
+    assert _parse_handoff_plan(REGISTRY, 1300) is None
+
+
+def test_matches_via_thread_id_suffix_cell():
+    # Even if only a `tg:...:<id>`-style cell carries the id (legacy shape),
+    # it still resolves as long as no terminal-status marker is present.
+    reg = "| `P.md` | y | d | in progress | t | `tg:-100:5555` | r | u |"
+    assert _parse_handoff_plan(reg, 5555) == "P.md"
+
+
+# ── Auto-start flag (2026-07-21) ────────────────────────────────────────────
+
+
+def test_auto_start_yes_resolves_true():
+    result = _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 2001)
+    assert result == ("AUTO_PLAN.md", True)
+
+
+def test_auto_start_no_resolves_false():
+    result = _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 2002)
+    assert result == ("MANUAL_PLAN.md", False)
+
+
+def test_auto_start_missing_column_defaults_false():
+    # REGISTRY has no Auto-start column at all — must not crash, must not
+    # treat that as auto_start=True.
+    result = _parse_handoff_plan_and_flags(REGISTRY, 1722)
+    assert result == ("MORNING_ORACLE_STANDUP_PLAN.md", False)
+
+
+def test_auto_start_no_header_row_defaults_false():
+    # The bare single-line fixture (no header at all) must still resolve the
+    # plan filename, with auto_start defaulting to False rather than crashing.
+    reg = "| `P.md` | y | d | in progress | t | `tg:-100:5555` | r | u |"
+    result = _parse_handoff_plan_and_flags(reg, 5555)
+    assert result == ("P.md", False)
+
+
+def test_auto_start_unknown_thread_is_none():
+    assert _parse_handoff_plan_and_flags(REGISTRY_WITH_AUTO_START, 9999) is None
+
+
+# ── 2026-09-25 capoeira-i18n incident: non-Status cell containing "stale" ────
+
+# Mirrors the exact row shape that silently voided the capoeira handoff. The
+# Resume-tracker cell says the *stale* PROJECT_INDEX entry was ignored — an
+# incidental use of the word "stale" in a NON-Status cell. Before the fix the
+# whole-row marker scan matched it and returned None (plan_file=None forever in
+# the auto-advance log), so Sophia never auto-advanced and stopped for a governor
+# prompt after every PR.
+INCIDENT_REGISTRY = """\
+| Plan file | Handoff title | Handoff date | Status | Telegram topic | message_thread_id | Auto-start | Resume tracker state | Last manifest update | Discord channel id | Discord thread id |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `plans/CAPOEIRA_I18N_PLAN.md` | Capoeira site i18n | 2026-09-24 | triggered — PR1 in progress | Exec: Capoeira i18n | 35336 | no | Drafted from live repo inspection (not from the stale `PROJECT_INDEX.md` capoeira entry). RESUME HERE -> PR1 | 2026-09-24 |  |  |
+"""
+
+
+def test_non_status_cell_containing_stale_does_not_void_handoff():
+    # The bug: "stale" appeared only in the Resume-tracker cell, yet the
+    # whole-row scan treated the handoff as finished.
+    assert _parse_handoff_plan(INCIDENT_REGISTRY, 35336) == "plans/CAPOEIRA_I18N_PLAN.md"
+    assert _parse_handoff_plan_and_flags(INCIDENT_REGISTRY, 35336) == (
+        "plans/CAPOEIRA_I18N_PLAN.md",
+        False,
+    )
+
+
+def test_non_status_cell_containing_completed_does_not_void_handoff():
+    reg = (
+        "| Plan file | Handoff title | Handoff date | Status | Telegram topic | "
+        "message_thread_id | Resume tracker state |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| `P.md` | thing | d | in progress | t | 7777 | "
+        "blocked on the completed migration |\n"
+    )
+    assert _parse_handoff_plan(reg, 7777) == "P.md"
+
+
+def test_terminal_status_cell_still_ignored():
+    reg = (
+        "| Plan file | Handoff title | Handoff date | Status | Telegram topic | "
+        "message_thread_id | Resume tracker state |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| `P.md` | thing | d | completed | t | 8888 | no stale words here |\n"
+    )
+    assert _parse_handoff_plan(reg, 8888) is None
+
+
+def test_headerless_fixture_falls_back_to_whole_row_scan():
+    # No Status header -> keep the conservative all-cells scan. An incidental
+    # terminal word in a header-less fixture must still void it (old behavior).
+    reg = "| `P.md` | y | d | in progress | t | 9999 | stale |"
+    assert _parse_handoff_plan(reg, 9999) is None

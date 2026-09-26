@@ -1,0 +1,798 @@
+"""Configuration for truesight_autopilot (merged governor chat + autopilot)."""
+
+from __future__ import annotations
+
+import fnmatch
+import os
+from pathlib import Path
+
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _repo_list(value: object) -> list[str]:
+    """Parse a repo list from either a list (init kwarg / default) or a plain
+    comma/space-separated string (env var).
+
+    Deliberately tolerant: pydantic-settings would otherwise demand JSON for a
+    list-typed field, so the natural ``ALLOWED_REPOS=a,b`` would raise a
+    settings ValidationError at boot.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [t.strip() for t in value.replace(",", " ").split() if t.strip()]
+    if isinstance(value, (list, tuple, set)):
+        out: list[str] = []
+        for item in value:
+            out.extend(_repo_list(item))
+        return out
+    return [str(value).strip()]
+
+
+# Literal historical allowlist (36 repos, incl. the KrakeIO bridge). Kept as
+# the back-compat default of ``allowed_repos`` so the default-allow model can
+# land in two units with no behavior change in between; see
+# plans/SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md.
+_LEGACY_ALLOWED_REPOS: list[str] = [
+    "getdata-mcp-bridge",
+    "dapp_beta",
+    "dapp_prod",
+    "tokenomics",
+    "truesight_me",
+    "truesight_me_prod",
+    "truesight_me_beta",
+    "agroverse_shop",
+    "agroverse_shop_prod",
+    "agroverse_shop_beta",
+    "dao_client",
+    "market_research",
+    "go_to_market",
+    "sentiment_importer",
+    "truesight_autopilot",
+    "agentic_ai_context",
+    "dao_protocol",
+    "fda_fsvp",
+    "capoeira",
+    "program-template",
+    "butterfly-effect-club",
+    "oracle",
+    "agroverse-inventory",
+    "treasury-cache",
+    ".github",
+    "ecosystem_change_logs",
+    "tribomirimbahia",
+    "lineage-engine",
+    "lineage-assets",
+    "sunmint_farmer",
+    "sunmint_mobile",
+    "sunmint_beta",
+    "sunmint_prod",
+    "farm-media-raw",
+    "farm-media-daemon",
+    "farm_media_manifests",
+]
+
+# Governor-blessed globs for github_tools.create_repo(). Creating a NEW repo
+# stays bounded even though writing an EXISTING one is default-allow.
+_DEFAULT_CREATE_REPO_PATTERNS: list[str] = [
+    "*-program",
+    "cfr-*",
+    "*-site",
+    "*-beta",
+    "*-prod",
+    "*-cache",
+    "*-raw",
+    # member-tier quarantine workspace (non-authoritative SOP candidates).
+    # See agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md.
+    "member-*",
+]
+
+# Naming families whose repos MUST ALWAYS be private - creating one public is
+# refused by github_tools.create_repo. Member-tier material may contain content
+# not ready for public view. See
+# agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md (decision D6).
+_PRIVATE_ONLY_CREATE_REPO_PATTERNS: list[str] = [
+    "member-*",
+]
+
+
+class Settings(BaseSettings):
+    # populate_by_name lets ``Settings(allowed_repos=[...])`` (field name) keep
+    # working alongside the ``LEGACY_ALLOWED_REPOS`` validation_alias — the
+    # alias is what keeps that legacy field OFF the ALLOWED_REPOS env var,
+    # which now means strict mode.
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        populate_by_name=True,
+    )
+    # Service
+    port: int = Field(default=8001, validation_alias="PORT")
+    host: str = Field(default="0.0.0.0", validation_alias="HOST")
+    dry_run: bool = Field(default=False, validation_alias="DRY_RUN")
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    max_pr_per_day: int = Field(default=5, validation_alias="MAX_PR_PER_DAY")
+    # The follow-up loop (app/followup_loop.py) probes items defined in the
+    # shared, public agentic_ai_context/OPEN_FOLLOWUPS.md and can act on them.
+    # Those follow-ups belong to whichever instance owns that DAO-wide work
+    # (Sophia) — a sibling instance that only reads that repo for context
+    # should not also inherit and act on its follow-up queue. Default True
+    # preserves Sophia's existing behavior; a locked-down sibling sets
+    # FOLLOWUPS_ENABLED=false.
+    followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
+
+    # The email-inbox watch (app/email_inbox_watch.py) triages unread
+    # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the
+    # loop into the lifespan, but it stays OFF by default until the governor
+    # has reviewed dry-run logs and given the Unit 3 go. Even when enabled,
+    # outbound writes additionally require EMAIL_WATCH_ENABLE_SENDS (also
+    # default off). Default False keeps this deploy behavior-neutral.
+    email_watch_enabled: bool = Field(
+        default=False, validation_alias="EMAIL_WATCH_ENABLED"
+    )
+
+    # _handoff_prefix() (app/telegram_adapter.py) reads Sophia's public
+    # HANDOFF_MANIFEST.md and injects "you're pre-authorized to execute this
+    # plan" framing whenever a message LOOKS like a go-signal ("go for it",
+    # "go", "proceed", "ship it") — regardless of whether this instance's
+    # thread_id actually matches a registry row (Telegram topic IDs are small
+    # sequential integers *per group*, so a coincidental collision with one of
+    # Sophia's handoff topics is plausible). This entire feature is specific
+    # to Sophia's autonomous roadmap-execution pattern; a sibling instance
+    # that's a plain chat assistant should never have an ordinary "go for it"
+    # reinterpreted as authorization to execute someone else's plan. Default
+    # True preserves Sophia's existing behavior; a locked-down sibling sets
+    # HANDOFFS_ENABLED=false.
+    handoffs_enabled: bool = Field(default=True, validation_alias="HANDOFFS_ENABLED")
+
+    # Auto-advance (SOPHIA_AUTO_ADVANCE_PLAN.md): when ON, after a PR turn on a
+    # handoff thread the brain emits an "advance" signal and the adapter
+    # continues to the next plan unit without a human prompt, stopping at gates.
+    # OFF by default — behavior is one-PR-then-wait until explicitly enabled.
+    auto_advance: bool = Field(default=False, validation_alias="AUTO_ADVANCE")
+    # Backstop: max consecutive auto-advanced turns before forcing a pause.
+    auto_advance_max_turns: int = Field(
+        default=8, validation_alias="AUTO_ADVANCE_MAX_TURNS"
+    )
+    # Run-to-UAT (Gary 2026-08-20): when ON, UAT / human-acceptance units are no
+    # longer an always-stop gate — Sophia runs them and keeps going until the
+    # plan is done, a test fails (needs a human), or an irreversible always-stop
+    # (prod deploy / promote / TDG / money). Also lets a turn count as "progress"
+    # when it ran any tool (not just opened/merged a PR), so UAT/test units that
+    # don't create PRs still auto-advance. OFF by default.
+    auto_advance_until_uat: bool = Field(
+        default=False, validation_alias="AUTO_ADVANCE_UNTIL_UAT"
+    )
+
+    # Goal-loop (Track A / unit A2, SOPHIA_GOAL_LOOP_AND_BRAIN_PLAN.md): when ON
+    # *and* AUTO_ADVANCE is ON, a PLAN-LESS thread that has an OPEN thread goal
+    # (set via the ``set_thread_goal`` tool) also auto-continues -- one step per
+    # turn, until the goal is completed (``complete_thread_goal``), stalls, hits
+    # the ceiling, or an always-stop. OFF by default => behavior is byte-
+    # identical; flipped only after a soak (the plan's A2 gate).
+    goal_loop_enabled: bool = Field(default=False, validation_alias="GOAL_LOOP_ENABLED")
+
+    # Goal-loop hard ceiling (Track A / unit A3): max TOTAL turns a single
+    # thread goal may consume before the loop force-stops. This is the
+    # independent guard the roadmap calls out (§4 rule 6 / §8 risk 1) so a
+    # goal-driven loop cannot run away. Mirrors app.thread_goal.DEFAULT_MAX_GOAL_TURNS.
+    chat_max_goal_turns: int = Field(default=40, validation_alias="CHAT_MAX_GOAL_TURNS")
+    # Goal-loop stall detector (Track A / unit A3): force-stop when the goal has
+    # made NO progress for this many seconds (wall clock since the last
+    # made-progress turn). 0 (default) DISABLES it => behavior is unchanged
+    # until a governor opts in with a positive value.
+    goal_stall_seconds: float = Field(
+        default=0.0, validation_alias="GOAL_STALL_SECONDS"
+    )
+
+    # Catalog-driven field normalizer. When ON, _normalize_submission_labels uses
+    # the live events catalog's canonical_labels to map LLM-supplied attribute keys
+    # to canonical labels via exact/case-insensitive/space-underscore-hyphen matching,
+    # falling back to _FIELD_ALIASES for backward compat. OFF by default — existing
+    # _FIELD_ALIASES behavior is unchanged.
+    catalog_normalize: bool = Field(default=False, validation_alias="CATALOG_NORMALIZE")
+
+    # Approval gate for submit_contribution. OFF by default (Gary 2026-06-18):
+    # signed submissions execute directly — the RSA signature is the
+    # authorization, so the extra "Click Approve" step was redundant friction
+    # AND caused a retry loop (a no-QR CONTRIBUTION EVENT could never satisfy the
+    # QR-keyed gate -> permanent "pending" -> the model re-called it to the round
+    # cap). Set REQUIRE_SUBMISSION_APPROVAL=true to restore the Approve/Reject card.
+    require_submission_approval: bool = Field(
+        default=False, validation_alias="REQUIRE_SUBMISSION_APPROVAL"
+    )
+
+    # CORS
+    cors_origins: list[str] = ["*"]  # TODO: restrict to dapp.truesight.me in production
+
+    # Security
+    jwt_secret: str = Field(
+        default="change-me-in-production", validation_alias="JWT_SECRET"
+    )
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_minutes: int = 30
+    nonce_ttl_seconds: int = 300
+    timestamp_skew_seconds: int = 600
+    disable_governor_check: bool = Field(
+        default=False, validation_alias="DISABLE_GOVERNOR_CHECK"
+    )
+
+    # GitHub
+    github_pat: str = Field(default="", validation_alias="TRUESIGHT_DAO_AUTOPILOT")
+    krake_io_pat: str = Field(default="", validation_alias="KRAKE_IO_PAT")
+    # Optional, broader-but-read-only token: read_repo_file / search_codebase
+    # fall back to it when set. Lets a locked-down instance whose github_pat
+    # is a fine-grained PAT scoped to only its own private repos (for writes)
+    # still read the rest of the public org without a second config surface
+    # per tool. Empty by default — existing unauthenticated-read fallback in
+    # _github_headers() is unchanged for Sophia.
+    github_read_pat: str = Field(default="", validation_alias="GITHUB_READ_PAT")
+    # Dedicated token for transcript publishing (_publish_transcript in
+    # main.py) — isolates the transcript repo's rate-limit budget from the
+    # shared github_pat used by every other PR/merge/push call. Falls back to
+    # github_pat when unset, so instances without a dedicated token behave
+    # exactly as before.
+    github_transcript_pat: str = Field(
+        default="", validation_alias="GITHUB_TRANSCRIPT_PAT"
+    )
+
+    # This instance's own repo identity, consolidated into one structured
+    # setting rather than one field per repo class (was heading that way:
+    # transcript_repo, attachments_repo, and a third for OPEN_FOLLOWUPS.md
+    # source were each about to become their own Field()). A future sibling
+    # instance is instantiated by supplying ONE env var — no code change, no
+    # new Settings field to add per repo class discovered.
+    #
+    # Keys and their defaults match Sophia's existing hardcoded repos
+    # exactly, so her behavior is unchanged with no override at all:
+    #   context      — read-only DAO context mirror (app/context.py); a
+    #                  locked-down sibling normally leaves this at the
+    #                  public default (it still wants the shared DAO
+    #                  context), unlike the other three.
+    #   transcript   — where ITS conversation transcript lands
+    #                  (api_only_repos; app/main.py, transcript_search.py).
+    #   attachments  — where ITS Telegram attachments land (api_only_repos).
+    #   followups    — source of OPEN_FOLLOWUPS.md for the follow-up loop
+    #                  (app/followups.py) — a sibling instance should
+    #                  probe ITS OWN follow-up queue, not Sophia's.
+    # Override via env: OWN_REPOS='{"transcript":"bionpact_autopilot_transcription",...}'
+    # (only the overridden keys need to be present — merged onto defaults).
+    own_repos: dict[str, str] = Field(
+        default={
+            "context": "agentic_ai_context",
+            "transcript": "truesight_autopilot_transcript",
+            "attachments": "store_interaction_attachments",
+            "followups": "agentic_ai_context",
+        },
+        validation_alias="OWN_REPOS",
+    )
+
+    # This instance's own name in the agent registry
+    # (agentic_ai_context/agents/<name>.json) — used by app/tools/
+    # agent_handoff.py to address outgoing handoffs (the "from" field) and
+    # filter incoming ones (files prefixed "<agent_name>_from_..." in the
+    # shared TrueSightDAO/agent_handoffs repo). Unlike own_repos, this
+    # doesn't vary the REPO used — every instance shares the same
+    # agent_handoffs mailbox repo — it's the instance's own identity within
+    # that shared repo. Default "sophia" preserves her existing behavior; a
+    # sibling instance sets AGENT_NAME=bionpact (etc.) to match its
+    # agents/<name>.json registry entry.
+    agent_name: str = Field(default="sophia", validation_alias="AGENT_NAME")
+
+    @field_validator("own_repos", mode="before")
+    @classmethod
+    def _merge_own_repos_onto_defaults(cls, value: object) -> object:
+        """A partial OWN_REPOS override (e.g. just {"transcript": "..."})
+        merges onto the defaults instead of replacing the whole dict — so
+        omitting "context" (the common case) keeps it at the shared default
+        rather than raising a KeyError wherever own_repos["context"] is read.
+
+        Runs ``mode="before"`` type coercion, so a JSON-string env var value
+        hasn't been parsed into a dict yet — parse it here before merging
+        (a dict passed directly, e.g. in a test, is used as-is).
+        """
+        import json
+
+        defaults = cls.model_fields["own_repos"].default
+        if not value:
+            return defaults
+        if isinstance(value, str):
+            value = json.loads(value)
+        return {**defaults, **value}
+
+    # Repos in allowed_repos default to the TrueSightDAO org (git_tools.py's
+    # historical assumption). Entries here override that for repos that live
+    # under a different org — e.g. KrakeIO — so git_tools.py can resolve the
+    # right git remote and the right GitHub PAT (github_pat vs krake_io_pat).
+    repo_org_overrides: dict[str, str] = {
+        "getdata-mcp-bridge": "KrakeIO",
+    }
+
+    # Allowed repos for code modifications — LEGACY ALIAS. Defaults to the
+    # literal historical list so PR2 ships with zero behavior change (§5d);
+    # PR3 rewires the guard sites onto ``repo_write_allowed()``, after which
+    # this field survives only for back-compat with existing call sites/tests.
+    # The odd validation_alias keeps it OFF the ALLOWED_REPOS env var (which
+    # now means strict mode) while ``Settings(allowed_repos=[...])`` by field
+    # name still works, since BaseSettings sets populate_by_name.
+    allowed_repos: list[str] = Field(
+        default_factory=lambda: list(_LEGACY_ALLOWED_REPOS),
+        validation_alias="LEGACY_ALLOWED_REPOS",
+        repr=False,
+    )
+
+    # ── Default-allow repo-access model (PR2, SOPHIA_REPO_ACCESS_DENYLIST_PLAN.md) ──
+    # DEFAULT-ALLOW: with no config, agents may write any repo EXCEPT the two
+    # protected classes (``api_only_repos`` / ``prod_repos``), so a new repo or
+    # subdomain no longer needs a code change + redeploy.
+    #
+    # STRICT MODE (fail-safe): set ALLOWED_REPOS=<comma-separated names> and
+    # only those repos are writable — today's behavior, re-tightenable by an
+    # operator without a code change. Empty/unset ⇒ default-allow.
+    strict_repos: list[str] = Field(
+        default_factory=list, validation_alias="ALLOWED_REPOS", repr=False
+    )
+
+    # Globs a NEW repo name must match for github_tools.create_repo(), so the
+    # "spin up a repo/subdomain" path stays one tool call while an arbitrary or
+    # hallucinated name is still refused. Override with CREATE_REPO_PATTERNS.
+    create_repo_patterns: list[str] = Field(
+        default_factory=lambda: list(_DEFAULT_CREATE_REPO_PATTERNS),
+        validation_alias="CREATE_REPO_PATTERNS",
+        repr=False,
+    )
+
+    @field_validator(
+        "allowed_repos",
+        "strict_repos",
+        "create_repo_patterns",
+        "prod_sync_generated_globs",
+        mode="before",
+    )
+    @classmethod
+    def _parse_repo_lists(cls, value: object) -> list[str]:
+        return _repo_list(value)
+
+    # Machine-owned DATA repos — never clone, never branch-edit. Automation
+    # (GAS, workers, transcript pushers) writes these via the Contents API;
+    # agents interface the same way: read_repo_file / raw URLs for reads,
+    # upload_file_to_github (PAT, single-file atomic commit) for writes.
+    # git_push_changes and open_fix_pr refuse these regardless of
+    # allowed_repos. Policy doc: agentic_ai_context/GITHUB_AGENTIC_AI_SSH.md
+    # § "API-only repos".
+    api_only_repos: list[str] = [
+        # caches (derived data; regenerated by automation)
+        "treasury-cache",
+        "places-cache",
+        "contributors-cache",
+        # machine-appended logs / records
+        "truesight_autopilot_transcript",
+        "oracle_logs",
+        "lineage-credentials",
+        "ecosystem_change_logs",
+        # blob / asset stores (Contents-API uploads)
+        ".github",
+        "qr_codes",
+        "sunmint",
+        "verify_public_signatures",
+        "store_interaction_attachments",
+        "farm-media-raw",
+        # workflow-pushed JSON snapshots
+        "agroverse-inventory",
+        # shared agent-to-agent handoff mailbox (app/tools/agent_handoff.py) —
+        # every registered agent instance writes here via Contents API only,
+        # never branch/PR. Same repo name for every instance (unlike
+        # own_repos, this doesn't vary per-instance).
+        "agent_handoffs",
+    ]
+
+    @model_validator(mode="after")
+    def _ensure_own_data_repos_are_api_only(self) -> Settings:
+        """Fold ``own_repos["transcript"]`` / ``["attachments"]`` into ``api_only_repos``.
+
+        No-op for Sophia (both default to strings already in the literal list
+        above). Lets a sibling instance whose OWN_REPOS overrides those two
+        keys to its own private repos get the same "never clone/branch-edit,
+        Contents-API only" treatment without duplicating the whole list.
+        """
+        for repo in (self.own_repos["transcript"], self.own_repos["attachments"]):
+            if repo not in self.api_only_repos:
+                self.api_only_repos.append(repo)
+        return self
+
+    @model_validator(mode="after")
+    def _sync_repo_access_lists(self) -> Settings:
+        """Reconcile the legacy ``allowed_repos`` alias with ``strict_repos``.
+
+        - explicit ``allowed_repos`` kwarg (tests, orchestration_specs) — treat
+          it as the strict list, so an injected allowlist really gates.
+        - ``ALLOWED_REPOS`` env set — mirror it into ``allowed_repos``.
+        - neither — ``allowed_repos`` keeps the literal legacy default, i.e.
+          unchanged behavior until PR3 rewires the guard sites.
+        """
+        if "allowed_repos" in self.model_fields_set and self.allowed_repos:
+            self.strict_repos = list(self.allowed_repos)
+        elif self.strict_repos:
+            self.allowed_repos = list(self.strict_repos)
+        # CREATE_REPO_PATTERNS set to empty ⇒ fall back to the blessed defaults
+        # rather than leaving the create-gate with no patterns at all.
+        if not self.create_repo_patterns:
+            self.create_repo_patterns = list(_DEFAULT_CREATE_REPO_PATTERNS)
+        return self
+
+    def repo_write_allowed(self, repo: str) -> tuple[bool, str]:
+        """Single source of truth for "may agents write this repo?".
+
+        Returns ``(ok, reason)`` — ``reason`` is ``""`` when allowed, else a
+        short explanation suitable for a tool error string. The two protected
+        classes are checked FIRST and hold in both modes, so default-allow can
+        never widen a prod or machine-owned-data write.
+        """
+        if not repo:
+            return False, "repo name is required"
+        if repo in self.prod_repos:
+            return False, (
+                f"'{repo}' is a PRODUCTION repo (beta-first rule). Push to "
+                f"'{self.prod_repos[repo]}' instead and promote with "
+                "sync_beta_to_prod on the governor's explicit approval."
+            )
+        if repo in self.api_only_repos:
+            return False, (
+                f"'{repo}' is an API-only data repo (machine-owned). Read with "
+                "read_repo_file / raw URLs; write single files with "
+                "upload_file_to_github. Never clone or branch-edit."
+            )
+        if self.strict_repos:
+            if repo in self.strict_repos:
+                return True, ""
+            return False, (
+                f"'{repo}' is not in the strict allowlist (ALLOWED_REPOS is "
+                "set). Unset ALLOWED_REPOS for default-allow, or a governor "
+                "adds the repo to it."
+            )
+        return True, ""
+
+    def create_repo_allowed(self, repo: str) -> tuple[bool, str]:
+        """Pattern gate for ``create_repo``.
+
+        Default-allow covers writing an EXISTING repo; creating a new one must
+        match a governor-blessed glob so a hallucinated name cannot spin up
+        arbitrary org repos.
+        """
+        if not repo:
+            return False, "repo name is required"
+        for pat in self.create_repo_patterns:
+            if fnmatch.fnmatchcase(repo, pat):
+                return True, ""
+        return False, (
+            f"'{repo}' does not match any blessed create_repo pattern "
+            f"({', '.join(self.create_repo_patterns)}). A governor must add a "
+            "pattern to settings.create_repo_patterns (or CREATE_REPO_PATTERNS)."
+        )
+
+    def create_repo_must_be_private(self, repo: str) -> bool:
+        """True if ``repo`` matches a family that MUST be created PRIVATE.
+
+        Member-tier material may hold content not ready for public view, so the
+        whole ``member-*`` family is private-only; ``github_tools.create_repo``
+        refuses to create such a repo public. See
+        agentic_ai_context/plans/MEMBER_WORKSPACE_PLAN.md (decision D6).
+        """
+        return any(
+            fnmatch.fnmatchcase(repo, pat) for pat in _PRIVATE_ONLY_CREATE_REPO_PATTERNS
+        )
+
+    def repo_upload_allowed(self, repo: str) -> tuple[bool, str]:
+        """Contents-API single-file write gate (``upload_file_to_github``).
+
+        Prod repos are refused (beta-first: the file lands in the beta repo,
+        then a governor promotes with ``sync_beta_to_prod``). Everything else
+        \u2014 including the machine-owned ``api_only_repos`` class \u2014 is allowed,
+        because a Contents-API single-file commit is exactly the sanctioned
+        write path those repos exist for.
+
+        In STRICT MODE this mirrors today's behaviour precisely: writable =
+        ``strict_repos \u222a api_only_repos``.
+        """
+        if not repo:
+            return False, "repo name is required"
+        if repo in self.prod_repos:
+            return False, (
+                f"'{repo}' is a PRODUCTION repo (beta-first rule). Upload to "
+                f"'{self.prod_repos[repo]}' instead and promote with "
+                "sync_beta_to_prod on the governor's explicit approval."
+            )
+        if self.strict_repos:
+            if repo in self.strict_repos or repo in self.api_only_repos:
+                return True, ""
+            return False, (
+                f"'{repo}' is not in the strict allowlist (ALLOWED_REPOS is "
+                "set) nor an API-only data repo. Unset ALLOWED_REPOS for "
+                "default-allow, or a governor adds the repo to it."
+            )
+        return True, ""
+
+    def writable_repos_for_display(self) -> str:
+        """Human-readable write scope for tool descriptions / LLM prompts.
+
+        Single source for what the schemas advertise, so the description can
+        never drift from the enforced model (default-allow unless an
+        ALLOWED_REPOS strict list is set).
+        """
+        if self.strict_repos:
+            return ", ".join(self.strict_repos)
+        return (
+            "any repo (default-allow; PRODUCTION repos and API-only "
+            "machine-owned data repos are always refused)"
+        )
+
+    # Production deploy repos (forks of their beta base). Beta-first rule:
+    # agents NEVER push, branch-edit, or merge PRs here. Flow: change lands in
+    # the beta repo → governor reviews the beta deploy → governor explicitly
+    # approves → sync_beta_to_prod (GitHub merge-upstream; fork sync, no
+    # clone, never force — prod/beta CNAMEs intentionally diverge).
+    prod_repos: dict[str, str] = {
+        "agroverse_shop_prod": "agroverse_shop_beta",
+        "truesight_me_prod": "truesight_me_beta",
+        "dapp_prod": "dapp_beta",
+        "sunmint_prod": "sunmint_beta",
+    }
+    # AUTO-GENERATED files that both a beta repo and its prod fork regenerate on
+    # a schedule, so their independent bot commits diverge and block
+    # ``sync_beta_to_prod``'s merge-upstream with a 409 even when the reviewed
+    # change itself merges cleanly. On such a 409 the tool takes BETA's copy of
+    # every path matching one of these globs, then retries the sync ONCE.
+    # Nothing outside this list is ever auto-touched. Override with
+    # PROD_SYNC_GENERATED_GLOBS (comma/space separated). See
+    # tests/test_sync_beta_to_prod_tool.py.
+    prod_sync_generated_globs: list[str] = Field(
+        default_factory=lambda: ["stats/*.json"],
+        validation_alias="PROD_SYNC_GENERATED_GLOBS",
+        repr=False,
+    )
+
+    # Gmail
+    gmail_token_json: str = os.getenv("GMAIL_TOKEN_JSON", "")
+
+    # LLM — DeepSeek default; Claude/others selectable via LLM_PROVIDER=litellm
+    # + LITELLM_MODEL. Claude was dropped for cost (2025) but the litellm path
+    # is provider-agnostic; set ANTHROPIC_API_KEY to re-enable it as an option.
+    llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv(
+        "DEEPSEEK_SDK", ""
+    )
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    # "deepseek-chat"/"deepseek-reasoner" (deprecated 2026-07-24) and
+    # "deepseek-v4-flash"/"deepseek-v4-pro" (v4-flash retired 2026-09-10; v4-pro
+    # being phased out) are all superseded by the V4.1 generation. Use the
+    # canonical "deepseek-flash" (DeepSeek-V4.1-Flash) name — the legacy names
+    # transparently route to it for now but are not a stable target.
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
+    deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
+    deepseek_temperature: float = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.3"))
+    # LiteLLM (replaces the homegrown HTTP transport when LLM_PROVIDER=litellm)
+    litellm_model: str = os.getenv("LITELLM_MODEL", "deepseek/deepseek-flash")
+
+    # BigModel (ZhipuAI / GLM)
+    bigmodel_api_key: str = Field(default="", validation_alias="BIGMODEL_CN_API")
+    bigmodel_base_url: str = Field(
+        default="https://open.bigmodel.cn/api/paas/v4",
+        validation_alias="BIGMODEL_BASE_URL",
+    )
+    bigmodel_model: str = Field(default="glm-4.5", validation_alias="BIGMODEL_MODEL")
+
+    # Grok (xAI) — vision analysis for uploaded images
+    grok_api_key: str = os.getenv("GROK_API_KEY", "")
+
+    # Tavily — web search / page extraction for the chat agent
+    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API")
+
+    # Telegram — private single-user chat bot in front of /chat-blocking
+    telegram_bot_api_key: str = Field(
+        default="", validation_alias="TELEGRAM_BOT_API_KEY"
+    )
+    # Comma-separated numeric Telegram user IDs allowed to talk to the bot.
+    # Empty = bootstrap mode: the bot replies with the sender's own ID so you can pin it.
+    telegram_allowed_user_ids: str = Field(
+        default="", validation_alias="TELEGRAM_ALLOWED_USER_IDS"
+    )
+    # Which governor identity the bot speaks as (resolved to a public key from the registry).
+    telegram_governor_name: str = Field(
+        default="Gary Teh", validation_alias="TELEGRAM_GOVERNOR_NAME"
+    )
+    # Where the FastAPI chat service is reachable from the adapter process.
+    autopilot_chat_url: str = Field(
+        default="http://localhost:8001", validation_alias="AUTOPILOT_CHAT_URL"
+    )
+    # The working group (forum) where create_telegram_topic opens topics when the
+    # request didn't originate inside a Telegram topic — i.e. the off-Telegram
+    # /chat handoff trigger. Numeric supergroup id, e.g. -1001234567890. Requires
+    # Sophia's bot to be a group admin with 'Manage Topics'.
+    telegram_home_group_id: str = Field(
+        default="",
+        validation_alias="TELEGRAM_HOME_GROUP_ID",
+    )
+    # Comma-separated numeric chat ids that always get a full response,
+    # regardless of group size or @mention — an adjustable override on top
+    # of the default member-count rule in _should_always_respond(). Lets an
+    # instance shared across multiple groups (e.g. Onaya sitting quietly in
+    # a busy shared Ops group meant mostly for Sophia, but responding freely
+    # in her own dedicated group) be tuned per-deployment without a code
+    # change. Empty by default — no behavior change from the member-count rule.
+    telegram_always_respond_chat_ids: str = Field(
+        default="",
+        validation_alias="TELEGRAM_ALWAYS_RESPOND_CHAT_IDS",
+    )
+    # ── Discord ──────────────────────────────────────────────────────
+    # Bot token is read from the VAULT (name: DISCORD_BOT_TOKEN), never env.
+    # The adapter refuses to start unless DISCORD_ADAPTER_ENABLED is true.
+    discord_adapter_enabled: bool = Field(
+        default=False, validation_alias="DISCORD_ADAPTER_ENABLED"
+    )
+    # Compose replies but do NOT post them to Discord (safe first deploy).
+    discord_dry_run: bool = Field(default=True, validation_alias="DISCORD_DRY_RUN")
+    # Numeric Discord guild (server) id this instance serves.
+    discord_guild_id: str = Field(default="", validation_alias="DISCORD_GUILD_ID")
+    # Comma-separated Discord user ids (snowflakes, kept as strings) allowed
+    # to instruct the bot. Empty => fall back to the sheet binding only.
+    discord_allowed_user_ids: str = Field(
+        default="", validation_alias="DISCORD_ALLOWED_USER_IDS"
+    )
+    # Comma-separated Discord user ids recognised as MEMBERS (verified
+    # contributors who are NOT governors). Members are attributed and may
+    # converse, but carry no governor authority -- their messages stay
+    # data-only. This is the env half of the member tier; the sheet half
+    # (Contributors contact information, Discord-ID column) resolves
+    # automatically.
+    discord_member_user_ids: str = Field(
+        default="", validation_alias="DISCORD_MEMBER_USER_IDS"
+    )
+    # Comma-separated Discord user ids recognised as SENTINELS -- the DAO's
+    # AI-agent contributors (plan D4). Sentinels are a DISTINCT identity class,
+    # never conflated with governor for attribution/audit, but they carry
+    # governor-tier RIGHTS under the brain's WRITE/ADMIN gate. The sheet half is
+    # automatic (Contributors contact information col G -> email -> the roles
+    # in dao_members.json); this env list is the explicit override.
+    discord_sentinel_user_ids: str = Field(
+        default="", validation_alias="DISCORD_SENTINEL_USER_IDS"
+    )
+    # Comma-separated Discord BOT user ids (snowflakes) that handle_message's
+    # top bot guard does NOT reflexively discard. Plan
+    # DISCORD_ENVOY_GOVERNOR_PARITY: this grants ONLY "don't drop the message"
+    # -- the turn still runs through the UNCHANGED author_role() resolution
+    # below, so role/authority is never conferred by this list. Default empty =
+    # every bot dropped, byte-for-byte today's behaviour. The bot's OWN id is
+    # never trusted, even if misconfigured here.
+    discord_trusted_bot_ids: str = Field(
+        default="", validation_alias="DISCORD_TRUSTED_BOT_IDS"
+    )
+    # Which governor identity the bot speaks as (resolved to a public key).
+    discord_governor_name: str = Field(
+        default="Gary Teh", validation_alias="DISCORD_GOVERNOR_NAME"
+    )
+
+    # Emoji-reaction go-signal (see plans/SOPHIA_EMOJI_REACTION_GO_PLAN.md):
+    # a standard-emoji reaction from an authorized user on a resume-awaiting
+    # message acts as a go-signal. Deny-list of emoji that are NOT a go
+    # (decision 0.1) -- default: thumbs-down.
+    emoji_go_blocked: list[str] = ["👎"]
+
+    # Telegram attention watchdog — MTProto USER-session (not the bot), so it
+    # can see DMs + all groups. Read-only; nudges go to Saved Messages only.
+    # api_id/api_hash come from https://my.telegram.org (operator's account);
+    # the session file is created once by scripts/telethon_login.py.
+    telegram_api_id: int = Field(default=0, validation_alias="TELEGRAM_API_ID")
+    telegram_api_hash: str = Field(default="", validation_alias="TELEGRAM_API_HASH")
+    watchdog_session_path: str = Field(
+        default=".telethon_watchdog", validation_alias="WATCHDOG_SESSION_PATH"
+    )
+    watchdog_state_path: str = Field(
+        default="data/attention_watchdog_state.json",
+        validation_alias="WATCHDOG_STATE_PATH",
+    )
+    watchdog_nudge_hours: float = Field(
+        default=4.0, validation_alias="WATCHDOG_NUDGE_HOURS"
+    )
+    # Asks that mention a date/time get the tighter SLA — those cancel events.
+    watchdog_urgent_nudge_hours: float = Field(
+        default=2.0, validation_alias="WATCHDOG_URGENT_NUDGE_HOURS"
+    )
+    watchdog_digest_hour: int = Field(
+        default=9, validation_alias="WATCHDOG_DIGEST_HOUR"
+    )
+    watchdog_tz: str = Field(
+        default="America/Los_Angeles", validation_alias="WATCHDOG_TZ"
+    )
+
+    # Beta-deploy gate (Telegram /ship). Master switch is OFF by default — even
+    # deployed, the gate does nothing until explicitly enabled.
+    beta_deploy_gate_enabled: bool = Field(
+        default=False, validation_alias="BETA_DEPLOY_GATE_ENABLED"
+    )
+    # Repos the gate is allowed to merge into (beta only — prod stays manual-promote).
+    beta_deploy_repos: list[str] = ["dapp_beta"]
+    # B6 Tier 2: skip the one-tap confirmation and merge immediately when CI is green.
+    beta_auto_merge: bool = Field(default=False, validation_alias="BETA_AUTO_MERGE")
+
+    # Edgar
+    email: str = os.getenv("EMAIL", "")
+    public_key: str = os.getenv("PUBLIC_KEY", "")
+    private_key: str = os.getenv("PRIVATE_KEY", "")
+
+    # AWS
+    aws_access_key_id: str | None = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: str | None = os.getenv("AWS_SECRET_ACCESS_KEY")
+    aws_region: str = os.getenv("AWS_REGION", "us-east-1")
+
+    # Tencent Cloud (TENCENT_SECRET_ID / TENCENT_SECRET_KEY) — optional; tools
+    # degrade to a clean 'not configured' response when either is missing
+    # (mirrors AWS/Gmail handling of unset credentials). Docs:
+    # agentic_ai_context/credentials/API_CREDENTIALS_DOCUMENTATION.md §10.7
+    tencent_secret_id: str | None = os.getenv("TENCENT_SECRET_ID")
+    tencent_secret_key: str | None = os.getenv("TENCENT_SECRET_KEY")
+    tencent_region: str = os.getenv("TENCENT_REGION", "ap-guangzhou")
+
+    # Bugsnag — autopilot self-reports crashes + ERROR-level logs to Bugsnag.
+    # The same Bugsnag project then emits 'New error in autopilot' emails which
+    # email_poller's bugsnag_error classifier picks up, closing the
+    # self-improvement loop. Disabled when bugsnag_api_key is empty.
+    # Env var name BUG_SNAG_API matches the existing autopilot/.env convention.
+    bugsnag_api_key: str = os.getenv("BUG_SNAG_API", "") or os.getenv(
+        "BUGSNAG_API_KEY", ""
+    )
+    bugsnag_release_stage: str = os.getenv("BUGSNAG_RELEASE_STAGE", "production")
+
+    # Bugsnag-project-name -> github-repo mapping for the inbound bugsnag_error
+    # handler in email_poller.py. JSON dict in env, e.g.:
+    #   BUGSNAG_PROJECT_REPOS='{"autopilot": "truesight_autopilot", "Krake Publisher": "krake_local"}'
+    # Project name is the bracketed prefix in the Bugsnag email subject
+    # (e.g. '[Krake Publisher] HTTPError ...' -> key 'Krake Publisher').
+    # Unmapped projects log a warning and the handler returns None
+    # (no auto-PR — preserves the v0 stub behavior for projects Gary
+    # hasn't yet vouched for autopilot to fix).
+    bugsnag_project_repos_raw: str = os.getenv("BUGSNAG_PROJECT_REPOS", "")
+
+    # Context
+    context_repos_dir: Path = Path(
+        os.getenv("CONTEXT_REPOS_DIR", "/opt/truesight_autopilot/context")
+    )
+    # How often the background loop hard-refreshes the read-only context mirrors
+    # (agentic_ai_context, tokenomics) so handoff plans committed since the last
+    # deploy are visible to read_context_file / search_context. Default 5 min.
+    context_sync_interval_seconds: int = int(
+        os.getenv("CONTEXT_SYNC_INTERVAL_SECONDS", "300")
+    )
+    agentic_context_repo: str = os.getenv(
+        "AGENTIC_CONTEXT_REPO", "https://github.com/TrueSightDAO/agentic_ai_context.git"
+    )
+    static_governors_json: Path | None = None
+
+    # SSH / Deploy
+    ec2_host: str = os.getenv("EC2_HOST", "truesight-autopilot")
+    ec2_key_path: str = os.getenv(
+        "EC2_KEY_PATH", os.path.expanduser("~/.ssh/agentic_ai_github/id_ed25519")
+    )
+    ec2_remote_dir: str = os.getenv("EC2_REMOTE_DIR", "/opt/truesight_autopilot")
+
+    # Session logging (production: use persistent path, not /tmp)
+    session_log_dir: Path = Path(
+        os.getenv("SESSION_LOG_DIR", "/tmp/autopilot_sessions")
+    )
+
+    # Context compaction (PR2 of SOPHIA_CONTEXT_COMPACTION_PLAN.md): automatic
+    # folding of history older than K turns once a session crosses the token
+    # threshold. Defaults conservative (20K) so it engages well before the
+    # 38-50K stall range; env-overridable at call time via
+    # CONTEXT_COMPACTION_TOKEN_THRESHOLD / CONTEXT_COMPACTION_KEEP_LAST_TURNS.
+    context_compaction_token_threshold: int = int(
+        os.getenv("CONTEXT_COMPACTION_TOKEN_THRESHOLD", "20000")
+    )
+    context_compaction_keep_last_turns: int = int(
+        os.getenv("CONTEXT_COMPACTION_KEEP_LAST_TURNS", "6")
+    )
+
+
+settings = Settings()

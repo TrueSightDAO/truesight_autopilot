@@ -1,0 +1,71 @@
+.env
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.log
+.pytest_cache/
+.mypy_cache/
+
+# Google service-account private keys — provisioned out-of-band, never
+# committed. See config/google/README.md.
+config/google/*.json
+
+# Gmail OAuth tokens (per-account) — also out-of-band. See config/gmail/README.md.
+config/gmail/*.json
+
+# YouTube OAuth — upload creds + helper script for the admin@truesight.me channel.
+# Whole dir ignored so deploy's `git clean -fd` never wipes the token (same trap as
+# the 2026-06-15 vault wipe below). See config/youtube/README.md.
+config/youtube/
+
+# .env backups (created automatically by some flows) — never commit
+.env.backup.*
+.req-hash
+
+# Telethon user-session (attention watchdog) — FULL account access, never commit.
+*.session
+*.session-journal
+# Watchdog runtime state
+data/attention_watchdog_state.json
+
+# Runtime dirs — generated on the box, must NEVER be deleted by a deploy.
+# deploy.sh runs `git clean -fd`; if these are not ignored it wipes Sophia's
+# session memory + context mirrors. (Incident-adjacent, 2026-06-10.)
+sessions/
+context/
+oracle/
+worktrees/
+# The encrypted credential vault (vault.key + vault.json.enc + vault_audit.json).
+# `git clean -fd` respects .gitignore, so listing it here is what keeps a deploy
+# from nuking the master key and every stored credential. It was NOT listed and
+# a deploy wiped all 31 credentials on 2026-06-15 — do not remove this line.
+vault/
+# Session tool-result offload store (read_tool_result / recall artifacts). `git clean -fd`
+# would delete untracked tool results mid-conversation — keep them ignored (same class
+# as the 2026-06-15 vault wipe: untracked + unignored = deploy deletes it).
+artifacts/
+media_archive_daemon_config.yaml
+# Hand-rolled backup of the media-archive daemon config (untracked + unignored
+# = git clean -fd deletes it on deploy). Same class as the 2026-06-15 vault wipe.
+media_archive_daemon_config.yaml.bak-sr
+
+# Follow-up monitor runtime state. Written by the running loop on the box, so
+# it must SURVIVE a deploy (`git reset --hard` / `git clean -fd` respect
+# .gitignore). It lived at followups/state.json -- *tracked* -- until
+# 2026-09-14, so every deploy reset it to a stale snapshot and re-fired
+# resolved follow-ups (the warmup re-strike storm). Same class as the
+# 2026-06-15 vault wipe: a machine-owned file inside the deploy tree.
+data/followups_state.json
+followups/state.json
+
+# Thread-goal store (Track A) + email-inbox watch cursor. Both are
+# machine-owned runtime state written by the running loop into the deploy
+# tree, so they MUST survive `git reset --hard` / `git clean -fd`. Same
+# class as the 2026-06-15 vault wipe / 2026-09-14 followups reset: an
+# untracked-and-unignored state file inside the repo gets deleted on every
+# deploy (thread_goal.py's own docstring already *assumed* it survived).
+data/thread_goals.jsonl
+data/email_inbox_watch_state.json

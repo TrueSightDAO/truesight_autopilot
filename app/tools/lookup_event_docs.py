@@ -1,0 +1,426 @@
+"""lookup_event_docs tool — fetch DAO event documentation from Edgar events catalog.
+
+Returns the canonical labels, required fields, category, description, intent-to-event
+guidance, and important-fields hints for a given event type. Fetches live from
+edgar.truesight.me/dao-protocol/events-catalog (JSON) so it's always current.
+Falls back to built-in docs if Edgar is unreachable.
+
+This is the single source of truth — no hardcoded event definitions.
+"""
+
+import json
+import logging
+from typing import Any
+
+import httpx
+
+from ..tool_registry import ToolSpec
+
+logger = logging.getLogger(__name__)
+
+# Primary: live JSON catalog from Edgar
+CATALOG_URL = "https://edgar.truesight.me/events-catalog"
+
+# Cached catalog (refreshed on miss)
+_catalog: dict[str, Any] | None = None
+
+# ── Intent-to-event mapping ───────────────────────────────────────────────
+# Maps common governor intents to the correct DAO event type. The LLM should
+# consult this BEFORE calling submit_contribution so it picks the right event.
+_INTENT_GUIDANCE: dict[str, str] = {
+    "sell cacao": "SALES EVENT",
+    "sale": "SALES EVENT",
+    "retail sale": "SALES EVENT",
+    "end customer sale": "SALES EVENT",
+    "transfer custody": "INVENTORY MOVEMENT",
+    "transfer bag": "INVENTORY MOVEMENT",
+    "move inventory": "INVENTORY MOVEMENT",
+    "supply chain transfer": "INVENTORY MOVEMENT",
+    "record work": "CONTRIBUTION EVENT",
+    "log contribution": "CONTRIBUTION EVENT",
+    "record time": "CONTRIBUTION EVENT",
+    "add partner": "PARTNER ADD EVENT",
+    "onboard partner": "PARTNER ADD EVENT",
+    "check in with partner": "PARTNER CHECK-IN EVENT",
+    "partner check-in": "PARTNER CHECK-IN EVENT",
+    "post-repackaging cleanup": "POST-REPACKAGING CLEANUP EVENT",
+    "cleanup after repackaging": "POST-REPACKAGING CLEANUP EVENT",
+    "deplete inputs": "POST-REPACKAGING CLEANUP EVENT",
+    "register qr code": "QR CODE REGISTRATION",
+    "add contributor": "CONTRIBUTOR ADD EVENT",
+    "onboard contributor": "CONTRIBUTOR ADD EVENT",
+    "capital injection": "CAPITAL INJECTION EVENT",
+    "record payment": "PAYMENT EVENT",
+    "reserve item": "RESERVATION EVENT",
+    "reservation": "RESERVATION EVENT",
+    "buyer paid not collected": "RESERVATION EVENT",
+    "buyer paid, not collected": "RESERVATION EVENT",
+    "collect reserved item": "RESERVATION SETTLEMENT EVENT",
+    "settle reservation": "RESERVATION SETTLEMENT EVENT",
+    "redeem reservation": "RESERVATION SETTLEMENT EVENT",
+    "register boundary": "FARM BOUNDARY EVIDENCE EVENT",
+    "register plot": "FARM BOUNDARY EVIDENCE EVENT",
+    "farm boundary": "FARM BOUNDARY EVIDENCE EVENT",
+    "plot boundary evidence": "FARM BOUNDARY EVIDENCE EVENT",
+    "tree planting": "TREE PLANTING EVENT",
+    "plant a tree": "TREE PLANTING EVENT",
+    "register tree": "TREE PLANTING EVENT",
+    "invalidate plot": "PLOT INVALIDATION EVENT",
+    "plot invalidation": "PLOT INVALIDATION EVENT",
+    "remove plot": "PLOT INVALIDATION EVENT",
+    "pay the planter": "PAYOUT EVENT",
+    "payout": "PAYOUT EVENT",
+    "pay planter": "PAYOUT EVENT",
+    "pay the farmer": "PAYOUT EVENT",
+    "pix payout": "PAYOUT EVENT",
+    "disburse": "PAYOUT EVENT",
+    "compensation transfer": "PAYOUT EVENT",
+    "record payout": "PAYOUT EVENT",
+    "pay trees": "PAYOUT EVENT",
+}
+
+# ── Important fields per event type ───────────────────────────────────────
+# Fields that are most commonly missed or incorrectly filled by the LLM.
+# The LLM should ensure these are always present when submitting.
+_IMPORTANT_FIELDS: dict[str, list[str]] = {
+    # SS12.3 -- a payout is the DISBURSEMENT receipt, not the registration.
+    # Carries NO raw PII (recipient referenced by pk_hash only, SS12.1).
+    "PAYOUT EVENT": [
+        "Program",
+        "Amount",
+        "Currency",
+        "Paid At",
+        "Bank Ref Type",
+        "Bank Ref",
+        "Recipient",
+        "Recipient PK Hash",
+        "Tree Planting IDs",
+        "Status",
+        "Receipt URL",
+        "Submission Source",
+    ],
+    "SALES EVENT": [
+        "Cash proceeds collected by",
+        "Owner email",
+        "Sales price",
+        "Item",
+        "Sold by",
+    ],
+    "INVENTORY MOVEMENT": [
+        "Manager Name",
+        "Recipient Name",
+        "QR Code",
+        "Quantity",
+        "Destination inventory file location",
+    ],
+    "CONTRIBUTION EVENT": [
+        "Type",
+        "Amount",
+        "Contributor",
+    ],
+    "PARTNER ADD EVENT": [
+        "Partner Name",
+        "Partner Email",
+        "Partner Type",
+    ],
+    "PARTNER CHECK-IN EVENT": [
+        "Partner Name",
+        "Check-in Date",
+        "Notes",
+    ],
+    "QR CODE REGISTRATION": [
+        "QR Code",
+        "Item",
+        "Manager",
+    ],
+    "CONTRIBUTOR ADD EVENT": [
+        "Contributor Name",
+        "Contributor Email",
+        "Role",
+    ],
+    "CAPITAL INJECTION EVENT": [
+        "Amount",
+        "Source",
+        "Date",
+    ],
+    "PAYMENT EVENT": [
+        "Amount",
+        "Paid To",
+        "Paid By",
+    ],
+    "POST-REPACKAGING CLEANUP EVENT": [
+        "Composition URL",
+        "Holder Name",
+    ],
+    "FARM BOUNDARY EVIDENCE EVENT": [
+        "Farm Name",
+        "Is New Farm",
+        "Media URLs",
+        "Media Count",
+        "Captured At",
+        "Device GPS",
+        "Extracted GPS",
+        "Area Hectares",
+    ],
+    "TREE PLANTING EVENT": [
+        "Tree Count",
+        "Location",
+        "Latitude",
+        "Longitude",
+        "Species",
+        "Planter",
+        "Planting Time",
+        "Photo URL",
+    ],
+    "PLOT INVALIDATION EVENT": [
+        "Plot ID",
+        "Reason",
+        "Retractor Email",
+    ],
+    # Event 1 of the reservation flow: cash is in, goods are held. NO inventory row moves.
+    "RESERVATION EVENT": [
+        "Buyer",
+        "Buyer Email",
+        "QR Code",
+        "Payment Collected By",
+        "Sale Price",
+        "Proof",
+    ],
+    # Event 2 of the reservation flow: buyer collected the held item (QR must be RESERVED).
+    "RESERVATION SETTLEMENT EVENT": [
+        "QR Code",
+        "Buyer Email",
+    ],
+}
+
+# Minimal fallback for when Edgar is unreachable
+_FALLBACK_DOCS: dict[str, dict[str, Any]] = {
+    "PAYOUT EVENT": {
+        "description": "Use to record an OUTBOUND compensation transfer to a planter/farmer (e.g. a PIX payout). "
+        "ONE row per TRANSFER -- a single transfer may cover N trees, so Tree Planting IDs is carried as a "
+        "list. Carries NO raw recipient PII: reference the recipient by Recipient PK Hash, never a raw "
+        "PIX/account (SS12.1). Distinguishes live capture from backfill (SS12.7). Spec: "
+        "agentic_ai_context/plans/CRF_ANAPU_SUNMINT_COHORT_PROPOSAL.md SS12.2/SS12.3. "
+        "NOT the same as PAYMENT EVENT (a generic outbound payment) nor PAYOUT REGISTRATION (the P4 "
+        "intake form, which DOES carry a raw PIX).",
+        "required_fields": [
+            "Program",
+            "Amount",
+            "Currency",
+            "Paid At",
+            "Bank Ref",
+            "Recipient",
+        ],
+        "dapp_page": "report_payout_event.html",
+    },
+    "SALES EVENT": {
+        "description": "Use when a bag is sold to an end customer (retail sale). QR status updated to SOLD. "
+        "BATCH RULE: ONE submission per QR code — never aggregate. Read SOPHIA_BATCH_SALES_PLAN.md §0.",
+        "required_fields": ["Item", "Sales price", "Sold by"],
+        "dapp_page": "report_sales.html",
+    },
+    "INVENTORY MOVEMENT": {
+        "description": "Use when a bag moves between known holders in the supply chain. NOT for end-customer sales.",
+        "required_fields": ["Manager Name", "Recipient Name", "QR Code"],
+        "dapp_page": "report_inventory_movement.html",
+    },
+    "CONTRIBUTION EVENT": {
+        "description": "Use to record a contributor's time, work, or value-add to the DAO. Earns TDG.",
+        "required_fields": ["Type", "Amount"],
+        "dapp_page": "report_contribution.html",
+    },
+    "POST-REPACKAGING CLEANUP EVENT": {
+        "description": "Use after a repackaging batch to deplete consumed inputs from offchain asset location, add output rows, and set Currencies metadata. CLI-only — no DApp equivalent.",
+        "required_fields": ["Composition URL", "Holder Name"],
+        "dapp_page": "post_repackaging_cleanup.html",
+    },
+    "FARM BOUNDARY EVIDENCE EVENT": {
+        "description": "Use when a farm sends geotagged boundary photos (plot corners). Plot Type is REQUIRED (restoration|mature|maturing|enrichment|research|nursery|infrastructure). Omit Plot ID when unknown - backend auto-assigns PL-###; NEVER send an empty '- Plot ID:' line (parser line-bleed). Join Media URLs with '; '. See SUNMINT_TREE_PHOTO_PROCESSING.md section 6.",
+        "required_fields": ["Farm Name", "Plot Type", "Media URLs"],
+        "dapp_page": "limites-da-fazenda (sunmint)",
+    },
+    "TREE PLANTING EVENT": {
+        "description": "Use to record a tree planting. Send BOTH canonical Location (decimal, S/W negative) AND Latitude/Longitude decimal fields - validator needs Location, GAS parser needs Latitude/Longitude lines. Species string must match what farm lead specifies (e.g. 'Cacau - Hybrid'). See SUNMINT_TREE_PHOTO_PROCESSING.md section 7.",
+        "required_fields": ["Tree Count", "Location", "Latitude", "Longitude"],
+        "dapp_page": "report_tree_planting.html",
+    },
+    "PLOT INVALIDATION EVENT": {
+        "description": "Use to soft-invalidate a SunMint Plots row (Status -> invalid) so it drops from the dropdown/geojson. Sentinel/governor gate: Retractor Email must resolve to a governor or sentinel. Never deletes. See SUNMINT_TREE_PHOTO_PROCESSING.md section 7.",
+        "required_fields": ["Plot ID", "Reason", "Retractor Email"],
+        "dapp_page": "sentinel-autopilot (no DApp page)",
+    },
+    "RESERVATION EVENT": {
+        "description": "Use when a buyer has PAID CASH but has NOT yet collected a specific QR-coded item. "
+        "Books the positive-USD cash leg (revenue, cash-basis) and sets the QR to RESERVED. "
+        "NO inventory row and NO tree-planting liability move here - those land at settlement. "
+        "The hold is marked solely by the QR status RESERVED. See RESERVATION_EVENT_SPEC.md.",
+        "required_fields": ["Buyer", "QR Code", "Payment Collected By", "Sale Price"],
+        "dapp_page": "report_reservation.html",
+    },
+    "RESERVATION SETTLEMENT EVENT": {
+        "description": "Use when the buyer COLLECTS a previously reserved item. Requires the QR to currently be "
+        "RESERVED (else the event is ignored). Books the NON-revenue legs only: inventory -1 off the "
+        "QR's current holder, plus the Cacao Tree To Be Planted liability +1. Sets QR to SOLD and "
+        "emails the buyer. Must NOT carry a sale keyword or Is Revenue - see RESERVATION_EVENT_SPEC.md Ruled #3.",
+        "required_fields": ["QR Code"],
+        "dapp_page": "report_reservation_settlement.html",
+    },
+}
+
+
+def _fetch_catalog() -> dict[str, Any]:
+    """Fetch and return the live events catalog, or {} on failure."""
+    global _catalog
+    try:
+        resp = httpx.get(CATALOG_URL, timeout=15)
+        resp.raise_for_status()
+        _catalog = resp.json()
+        logger.info(
+            "events catalog loaded: %d events (version=%s)",
+            len(_catalog.get("events", {})),
+            _catalog.get("version"),
+        )
+        return _catalog
+    except Exception as exc:
+        logger.warning("Failed to fetch events catalog from %s: %s", CATALOG_URL, exc)
+        if _catalog is not None:
+            return _catalog
+        return {}
+
+
+def _find_event(catalog: dict, event_name: str) -> dict[str, Any] | None:
+    """Look up an event in the catalog, case-insensitive."""
+    events = catalog.get("events", {})
+    # Direct key match
+    if event_name in events:
+        return events[event_name]
+    # Case-insensitive match
+    upper = event_name.upper()
+    for key, val in events.items():
+        if key.upper() == upper:
+            return val
+    # Partial match (e.g. "REPACKAGING" matches "REPACKAGING BATCH EVENT")
+    for key, val in events.items():
+        if upper in key.upper() or key.upper() in upper:
+            return val
+    return None
+
+
+_SALES_EVENT_BATCH_SOP = (
+    "SOPHIA_BATCH_SALES_PLAN.md §0: ONE SALES EVENT PER QR CODE. "
+    "Never aggregate multiple QR codes into one submission. "
+    "Item = QR code ID (e.g. 2024OSCAR_20260330_1), not a product description. "
+    "Sales price = per-unit, never the batch total. "
+    "Sold by = named seller, never the governor/signer."
+)
+
+
+def _build_result(event_name: str, entry: dict) -> dict[str, Any]:
+    result = {
+        "event_name": event_name,
+        "category": entry.get("category", "Other"),
+        "canonical_labels": entry.get("canonical_labels", []),
+        "required_fields": entry.get("required_fields", []),
+        "description": entry.get("description", ""),
+        "dapp_page": entry.get("dapp_page", ""),
+        "source": "edgar-catalog (live)",
+        "important_fields": _IMPORTANT_FIELDS.get(event_name, []),
+        "intent_guidance": _INTENT_GUIDANCE,
+    }
+    if event_name.upper() == "SALES EVENT":
+        result["batch_sales_sop"] = _SALES_EVENT_BATCH_SOP
+    return result
+
+
+def lookup_event_docs(event_name: str) -> dict[str, Any]:
+    """
+    Fetch DAO event documentation for the given event type from Edgar's live catalog.
+
+    Args:
+        event_name: The event type to look up (e.g. "SALES EVENT", "INVENTORY MOVEMENT").
+                    Can also be an intent phrase like "sell cacao" or "transfer custody"
+                    which will be resolved to the correct event type via intent_guidance.
+
+    Returns:
+        Dict with event_name, category, canonical_labels, required_fields, description,
+        dapp_page, important_fields, and intent_guidance.
+    """
+    # Resolve intent phrases to canonical event names
+    lower = event_name.strip().lower()
+    resolved = _INTENT_GUIDANCE.get(lower)
+    if resolved:
+        logger.info(
+            "lookup_event_docs: resolved intent '%s' -> '%s'", event_name, resolved
+        )
+        event_name = resolved
+
+    catalog = _fetch_catalog()
+    entry = _find_event(catalog, event_name)
+
+    if entry:
+        logger.info("lookup_event_docs: found %s in live catalog", event_name)
+        return _build_result(event_name, entry)
+
+    # Try fallback
+    upper = event_name.upper()
+    for key, doc in _FALLBACK_DOCS.items():
+        if upper == key or upper in key:
+            logger.info("lookup_event_docs: found %s in fallback docs", event_name)
+            result = {
+                "event_name": key,
+                "category": "Other",
+                "canonical_labels": [],
+                "required_fields": doc.get("required_fields", []),
+                "description": doc.get("description", ""),
+                "dapp_page": doc.get("dapp_page", ""),
+                "source": "fallback (Edgar unreachable)",
+                "important_fields": _IMPORTANT_FIELDS.get(key, []),
+                "intent_guidance": _INTENT_GUIDANCE,
+            }
+            if key == "SALES EVENT":
+                result["batch_sales_sop"] = _SALES_EVENT_BATCH_SOP
+            return result
+
+    # Completely unknown
+    available = list((catalog.get("events") or {}).keys()) or list(
+        _FALLBACK_DOCS.keys()
+    )
+    return {
+        "event_name": event_name,
+        "error": f"Event type '{event_name}' not found in documentation.",
+        "available_events": available,
+        "note": f"Check {CATALOG_URL} for the full DAO events catalog.",
+        "intent_guidance": _INTENT_GUIDANCE,
+        "important_fields": _IMPORTANT_FIELDS,
+    }
+
+
+def refresh_events_catalog() -> dict[str, Any]:
+    """Force-refresh the catalog. Called at startup by the lifespan handler."""
+    global _catalog
+    _catalog = None
+    return _fetch_catalog()
+
+
+TOOL_SPEC = ToolSpec(
+    name="lookup_event_docs",
+    description=(
+        "Fetch DAO event documentation for a given event type (e.g. SALES EVENT, "
+        "INVENTORY MOVEMENT). Returns canonical labels, required fields, category, "
+        "when-to-use rules, intent-to-event mapping guidance, and important-fields "
+        "hints. Fetches live from Edgar's event catalog; falls back to built-in docs "
+        "if Edgar is unreachable. Always call this BEFORE calling submit_contribution "
+        "to ensure you use the correct event type and format."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "event_name": {
+                "type": "string",
+                "description": "The event type to look up, e.g. 'SALES EVENT', 'INVENTORY MOVEMENT', 'PARTNER ADD EVENT', 'CONTRIBUTOR ADD EVENT'. You can also pass an intent phrase like 'sell cacao' or 'transfer custody' and the tool will resolve it to the correct event type.",
+            }
+        },
+        "required": ["event_name"],
+    },
+    handler=lambda args, ctx: json.dumps(lookup_event_docs(args.get("event_name", ""))),
+)
