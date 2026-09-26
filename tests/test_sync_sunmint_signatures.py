@@ -274,9 +274,7 @@ def test_txid_mirror_created_and_message_id_alias_preserved():
     assert files[mirror]["request_transaction_id"] == txid
     # (2)/(3) two message ids, one txid -> exactly ONE mirror (collapse),
     # canonical = earliest message id (171).
-    assert (
-        len([p for p in files if p.split("/")[-1] == _txid_key(txid) + ".json"]) == 1
-    )
+    assert len([p for p in files if p.split("/")[-1] == _txid_key(txid) + ".json"]) == 1
     idx = files[f"{folder}/index.json"]
     assert idx["txid_count"] == 1
     assert idx["txids"][_txid_key(txid)]["telegram_message_id"] == "171"
