@@ -356,3 +356,133 @@ def test_has_cpf_pii_matches_punctuated_and_labelled():
 def test_has_cpf_pii_ignores_bare_ids_and_cnpj():
     assert not _has_cpf_pii("- msg id: 4690272682")
     assert not _has_cpf_pii("(Black King, CNPJ 12.345.678/0001-90)")
+
+
+def test_upload_retries_409_with_fresh_sha(monkeypatch):
+    """A 409 (stale sha) is retried once against the fresh remote sha."""
+    import io
+    import json
+    import urllib.error
+
+    from scripts import sync_sunmint_signatures as m
+
+    calls = {"get": 0, "put": 0}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        if req.get_method() == "GET":
+            calls["get"] += 1
+            sha = "stale" if calls["get"] == 1 else "fresh"
+            return _Resp(json.dumps({"sha": sha}).encode())
+        calls["put"] += 1
+        if calls["put"] == 1:
+            raise urllib.error.HTTPError(req.full_url, 409, "Conflict", {}, None)
+        return _Resp(json.dumps({"commit": {"sha": "abc"}}).encode())
+
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen)
+    assert m._upload("whatever/path.json", {"a": 1}) is True
+    assert calls == {"get": 2, "put": 2}
+
+
+def test_upload_409_then_sha_match_skips(monkeypatch):
+    """If after a 409 the content already matches, skip instead of erroring."""
+    import io
+    import json
+    import urllib.error
+
+    from scripts import sync_sunmint_signatures as m
+
+    calls = {"get": 0, "put": 0}
+    target = {"a": 1}
+    body = json.dumps(target, indent=2, ensure_ascii=False) + "\n"
+    local_sha = m._git_blob_sha(body)
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        if req.get_method() == "GET":
+            calls["get"] += 1
+            sha = "stale" if calls["get"] == 1 else local_sha
+            return _Resp(json.dumps({"sha": sha}).encode())
+        calls["put"] += 1
+        raise urllib.error.HTTPError(req.full_url, 409, "Conflict", {}, None)
+
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen)
+    assert m._upload("whatever/path.json", target) is False
+    assert calls == {"get": 2, "put": 1}
+
+
+def test_run_lock_is_single_flight(tmp_path, monkeypatch):
+    """The second concurrent acquisition fails while the first holds the lock."""
+    from scripts import sync_sunmint_signatures as m
+
+    monkeypatch.setattr(m, "_LOCK_PATH", str(tmp_path / ".lock"))
+    fh1 = m._acquire_run_lock()
+    assert fh1 is not None
+    assert m._acquire_run_lock() is None  # already held
+    fh1.close()
+    fh2 = m._acquire_run_lock()
+    assert fh2 is not None  # released after close
+    fh2.close()
+
+
+def test_push_ledger_publishes_summary_files_first(monkeypatch, tmp_path):
+    """Root + per-folder index.json land BEFORE any per-event file."""
+    from scripts import sync_sunmint_signatures as m
+
+    order = []
+    monkeypatch.setattr(m, "_upload", lambda p, payload: (order.append(p), True)[1])
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    files = {
+        "asset_receipt_event/aaa.json": {"x": 1},
+        "asset_receipt_event/index.json": {"x": 2},
+        "contribution_event/zzz.json": {"x": 3},
+        "index.json": {"x": 4},
+    }
+    m._push_ledger(files, max_uploads=250, cursor_path=str(tmp_path / "cur"))
+    assert order[:2] == ["asset_receipt_event/index.json", "index.json"]
+    assert set(order[2:]) == {
+        "asset_receipt_event/aaa.json",
+        "contribution_event/zzz.json",
+    }
+
+
+def test_push_ledger_cap_counts_events_not_summaries(monkeypatch, tmp_path):
+    """The per-run cap applies to event files only; summaries are uncapped."""
+    from scripts import sync_sunmint_signatures as m
+
+    order = []
+
+    def fake_upload(p, payload):
+        order.append(p)
+        m._PUSHED_THIS_RUN.append(p)  # mirror real _upload bookkeeping
+        return True
+
+    monkeypatch.setattr(m, "_upload", fake_upload)
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    files = {
+        "a/1.json": {},
+        "b/2.json": {},
+        "c/3.json": {},
+        "index.json": {},
+    }
+    cur = tmp_path / "cur"
+    m._push_ledger(files, max_uploads=2, cursor_path=str(cur))
+    assert "index.json" in order  # summary pushed despite cap
+    events = [p for p in order if not p.endswith("index.json")]
+    assert len(events) == 2
+    # cursor saved so the 3rd event resumes next run
+    assert cur.read_text().strip() == "b/2.json"

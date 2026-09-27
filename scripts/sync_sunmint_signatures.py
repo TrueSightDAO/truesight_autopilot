@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime
+import fcntl
 import hashlib
 
 _PUSHED_THIS_RUN: list = []
@@ -57,6 +58,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 
 SOURCE_SHEET_ID = "1qbZZhf-_7xzmDTriaJVWj6OZshyQsFkdsAV8-pyzASQ"
@@ -435,6 +437,65 @@ def _git_blob_sha(content: str) -> str:
     return hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
 
 
+_LOCK_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".sync_sunmint.lock"
+)
+
+
+def _acquire_run_lock(force: bool = False):
+    """Single-flight guard -- return an open fd holding an exclusive flock, or None.
+
+    Prevents overlapping cron/manual invocations from racing each other's
+    Contents-API GET/PUT (the source of the HTTP 409 flurry). The OS releases
+    the flock automatically when the process exits.
+    """
+    try:
+        # fd must outlive this call to hold the flock -- not a ctx manager.
+        fh = open(_LOCK_PATH, "w")  # noqa: SIM115
+    except OSError:
+        return None
+    if force:
+        return fh
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    try:
+        fh.write(str(os.getpid()))
+        fh.flush()
+    except OSError:
+        pass
+    return fh
+
+
+def _remote_blob_sha(path: str, token: str) -> str | None:
+    """GET the remote file's blob sha, or None if it does not exist yet."""
+    try:
+        req = urllib.request.Request(GH_API + path, method="GET")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r).get("sha")
+    except urllib.error.HTTPError:
+        return None  # file may not exist yet -- PUT without sha creates it
+
+
+def _put_request(path: str, body: str, remote_sha, token: str):
+    """Build the Contents-API PUT request for one ledger file."""
+    data = json.dumps(
+        {
+            "message": f"cache(scripts): refresh {path} (sync_sunmint_signatures.py)",
+            "content": base64.b64encode(body.encode()).decode(),
+            "sha": remote_sha,
+        }
+    ).encode()
+    req = urllib.request.Request(GH_API + path, data=data, method="PUT")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    return req
+
+
 def _upload(path: str, payload: dict) -> bool:
     """PUT one ledger file; returns True if a new commit was written.
 
@@ -450,38 +511,38 @@ def _upload(path: str, payload: dict) -> bool:
         sys.exit("--push needs GITHUB_TOKEN or GH_TOKEN")
     body = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     local_sha = _git_blob_sha(body)
-    remote_sha = None
-    try:
-        req0 = urllib.request.Request(GH_API + path, method="GET")
-        req0.add_header("Authorization", f"Bearer {token}")
-        req0.add_header("Accept", "application/vnd.github+json")
-        with urllib.request.urlopen(req0, timeout=30) as r0:
-            remote_sha = json.load(r0).get("sha")
-    except urllib.error.HTTPError:
-        pass  # file may not exist yet -- PUT without sha creates it
+    remote_sha = _remote_blob_sha(path, token)
     if remote_sha == local_sha:
         print(f"[skip] {path} -> already current (blob sha match)")
         return False
-    data = json.dumps(
-        {
-            "message": f"cache(scripts): refresh {path} (sync_sunmint_signatures.py)",
-            "content": base64.b64encode(body.encode()).decode(),
-            "sha": remote_sha,
-        }
-    ).encode()
-    req = urllib.request.Request(GH_API + path, data=data, method="PUT")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            print(f"[push] {path} -> {json.load(r).get('commit', {}).get('sha', '?')}")
-            _PUSHED_THIS_RUN.append(path)
-            return True
-    except urllib.error.HTTPError as e:
-        if e.code == 422:
-            print(f"[skip] {path} -> already current (422 unchanged)")
-            return False
-        raise
+    for attempt in range(2):
+        req = _put_request(path, body, remote_sha, token)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                print(
+                    f"[push] {path} -> {json.load(r).get('commit', {}).get('sha', '?')}"
+                )
+                _PUSHED_THIS_RUN.append(path)
+                return True
+        except urllib.error.HTTPError as e:
+            if e.code == 422:
+                print(f"[skip] {path} -> already current (422 unchanged)")
+                return False
+            if e.code == 409 and attempt == 0:
+                # Stale sha: the file changed between our GET and PUT (a
+                # concurrent pass or another writer). Re-GET the fresh sha and
+                # retry once; if the content now matches, it is already live.
+                print(f"[warn] {path} -> 409 stale sha; re-GET + retry once")
+                remote_sha = _remote_blob_sha(path, token)
+                if remote_sha == local_sha:
+                    print(f"[skip] {path} -> already current (409 -> sha match)")
+                    return False
+                continue
+            if e.code == 409:
+                print(f"[warn] {path} -> gave up after 409 retry; skipping")
+                return False
+            raise
+    return False
 
 
 EVENT_FOLDER = {
@@ -712,28 +773,50 @@ def _push_ledger(
 
     Idempotent and self-healing: every file is GET-checked (sha-aware skip)
     before PUT; an interrupted pass just resumes from the cursor next run.
+
+    Summary files (root index.json + per-folder index.json) are published
+    FIRST and uncapped, so the publicly-observable surface is correct within
+    a single pass rather than waiting behind ~thousands of event files.
     """
     _PUSHED_THIS_RUN.clear()
     paths = sorted(files)
+
+    # 1) Summary files FIRST, uncapped. The root "index.json" and every
+    #    "<folder>/index.json" are the publicly-observable surface, but their
+    #    names sort LAST: a folder's event files sort before its index.json,
+    #    and every folder path sorts before the root index.json. Under the
+    #    250-pushed/run trickle cap the summary would therefore not land for
+    #    many hours (the root index sorts ~65% of the way through). Push the
+    #    summaries up front on every run -- sha-aware skips make the repeat
+    #    pushes cheap, and this keeps the public summary correct within one pass.
+    summaries = [p for p in paths if p.endswith("index.json")]
+    for path in summaries:
+        _upload(path, files[path])
+        time.sleep(0.3)
+    summary_pushed = len(_PUSHED_THIS_RUN)
+
+    # 2) Trickle the per-event files under the cap, resuming from the cursor.
+    _PUSHED_THIS_RUN.clear()
+    events = [p for p in paths if not p.endswith("index.json")]
     cursor = _load_cursor(cursor_path)
     start = 0
     if cursor:
-        for i, p in enumerate(paths):
+        for i, p in enumerate(events):
             if p > cursor:
                 start = i
                 break
         else:
-            start = len(paths)  # cursor past the end -> nothing to do
+            start = len(events)  # cursor past the end -> nothing to do
     pushed = 0
     examined = 0
-    for i in range(start, len(paths)):
-        path = paths[i]
+    for i in range(start, len(events)):
+        path = events[i]
         if pushed >= max_uploads:
-            remain = len(paths) - i
-            _save_cursor(cursor_path, paths[i - 1] if i > 0 else "")
+            remain = len(events) - i
+            _save_cursor(cursor_path, events[i - 1] if i > 0 else "")
             print(
                 f"[info] rate-limit guard: hit {max_uploads}/run cap; "
-                f"{remain} files remain for next cron pass(es)"
+                f"{remain} event files remain for next cron pass(es)"
             )
             break
         _upload(path, files[path])
@@ -745,7 +828,8 @@ def _push_ledger(
         # finished the whole set
         _save_cursor(cursor_path, "")
         print(
-            f"[info] backfill complete: pushed {pushed}, examined {examined}, "
+            f"[info] backfill complete: pushed {pushed} event file(s) "
+            f"(+{summary_pushed} summaries), examined {examined}, "
             f"cursor cleared"
         )
 
@@ -768,7 +852,18 @@ def main() -> None:
         "emails included, preserving signature verification. Without this flag "
         "the build fails closed on any email-like pattern.",
     )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the single-flight lock (use only when certain no other "
+        "run is active).",
+    )
     args = p.parse_args()
+
+    _lock_fh = _acquire_run_lock(args.force)  # keep the fd alive for the run
+    if _lock_fh is None:
+        print("[info] another sync_sunmint_signatures run holds the lock; exiting")
+        return
 
     creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if not creds or not os.path.isfile(creds):
