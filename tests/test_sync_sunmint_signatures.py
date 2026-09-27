@@ -356,3 +356,84 @@ def test_has_cpf_pii_matches_punctuated_and_labelled():
 def test_has_cpf_pii_ignores_bare_ids_and_cnpj():
     assert not _has_cpf_pii("- msg id: 4690272682")
     assert not _has_cpf_pii("(Black King, CNPJ 12.345.678/0001-90)")
+
+
+def test_upload_retries_409_with_fresh_sha(monkeypatch):
+    """A 409 (stale sha) is retried once against the fresh remote sha."""
+    import io
+    import json
+    import urllib.error
+
+    from scripts import sync_sunmint_signatures as m
+
+    calls = {"get": 0, "put": 0}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        if req.get_method() == "GET":
+            calls["get"] += 1
+            sha = "stale" if calls["get"] == 1 else "fresh"
+            return _Resp(json.dumps({"sha": sha}).encode())
+        calls["put"] += 1
+        if calls["put"] == 1:
+            raise urllib.error.HTTPError(req.full_url, 409, "Conflict", {}, None)
+        return _Resp(json.dumps({"commit": {"sha": "abc"}}).encode())
+
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen)
+    assert m._upload("whatever/path.json", {"a": 1}) is True
+    assert calls == {"get": 2, "put": 2}
+
+
+def test_upload_409_then_sha_match_skips(monkeypatch):
+    """If after a 409 the content already matches, skip instead of erroring."""
+    import io
+    import json
+    import urllib.error
+
+    from scripts import sync_sunmint_signatures as m
+
+    calls = {"get": 0, "put": 0}
+    target = {"a": 1}
+    body = json.dumps(target, indent=2, ensure_ascii=False) + "\n"
+    local_sha = m._git_blob_sha(body)
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        if req.get_method() == "GET":
+            calls["get"] += 1
+            sha = "stale" if calls["get"] == 1 else local_sha
+            return _Resp(json.dumps({"sha": sha}).encode())
+        calls["put"] += 1
+        raise urllib.error.HTTPError(req.full_url, 409, "Conflict", {}, None)
+
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen)
+    assert m._upload("whatever/path.json", target) is False
+    assert calls == {"get": 2, "put": 1}
+
+
+def test_run_lock_is_single_flight(tmp_path, monkeypatch):
+    """The second concurrent acquisition fails while the first holds the lock."""
+    from scripts import sync_sunmint_signatures as m
+
+    monkeypatch.setattr(m, "_LOCK_PATH", str(tmp_path / ".lock"))
+    fh1 = m._acquire_run_lock()
+    assert fh1 is not None
+    assert m._acquire_run_lock() is None  # already held
+    fh1.close()
+    fh2 = m._acquire_run_lock()
+    assert fh2 is not None  # released after close
+    fh2.close()
