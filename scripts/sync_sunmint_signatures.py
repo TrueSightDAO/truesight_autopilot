@@ -773,28 +773,50 @@ def _push_ledger(
 
     Idempotent and self-healing: every file is GET-checked (sha-aware skip)
     before PUT; an interrupted pass just resumes from the cursor next run.
+
+    Summary files (root index.json + per-folder index.json) are published
+    FIRST and uncapped, so the publicly-observable surface is correct within
+    a single pass rather than waiting behind ~thousands of event files.
     """
     _PUSHED_THIS_RUN.clear()
     paths = sorted(files)
+
+    # 1) Summary files FIRST, uncapped. The root "index.json" and every
+    #    "<folder>/index.json" are the publicly-observable surface, but their
+    #    names sort LAST: a folder's event files sort before its index.json,
+    #    and every folder path sorts before the root index.json. Under the
+    #    250-pushed/run trickle cap the summary would therefore not land for
+    #    many hours (the root index sorts ~65% of the way through). Push the
+    #    summaries up front on every run -- sha-aware skips make the repeat
+    #    pushes cheap, and this keeps the public summary correct within one pass.
+    summaries = [p for p in paths if p.endswith("index.json")]
+    for path in summaries:
+        _upload(path, files[path])
+        time.sleep(0.3)
+    summary_pushed = len(_PUSHED_THIS_RUN)
+
+    # 2) Trickle the per-event files under the cap, resuming from the cursor.
+    _PUSHED_THIS_RUN.clear()
+    events = [p for p in paths if not p.endswith("index.json")]
     cursor = _load_cursor(cursor_path)
     start = 0
     if cursor:
-        for i, p in enumerate(paths):
+        for i, p in enumerate(events):
             if p > cursor:
                 start = i
                 break
         else:
-            start = len(paths)  # cursor past the end -> nothing to do
+            start = len(events)  # cursor past the end -> nothing to do
     pushed = 0
     examined = 0
-    for i in range(start, len(paths)):
-        path = paths[i]
+    for i in range(start, len(events)):
+        path = events[i]
         if pushed >= max_uploads:
-            remain = len(paths) - i
-            _save_cursor(cursor_path, paths[i - 1] if i > 0 else "")
+            remain = len(events) - i
+            _save_cursor(cursor_path, events[i - 1] if i > 0 else "")
             print(
                 f"[info] rate-limit guard: hit {max_uploads}/run cap; "
-                f"{remain} files remain for next cron pass(es)"
+                f"{remain} event files remain for next cron pass(es)"
             )
             break
         _upload(path, files[path])
@@ -806,7 +828,8 @@ def _push_ledger(
         # finished the whole set
         _save_cursor(cursor_path, "")
         print(
-            f"[info] backfill complete: pushed {pushed}, examined {examined}, "
+            f"[info] backfill complete: pushed {pushed} event file(s) "
+            f"(+{summary_pushed} summaries), examined {examined}, "
             f"cursor cleared"
         )
 

@@ -437,3 +437,52 @@ def test_run_lock_is_single_flight(tmp_path, monkeypatch):
     fh2 = m._acquire_run_lock()
     assert fh2 is not None  # released after close
     fh2.close()
+
+
+def test_push_ledger_publishes_summary_files_first(monkeypatch, tmp_path):
+    """Root + per-folder index.json land BEFORE any per-event file."""
+    from scripts import sync_sunmint_signatures as m
+
+    order = []
+    monkeypatch.setattr(m, "_upload", lambda p, payload: (order.append(p), True)[1])
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    files = {
+        "asset_receipt_event/aaa.json": {"x": 1},
+        "asset_receipt_event/index.json": {"x": 2},
+        "contribution_event/zzz.json": {"x": 3},
+        "index.json": {"x": 4},
+    }
+    m._push_ledger(files, max_uploads=250, cursor_path=str(tmp_path / "cur"))
+    assert order[:2] == ["asset_receipt_event/index.json", "index.json"]
+    assert set(order[2:]) == {
+        "asset_receipt_event/aaa.json",
+        "contribution_event/zzz.json",
+    }
+
+
+def test_push_ledger_cap_counts_events_not_summaries(monkeypatch, tmp_path):
+    """The per-run cap applies to event files only; summaries are uncapped."""
+    from scripts import sync_sunmint_signatures as m
+
+    order = []
+
+    def fake_upload(p, payload):
+        order.append(p)
+        m._PUSHED_THIS_RUN.append(p)  # mirror real _upload bookkeeping
+        return True
+
+    monkeypatch.setattr(m, "_upload", fake_upload)
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    files = {
+        "a/1.json": {},
+        "b/2.json": {},
+        "c/3.json": {},
+        "index.json": {},
+    }
+    cur = tmp_path / "cur"
+    m._push_ledger(files, max_uploads=2, cursor_path=str(cur))
+    assert "index.json" in order  # summary pushed despite cap
+    events = [p for p in order if not p.endswith("index.json")]
+    assert len(events) == 2
+    # cursor saved so the 3rd event resumes next run
+    assert cur.read_text().strip() == "b/2.json"
