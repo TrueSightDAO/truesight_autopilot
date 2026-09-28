@@ -642,6 +642,7 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     dup_groups = 0
     extra_files = 0
     collisions = 0
+    ledger_rows: dict[str, dict] = {}
     for folder, evs in sorted(folders.items()):
         # Chronological enumeration (governor decision 2026-09-26, thread
         # 37982): order lives in the INDEX, never in the immutable filename.
@@ -695,6 +696,19 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
                 "event_type": ev.get("event_type", ""),
                 "submitted_at": ev.get("submitted_at", ""),
             }
+            # PR1 global reverse-index row (see ledger_index.json below). Built
+            # from the ONE successful mirror per txid (dups already collapsed),
+            # so a row never points at a path that was skipped as a collision.
+            ledger_rows[tkey] = {
+                "txid_hash": tkey,
+                "event_type": ev.get("event_type", ""),
+                "submitted_at": ev.get("submitted_at", ""),
+                "contributor_name": ev.get("contributor_name", ""),
+                "event_type_folder": folder,
+                "telegram_message_id": canonical,
+                "canonical_url": f"{RAW_BASE}{mirror_path}",
+                "message_id_url": f"{RAW_BASE}{folder}/{canonical}.json",
+            }
             distinct_txids.add(tkey)
             mirrors += 1
             if len(mids) > 1:
@@ -722,6 +736,32 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     # Non-RSA attestations (e.g. reviewer sha256 keys) get their own honest folder.
     for mid, ev in signatures.get("other_signed", {}).items():
         folders.setdefault("other_signed_events", {})[mid] = ev
+
+    # PR1 (plans/TRUESIGHT_LEDGER_EXPLORER_PLAN.md): global reverse index.
+    # ONE flat file at repo root so a client explorer can (a) resolve ANY txid
+    # to its event in a single fetch -- no fan-out across 34 per-type folders --
+    # and (b) render a "recent activity" feed without re-sorting. Additive:
+    # nothing existing is renamed or removed. Sorted submitted_at DESC (recent
+    # first) -- the per-folder index is ascending; this viewer-first surface
+    # inverts it on purpose. `txid_hash` is the canonical sha256(txid) mirror
+    # filename -- the durable citation key (the README's stated mirror purpose).
+    ledger_ordered = sorted(
+        ledger_rows,
+        key=lambda k: (ledger_rows[k]["submitted_at"], k),
+        reverse=True,
+    )
+    files["ledger_index.json"] = {
+        "status": "success",
+        "schema_version": 1,
+        "generated_at": _now_iso(),
+        "ordered_by": "submitted_at",
+        "order": "desc",
+        "count": len(ledger_rows),
+        # Same walk contract as the per-folder index: an explicit ordered id
+        # vector + a dict, so JSON object-key ordering is never relied upon.
+        "events_ordered": ledger_ordered,
+        "events": {k: ledger_rows[k] for k in ledger_ordered},
+    }
 
     files["index.json"] = {
         "status": "success",
