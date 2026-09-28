@@ -562,3 +562,102 @@ def test_push_ledger_cap_counts_events_not_summaries(monkeypatch, tmp_path):
     assert len(events) == 2
     # cursor saved so the 3rd event resumes next run
     assert cur.read_text().strip() == "b/2.json"
+
+
+def _tx(i, txid, when="2026-09-26", marker="[TREE PLANTING EVENT]", who="Gary"):
+    return {
+        "event_type": marker,
+        "telegram_message_id": i,
+        "signature": txid,
+        "signed_payload": "p-" + txid,
+        "signed_text": marker + "\nRequest Transaction ID: " + txid + "\n",
+        "submitted_at": when,
+        "contributor_name": who,
+    }
+
+
+def test_ledger_index_rows_keyed_by_txid_hash_with_urls():
+    """Global reverse index: one row per txid -> canonical + message-id URLs."""
+    from scripts.sync_sunmint_signatures import _ledger_files, _txid_key
+
+    txid = "SIGA" * 80
+    sigs = {"events": {"171": _tx("171", txid), "172": _tx("172", "SIGB" * 80)}}
+    files = _ledger_files(sigs, {"items": []})
+    li = files["ledger_index.json"]
+
+    assert li["status"] == "success"
+    assert li["schema_version"] == 1
+    assert li["generated_at"]
+    assert li["ordered_by"] == "submitted_at"
+    assert li["order"] == "desc"
+    assert li["count"] == 2
+
+    k = _txid_key(txid)
+    assert set(li["events"].keys()) == {k, _txid_key("SIGB" * 80)}
+    row = li["events"][k]
+    assert row["txid_hash"] == k
+    assert row["event_type"] == "[TREE PLANTING EVENT]"
+    assert row["contributor_name"] == "Gary"
+    assert row["telegram_message_id"] == "171"
+    assert row["canonical_url"].endswith(f"tree_planting/{k}.json")
+    assert row["message_id_url"].endswith("tree_planting/171.json")
+
+
+def test_ledger_index_orders_recent_first_and_is_faithful():
+    """events_ordered is submitted_at DESC and enumerates the events dict."""
+    from scripts.sync_sunmint_signatures import _ledger_files, _txid_key
+
+    a, b, c = "A" * 300, "B" * 300, "C" * 300
+    sigs = {
+        "events": {
+            "300": _tx("300", a, when="2026-07-15"),
+            "100": _tx("100", b, when="2025-01-01"),
+            "200": _tx("200", c, when="2026-06-01"),
+        }
+    }
+    li = _ledger_files(sigs, {"items": []})["ledger_index.json"]
+    assert li["events_ordered"] == [_txid_key(a), _txid_key(c), _txid_key(b)]
+    assert list(li["events"].keys()) == li["events_ordered"]
+    assert set(li["events_ordered"]) == set(li["events"].keys())
+    assert len(li["events_ordered"]) == li["count"]
+
+
+def test_ledger_index_dup_txid_collapses_to_single_row():
+    """Two message ids, one txid -> ONE row (canonical = earliest message id)."""
+    from scripts.sync_sunmint_signatures import _ledger_files, _txid_key
+
+    txid = "DUP" * 100
+    sigs = {"events": {"172": _tx("172", txid), "171": _tx("171", txid)}}
+    li = _ledger_files(sigs, {"items": []})["ledger_index.json"]
+    assert li["count"] == 1
+    row = li["events"][_txid_key(txid)]
+    assert row["telegram_message_id"] == "171"
+    assert row["canonical_url"].endswith(f"tree_planting/{_txid_key(txid)}.json")
+
+
+def test_ledger_index_count_matches_root_total_txid_count():
+    """The explorer's row count must equal the root health counter."""
+    from scripts.sync_sunmint_signatures import _ledger_files
+
+    sigs = {
+        "events": {
+            "171": _tx("171", "T1" * 100),
+            "172": _tx("172", "T1" * 100),  # dup collapses
+            "180": _tx("180", "T2" * 100),
+        }
+    }
+    files = _ledger_files(sigs, {"items": []})
+    assert (
+        files["ledger_index.json"]["count"] == files["index.json"]["total_txid_count"]
+    )
+
+
+def test_ledger_index_omits_events_without_txid():
+    """An event with no txid gets no mirror and therefore no ledger_index row."""
+    from scripts.sync_sunmint_signatures import _ledger_files
+
+    sigs = {"events": {"200": _tx("200", "")}}
+    li = _ledger_files(sigs, {"items": []})["ledger_index.json"]
+    assert li["count"] == 0
+    assert li["events"] == {}
+    assert li["events_ordered"] == []
