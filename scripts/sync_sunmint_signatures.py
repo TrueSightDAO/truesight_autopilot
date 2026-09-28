@@ -643,14 +643,28 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     extra_files = 0
     collisions = 0
     for folder, evs in sorted(folders.items()):
+        # Chronological enumeration (governor decision 2026-09-26, thread
+        # 37982): order lives in the INDEX, never in the immutable filename.
+        # `submitted_at` is ISO `YYYY-MM-DD`, so a plain string sort IS a
+        # chronological sort. This gives a future blockchain explorer a
+        # deterministic, ordered walk WITHOUT coupling a (stable, citable) path
+        # to a mutable envelope attribute -- the txid resolver keeps working.
+        # Secondary key `mid` makes the order total and stable (dedup ties).
+        ordered_ids = [
+            mid
+            for mid, _ in sorted(
+                evs.items(),
+                key=lambda kv: (kv[1].get("submitted_at", ""), kv[0]),
+            )
+        ]
         entries = {
             mid: {
                 "url": f"{RAW_BASE}{folder}/{mid}.json",
-                "event_type": ev.get("event_type", ""),
-                "submitted_at": ev.get("submitted_at", ""),
-                "contributor_name": ev.get("contributor_name", ""),
+                "event_type": evs[mid].get("event_type", ""),
+                "submitted_at": evs[mid].get("submitted_at", ""),
+                "contributor_name": evs[mid].get("contributor_name", ""),
             }
-            for mid, ev in sorted(evs.items())
+            for mid in ordered_ids
         }
         # (1) message-id alias files -- UNCHANGED paths/content, so every current
         # consumer (dapp, link_tree_planting.html, verifiers) keeps working
@@ -692,6 +706,11 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
             "generated_at": _now_iso(),
             "event_type": next(iter(entries.values()), {}).get("event_type", ""),
             "count": len(entries),
+            # Ordered view: `events` is a dict (id -> metadata); JSON objects are
+            # unordered by spec, so the ordered enumeration is spelled out as an
+            # array of ids. A consumer walks [events[m] for m in events_ordered].
+            "ordered_by": "submitted_at",
+            "events_ordered": ordered_ids,
             "events": entries,
             # txid -> canonical mirror path, so a verifier can hash their
             # request_transaction_id, resolve the path, and round-trip the value

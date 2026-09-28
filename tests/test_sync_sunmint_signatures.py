@@ -233,6 +233,82 @@ def test_ledger_files_never_emits_hard_excluded_marker():
     assert not any("payout" in p for p in files)
 
 
+def _plant_row(msg_id, status_date, name="A"):
+    return [
+        "1",
+        "",
+        "",
+        msg_id,
+        "garyjob",
+        "",
+        PLANT_SAMPLE,
+        "",
+        "0",
+        "",
+        "",
+        status_date,
+    ]
+
+
+def test_folder_index_orders_events_chronologically():
+    """Ordering lives in the index (ordered_by + events_ordered), not the path."""
+    chat = [
+        _plant_row("300", "20260715"),  # middle
+        _plant_row("100", "20250101"),  # earliest
+        _plant_row("200", "20260601"),  # latest
+    ]
+    sigs = build_signatures(chat, {}, {})
+    files = _ledger_files(sigs, {"items": []})
+    idx = files["tree_planting/index.json"]
+
+    # ordered_by names the sort key; the vector is chronological (ISO dates sort
+    # lexicographically == chronologically).
+    assert idx["ordered_by"] == "submitted_at"
+    assert idx["events_ordered"] == ["100", "200", "300"]
+
+    # The array is a faithful enumeration of the events dict -- nothing dropped.
+    assert set(idx["events_ordered"]) == set(idx["events"].keys())
+    assert len(idx["events_ordered"]) == idx["count"]
+
+    # Each id resolves through the dict to its metadata (walk contract).
+    assert idx["events"]["100"]["submitted_at"] == "2025-01-01"
+    assert idx["events"]["300"]["submitted_at"] == "2026-07-15"
+
+
+def test_events_dict_iteration_order_is_chronological():
+    """The `events` dict is emitted in chronological order too (stable ties)."""
+    chat = [
+        _plant_row("500", "20260901"),
+        _plant_row("400", "20250101"),
+    ]
+    sigs = build_signatures(chat, {}, {})
+    files = _ledger_files(sigs, {"items": []})
+    idx = files["tree_planting/index.json"]
+    assert list(idx["events"].keys()) == ["400", "500"]
+
+
+def test_ordering_ties_broken_by_id_deterministically():
+    """Same submitted_at -> stable, total order by message id (no ambiguity)."""
+    chat = [
+        _plant_row("900", "20260601"),
+        _plant_row("800", "20260601"),
+        _plant_row("700", "20260601"),
+    ]
+    sigs = build_signatures(chat, {}, {})
+    files = _ledger_files(sigs, {"items": []})
+    idx = files["tree_planting/index.json"]
+    assert idx["events_ordered"] == ["700", "800", "900"]
+
+
+def test_paths_unchanged_by_ordering_feature():
+    """Ordering is index-only -- event file paths must NOT gain a date prefix."""
+    chat = [_plant_row("123", "20260601")]
+    sigs = build_signatures(chat, {}, {})
+    files = _ledger_files(sigs, {"items": []})
+    assert "tree_planting/123.json" in files
+    assert not any(p.split("/")[-1][:8].isdigit() for p in files if p.endswith(".json"))
+
+
 def _ev(i, txid, marker="[TREE PLANTING EVENT]"):
     return {
         "event_type": marker,
