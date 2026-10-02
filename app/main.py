@@ -2144,6 +2144,21 @@ def _run_tool_sync(
             "TREE PLANTING LINK EVENT": {"SOLD"},
         }
 
+        # SALES EVENT is handled by a terminal-status BLOCKLIST rather than an
+        # allowlist. A sale must be refused only when the bag is ALREADY
+        # sold/committed; the *sellable* vocabulary keeps growing -- MINTED,
+        # ON CONSIGNMENT, IN INVENTORY, ... -- so an allowlist keeps blocking
+        # legitimate sales (2026-10-02: every consignment sale, since a bag
+        # sits at ON CONSIGNMENT when the partner sells it, was rejected as
+        # "already processed"). Mirror the QR web service, which treats any
+        # status outside the sold/committed set as still in inventory.
+        _QR_STATUS_SOLD_TERMINAL = {
+            "SOLD",
+            "RESERVED",
+            "ASSIGNED_TO_TREE",
+            "TREE_PLANTING_FUNDS_TRANSFERRED",
+        }
+
         qr = attributes.get("QR Code", "")
         # For SALES EVENT, also check the Item field for QR duplicate guard
         if not qr and event_name.upper() == "SALES EVENT":
@@ -2185,6 +2200,10 @@ def _run_tool_sync(
                         # tree-planting link needs SOLD). Any other status means
                         # it is not (yet) eligible, or already processed.
                         _status_ok = current_status in _precond_statuses
+                    elif event_name.upper() == "SALES EVENT":
+                        # A sale is valid unless the bag is already sold /
+                        # committed (see _QR_STATUS_SOLD_TERMINAL).
+                        _status_ok = current_status not in _QR_STATUS_SOLD_TERMINAL
                     else:
                         _status_ok = current_status in ("MINTED", "")
                     if not _status_ok:
