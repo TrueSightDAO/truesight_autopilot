@@ -113,3 +113,60 @@ def test_sales_event_with_sold_qr_still_blocked(monkeypatch):
         }
     )
     assert "duplicate" in result.lower(), result
+
+
+def test_sales_event_with_on_consignment_qr_reaches_execute(monkeypatch):
+    """Incident 2026-10-02 (thread 40075): a consignment bag sits at
+    ON CONSIGNMENT when the partner sells it; the sale must reach the DAO
+    (the handler flips it to SOLD). The MINTED-only guard wrongly blocked it."""
+    _wire(monkeypatch, "ON CONSIGNMENT")
+    result = _run(
+        {
+            "event_name": "SALES EVENT",
+            "attributes": {
+                "Item": "2024OSCAR_20260330_23",
+                "QR Code": "2024OSCAR_20260330_23",
+                "Sales price": "17.50",
+                "Owner email": "info@thewayhomeshop.com",
+            },
+        }
+    )
+    low = result.lower()
+    assert "submitted successfully" in low, result
+    assert "duplicate" not in low, result
+
+
+def test_sales_event_with_in_inventory_qr_reaches_execute(monkeypatch):
+    """IN INVENTORY is a sellable precondition -> must NOT be a duplicate."""
+    _wire(monkeypatch, "IN INVENTORY")
+    result = _run(
+        {
+            "event_name": "SALES EVENT",
+            "attributes": {
+                "Item": "2024OSCAR_20260330_24",
+                "QR Code": "2024OSCAR_20260330_24",
+                "Sales price": "17.50",
+                "Owner email": "info@thewayhomeshop.com",
+            },
+        }
+    )
+    low = result.lower()
+    assert "submitted successfully" in low, result
+    assert "duplicate" not in low, result
+
+
+def test_sales_event_with_assigned_to_tree_still_blocked(monkeypatch):
+    """ASSIGNED_TO_TREE is a committed terminal state -> must stay blocked."""
+    _wire(monkeypatch, "ASSIGNED_TO_TREE")
+    result = _run(
+        {
+            "event_name": "SALES EVENT",
+            "attributes": {
+                "Item": "2024OSCAR_CB_20260620_1",
+                "QR Code": "2024OSCAR_CB_20260620_1",
+                "Sales price": "20",
+                "Owner email": "buyer@example.com",
+            },
+        }
+    )
+    assert "duplicate" in result.lower(), result
