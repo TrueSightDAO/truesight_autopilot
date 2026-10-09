@@ -45,8 +45,8 @@ import datetime
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def find_turn_boundaries(messages: list[dict]) -> list[int]:
     return ends
 
 
-def extract_done_this_turn(messages: list[dict], start: int, end: int) -> Optional[str]:
+def extract_done_this_turn(messages: list[dict], start: int, end: int) -> str | None:
     """Extract the "\u2705 Done this turn" report from the turn spanning [start, end).
 
     The report lives at the END of the turn's final plain-assistant message
@@ -103,7 +103,7 @@ def extract_done_this_turn(messages: list[dict], start: int, end: int) -> Option
     """
     if start >= end:
         return None
-    last_plain: Optional[dict] = None
+    last_plain: dict | None = None
     for m in messages[start:end]:
         if m.get("role") == "assistant" and not m.get("tool_calls"):
             last_plain = m
@@ -119,7 +119,7 @@ def extract_done_this_turn(messages: list[dict], start: int, end: int) -> Option
     return block or None
 
 
-def count_tokens(messages: list[dict], model: Optional[str] = None) -> int:
+def count_tokens(messages: list[dict], model: str | None = None) -> int:
     """Token count for a message list via ``litellm.token_counter``.
 
     Falls back to the codebase's observed dense 2-chars/token ratio if litellm
@@ -179,8 +179,8 @@ def compact_history(
     messages: list[dict],
     keep_last_n_turns: int = DEFAULT_KEEP_LAST_TURNS,
     token_threshold: int = DEFAULT_TOKEN_THRESHOLD,
-    model: Optional[str] = None,
-    summarizer: Optional[Callable[[list[dict], int, int], str]] = None,
+    model: str | None = None,
+    summarizer: Callable[[list[dict], int, int], str] | None = None,
 ) -> list[dict]:
     """Return a compacted COPY of ``messages`` (never mutates the input).
 
@@ -242,7 +242,7 @@ def compact_history(
     return head_sys + extra_sys + [summary_msg] + messages[tail_start:]
 
 
-def backup_session_file(session_path: str | Path) -> Optional[Path]:
+def backup_session_file(session_path: str | Path) -> Path | None:
     """Copy an on-disk session JSON to ``<name>.pre-compact-<UTC ts>.json``.
 
     Returns the backup Path on success, or ``None`` when the source file does
@@ -262,3 +262,230 @@ def backup_session_file(session_path: str | Path) -> Optional[Path]:
     except OSError as exc:  # pragma: no cover — fs errors are env-specific
         logger.warning("Session backup failed for %s: %s", src.name, exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# In-turn (intra-turn) compaction — Unit 1 of SOPHIA_INTRATURN_COMPACTION_PLAN
+# ---------------------------------------------------------------------------
+#
+# The functions above fold COMPLETED prior turns into one summary. This section
+# adds the complementary piece: folding the EARLY rounds of a single turn that
+# is still in progress, so an investigation-heavy turn that needs many tool
+# rounds (each dumping a full ssh_run stdout / file read) stops re-sending every
+# raw round payload on every subsequent round.
+#
+# Contract mirrors the inter-turn machinery — same keep-verbatim / no-LLM / tool
+# protocol conventions — just applied at ROUND granularity instead of turn
+# granularity. A "round" is one assistant message carrying ``tool_calls`` plus
+# the ``tool`` result messages that answer every id in it.
+
+# Knobs (plan section 2.2): keep the last K rounds raw, fold earlier ones once
+# the turn's own round count / token contribution crosses a threshold.
+DEFAULT_KEEP_LAST_K_ROUNDS = 4
+DEFAULT_INTRATURN_TOKEN_THRESHOLD = 40_000
+DEFAULT_INTRATURN_ROUND_THRESHOLD = 8
+
+# Header of the synthetic mid-turn summary message (role ``user``, same
+# bracketed-context precedent as the inter-turn SUMMARY_PREFIX and [PINNED]).
+TURN_IN_PROGRESS_PREFIX = (
+    "[TURN IN PROGRESS \u2014 EARLIER ROUNDS SUMMARY \u2014 {k} earlier round(s) "
+    "folded to a summary, raw output of the last {m} round(s) kept below]:"
+)
+
+# Per-snippet cap so one verbose ssh_run dump can't dominate the summary line.
+ROUND_SNIPPET_CHARS = 200
+
+
+def find_open_turn_start(messages: list[dict]) -> int | None:
+    """Index of the ``user`` message that opens the LAST (current) turn.
+
+    The intra-turn compactor only ever touches this trailing turn; everything
+    before it is left to ``compact_history``. Returns ``None`` when there is no
+    user message at all (nothing to fold).
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.get("role") == "user" and not m.get("tool_calls"):
+            return i
+    return None
+
+
+def _scan_rounds(
+    messages: list[dict], start: int, end: int
+) -> tuple[list[tuple[int, int]], int | None]:
+    """Scan ``messages[start:end]`` into tool rounds.
+
+    Returns ``(complete, first_incomplete)`` where ``complete`` is a list of
+    ``(round_start, round_end)`` index pairs — ``round_start`` is an assistant
+    message carrying ``tool_calls`` and ``round_end`` is the exclusive index
+    just past the contiguous ``tool`` results that answer EVERY id in it — and
+    ``first_incomplete`` is the index of the first assistant-with-tool_calls
+    whose results are missing (``None`` when every round in range is complete).
+    """
+    complete: list[tuple[int, int]] = []
+    first_incomplete: int | None = None
+    i = start
+    while i < end:
+        m = messages[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            ids = [tc.get("id", "") for tc in m["tool_calls"]]
+            j = i + 1
+            seen: set = set()
+            while j < end and messages[j].get("role") == "tool":
+                seen.add(messages[j].get("tool_call_id", ""))
+                j += 1
+            if all(cid in seen for cid in ids):
+                complete.append((i, j))
+            elif first_incomplete is None:
+                first_incomplete = i
+            i = j
+        else:
+            i += 1
+    return complete, first_incomplete
+
+
+def find_complete_rounds(
+    messages: list[dict], start: int, end: int
+) -> list[tuple[int, int]]:
+    """The ``(round_start, round_end)`` pairs of every COMPLETE round in range."""
+    return _scan_rounds(messages, start, end)[0]
+
+
+def _snippet(text: object, limit: int = ROUND_SNIPPET_CHARS) -> str:
+    """Single-line, whitespace-collapsed, length-capped view of ``text``."""
+    s = " ".join(str(text or "").split())
+    return (s[:limit] + "\u2026") if len(s) > limit else s
+
+
+def default_round_summarizer(messages: list[dict], start: int, end: int) -> str:
+    """Summary text for the folded round region ``[start, end)``.
+
+    The round-granularity analogue of ``default_summarizer``: it walks the region
+    round by round and emits one compact line per round (the assistant's own
+    pre-call text + the tool name(s) + a truncated result snippet), reusing
+    ``extract_done_this_turn`` for any plain-assistant block that carries a
+    "Done this turn" report. No LLM call — same text-reuse philosophy as the
+    inter-turn path.
+    """
+    parts: list[str] = []
+    ridx = 0
+    i = start
+    while i < end:
+        m = messages[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            ridx += 1
+            names: list[str] = []
+            for tc in m["tool_calls"]:
+                fn = tc.get("function") or {}
+                args = _snippet(fn.get("arguments", ""), 60)
+                name = str(fn.get("name", "tool"))
+                names.append(name if not args or args == "{}" else f"{name}({args})")
+            pre = _snippet(m.get("content", ""))
+            line = (
+                f"Round {ridx}: "
+                + (f'"{pre}" ' if pre else "")
+                + "called "
+                + ", ".join(names)
+            )
+            j = i + 1
+            results: list[str] = []
+            while j < end and messages[j].get("role") == "tool":
+                results.append(_snippet(messages[j].get("content", "")))
+                j += 1
+            tail = " | ".join(r for r in results if r)
+            if tail:
+                line += " \u2192 " + tail
+            parts.append("\u2022 " + line)
+            i = j
+        elif m.get("role") == "assistant":
+            block = extract_done_this_turn(messages, i, i + 1) or _snippet(
+                m.get("content", "")
+            )
+            if block:
+                parts.append("\u2022 " + block)
+            i += 1
+        else:
+            i += 1
+    if parts:
+        return "\n".join(parts)
+    tool_calls = sum(len(m.get("tool_calls") or []) for m in messages[start:end])
+    return (
+        f"{tool_calls} earlier tool round(s) were folded from this in-progress "
+        "turn; full detail is in the session transcript repo."
+    )
+
+
+def compact_open_turn(
+    messages: list[dict],
+    keep_last_k_rounds: int = DEFAULT_KEEP_LAST_K_ROUNDS,
+    token_threshold: int = DEFAULT_INTRATURN_TOKEN_THRESHOLD,
+    round_threshold: int = DEFAULT_INTRATURN_ROUND_THRESHOLD,
+    model: str | None = None,
+    summarizer: Callable[[list[dict], int, int], str] | None = None,
+) -> list[dict]:
+    """Compact the CURRENT turn's early tool rounds into ONE summary (copy).
+
+    Result shape when folding happens::
+
+        [... prior msgs ...] + [user (current turn)]
+        + [system (any mid-region)] + [ONE "TURN IN PROGRESS" user summary]
+        + [last K complete rounds + trailing in-flight msgs]
+
+    The last ``keep_last_k_rounds`` COMPLETE rounds — plus any trailing in-flight
+    messages (an assistant whose ``tool_calls`` still await results) — are kept
+    verbatim, byte-identical. It is a no-op (fresh, content-identical list) when:
+    there is no user message to anchor the turn; the turn has at most
+    ``keep_last_k_rounds`` complete rounds; nothing is foldable without crossing
+    an INCOMPLETE round; or neither trigger fires (both thresholds <= 0, or the
+    round count < ``round_threshold`` while tokens <= ``token_threshold``).
+    """
+    if not messages:
+        return []
+    start = find_open_turn_start(messages)
+    if start is None or start + 1 >= len(messages):
+        return list(messages)
+
+    complete, first_incomplete = _scan_rounds(messages, start + 1, len(messages))
+    if len(complete) <= keep_last_k_rounds:
+        return list(messages)
+
+    # Fold everything before the K-th-from-last complete round. Only ever cut at
+    # a round START (an assistant-with-tool_calls), so the retained tail never
+    # begins mid tool_calls/tool pair.
+    if keep_last_k_rounds > 0:
+        fold_end = complete[-keep_last_k_rounds][0]
+    else:
+        fold_end = complete[0][0]
+
+    # Never fold ACROSS an incomplete round: if the cut point sits past one, fall
+    # back to the complete rounds that precede it.
+    if first_incomplete is not None and first_incomplete < fold_end:
+        safe = [r for r in complete if r[1] <= first_incomplete]
+        if len(safe) <= keep_last_k_rounds:
+            return list(messages)
+        fold_end = safe[-keep_last_k_rounds][0]
+
+    foldable = [r for r in complete if r[0] < fold_end]
+    if not foldable:
+        return list(messages)
+
+    round_ok = round_threshold > 0 and len(complete) >= round_threshold
+    token_ok = token_threshold > 0 and (
+        count_tokens(messages[start:], model=model) > token_threshold
+    )
+    if not (round_ok or token_ok):
+        return list(messages)
+
+    region = messages[start + 1 : fold_end]
+    region_sys = [m for m in region if m.get("role") == "system"]
+    summ = (summarizer or default_round_summarizer)(messages, start + 1, fold_end)
+    if not summ.strip():
+        return list(messages)
+
+    summary_msg = {
+        "role": "user",
+        "content": TURN_IN_PROGRESS_PREFIX.format(k=len(foldable), m=keep_last_k_rounds)
+        + "\n"
+        + summ,
+    }
+    return messages[: start + 1] + region_sys + [summary_msg] + messages[fold_end:]
