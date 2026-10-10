@@ -159,6 +159,27 @@ GATEWAY_INTENTS = (
 # Discord close codes we should NOT immediately retry (fatal config errors).
 _FATAL_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}
 
+
+# Gateway close codes that mean the session is NOT resumable: Discord may close
+# the socket directly on these (4007 invalid seq, 4009 session timed out) without
+# a preceding INVALID_SESSION (op 9), so we also check ws.close_code after the
+# read loop. See plans/DISCORD_GATEWAY_RESUME_BACKOFF_FIX_PLAN.md.
+_UNRESUMABLE_CLOSE_CODES = {4007, 4009}
+
+# Only forgive the reconnect backoff climb when the connection that just ended
+# had been up at least this long: a healthy connection that hit one idle timeout
+# should not be penalised with a stale, climbed-up backoff, but a fast failure
+# must still climb so it can never become a reconnect storm.
+_BACKOFF_RESET_MIN_UPTIME = 60.0
+
+
+def _clear_session(session: dict[str, Any]) -> None:
+    """Discard the stored gateway session so the next attempt re-IDENTIFYs."""
+    session.pop("session_id", None)
+    session.pop("seq", None)
+    session.pop("resume_url", None)
+
+
 # ── Cookie / placeholder ────────────────────────────────────────────────
 _SHEET_CONTACT = "Contributors contact information"
 _LEDGER_SPREADSHEET_ID = "1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU"
@@ -1882,6 +1903,7 @@ async def _heartbeat(ws, interval: float, seq_getter: Callable[[], int | None]) 
 
 async def _gateway_once(
     url: str,
+    session: dict[str, Any],
     allowed: set[str],
     public_key: str | None,
     guild_id: str,
@@ -1892,31 +1914,73 @@ async def _gateway_once(
 ) -> None:
     import websockets
 
-    async with websockets.connect(url, max_size=2**22) as ws:
+    # Prefer the dedicated resume endpoint once a prior READY gave us one.
+    connect_url = session.get("resume_url") or url
+    async with websockets.connect(connect_url, max_size=2**22) as ws:
         hello = json.loads(await ws.recv())
         interval = hello["d"]["heartbeat_interval"] / 1000.0
-        seq: dict[str, int | None] = {"n": None}
+        # Seed from the persisted session so the heartbeat sends the right seq
+        # immediately on resume, before any new event arrives.
+        seq: dict[str, int | None] = {"n": session.get("seq")}
         hb = asyncio.create_task(_heartbeat(ws, interval, lambda: seq["n"]))
-        await ws.send(
-            json.dumps(
-                {
-                    "op": 2,
-                    "d": {
-                        "token": get_token(),
-                        "intents": GATEWAY_INTENTS,
-                        "properties": {"os": "linux", "browser": "truesight-sophia"},
-                    },
-                }
+        session_id = session.get("session_id")
+        if session_id and session.get("seq") is not None:
+            # RESUME (op 6): replay events missed while disconnected.
+            await ws.send(
+                json.dumps(
+                    {
+                        "op": 6,
+                        "d": {
+                            "token": get_token(),
+                            "session_id": session_id,
+                            "seq": session["seq"],
+                        },
+                    }
+                )
             )
-        )
-        logger.info("Discord gateway READY handshake sent (guild=%s)", guild_id)
+            logger.info("Discord gateway RESUME sent (guild=%s)", guild_id)
+        else:
+            await ws.send(
+                json.dumps(
+                    {
+                        "op": 2,
+                        "d": {
+                            "token": get_token(),
+                            "intents": GATEWAY_INTENTS,
+                            "properties": {
+                                "os": "linux",
+                                "browser": "truesight-sophia",
+                            },
+                        },
+                    }
+                )
+            )
+            logger.info("Discord gateway IDENTIFY sent (guild=%s)", guild_id)
         try:
             async for raw in ws:
                 event = json.loads(raw)
                 if event.get("s") is not None:
                     seq["n"] = event["s"]
+                    session["seq"] = event["s"]
+                if event.get("op") == 9:  # INVALID_SESSION
+                    resumable = bool(event.get("d"))
+                    logger.warning(
+                        "Discord gateway INVALID_SESSION (resumable=%s)", resumable
+                    )
+                    if not resumable:
+                        _clear_session(session)
+                    return  # let the outer loop reconnect
                 etype = event.get("t")
-                if etype == "MESSAGE_CREATE":
+                if etype == "READY":
+                    data = event.get("d") or {}
+                    session["session_id"] = data.get("session_id")
+                    resume_url = data.get("resume_gateway_url")
+                    if resume_url:
+                        session["resume_url"] = resume_url + _GATEWAY_QUERY
+                    logger.info("Discord gateway READY (guild=%s)", guild_id)
+                elif etype == "RESUMED":
+                    logger.info("Discord gateway RESUMED (guild=%s)", guild_id)
+                elif etype == "MESSAGE_CREATE":
                     dispatch(event["d"])
                 elif etype == "MESSAGE_REACTION_ADD" and dispatch_reaction is not None:
                     dispatch_reaction(event["d"])
@@ -1924,6 +1988,12 @@ async def _gateway_once(
                     dispatch_interaction(event["d"])
         finally:
             hb.cancel()
+        if getattr(ws, "close_code", None) in _UNRESUMABLE_CLOSE_CODES:
+            logger.warning(
+                "Discord gateway closed with code %s -- dropping session",
+                ws.close_code,
+            )
+            _clear_session(session)
 
 
 async def _gateway_loop(
@@ -1936,11 +2006,16 @@ async def _gateway_loop(
     dispatch_interaction: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     backoff = 5.0
+    # Persistent gateway session owned here and passed by reference into every
+    # reconnect so a RESUME can replay events missed while disconnected.
+    session: dict[str, Any] = {}
     while True:
+        connected_at = time.time()
         try:
             url = _gateway_url()
             await _gateway_once(
                 url,
+                session,
                 allowed,
                 public_key,
                 guild_id,
@@ -1954,6 +2029,9 @@ async def _gateway_loop(
             logger.warning(
                 "Discord gateway error: %s; reconnecting in %.0fs", exc, backoff
             )
+        # Only forgive the backoff climb when the connection just ended was stable.
+        if time.time() - connected_at >= _BACKOFF_RESET_MIN_UPTIME:
+            backoff = 5.0
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60.0)
 
