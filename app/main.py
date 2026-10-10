@@ -74,6 +74,7 @@ from .email_poller import EmailPoller
 from .email_inbox_watch import EmailInboxWatch
 from .fix_agent import FixAgent
 from .followup_loop import followup_loop
+from .calendar_watchdog import calendar_watchdog_loop
 from .github_client import GitHubClient
 from .grok_client import GROK_MODEL, grok_analyze_images
 from .llm_client import LLMClient, LLMError
@@ -586,6 +587,15 @@ async def lifespan(app: FastAPI):
                 logger.warning("Follow-up loop failed to start: %s", e)
         else:
             logger.info("FOLLOWUPS_ENABLED=false — follow-up loop not started")
+        if settings.calendar_watch_enabled:
+            try:
+                asyncio.create_task(calendar_watchdog_loop())
+            except Exception as e:
+                logger.warning("Calendar watchdog failed to start: %s", e)
+        else:
+            logger.info(
+                "CALENDAR_WATCH_ENABLED=false — calendar watchdog not started"
+            )
         try:
             asyncio.create_task(_catalog_refresh_loop())
         except Exception as e:

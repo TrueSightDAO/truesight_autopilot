@@ -123,6 +123,33 @@ class Settings(BaseSettings):
     # FOLLOWUPS_ENABLED=false.
     followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
 
+    # Calendar watchdog (app/calendar_watchdog.py) — Sophia's DAILY self-check
+    # of the admin@truesight.me calendar, born from a governor ask (Gary,
+    # 2026-10-10: "you need a daily mechanism to self check the calendar").
+    # A calendar entry alone cannot wake the autopilot, so the intention needs
+    # a runner; this is it. OFF by default so the deploy is behavior-neutral
+    # until a governor reviews it. Even when ON, outbound posts additionally
+    # require CALENDAR_WATCH_ENABLE_POSTS (default off) for a dry-run-first
+    # rollout, and CALENDAR_WATCH_THREAD_ID names the topic to post into.
+    calendar_watch_enabled: bool = Field(
+        default=False, validation_alias="CALENDAR_WATCH_ENABLED"
+    )
+    calendar_watch_interval_hours: int = Field(
+        default=24, validation_alias="CALENDAR_WATCH_INTERVAL_HOURS"
+    )
+    calendar_watch_days_ahead: int = Field(
+        default=7, validation_alias="CALENDAR_WATCH_DAYS_AHEAD"
+    )
+    calendar_watch_account: str = Field(
+        default="admin", validation_alias="CALENDAR_WATCH_ACCOUNT"
+    )
+    calendar_watch_thread_id: str = Field(
+        default="", validation_alias="CALENDAR_WATCH_THREAD_ID"
+    )
+    calendar_watch_enable_posts: bool = Field(
+        default=False, validation_alias="CALENDAR_WATCH_ENABLE_POSTS"
+    )
+
     # The email-inbox watch (app/email_inbox_watch.py) triages unread
     # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the
     # loop into the lifespan, but it stays OFF by default until the governor
