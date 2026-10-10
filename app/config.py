@@ -161,6 +161,12 @@ class Settings(BaseSettings):
     calendar_watch_discord_native_events: bool = Field(
         default=False, validation_alias="CALENDAR_WATCH_DISCORD_NATIVE_EVENTS"
     )
+    # When true, the Discord channel shows EVERY upcoming event (a full schedule)
+    # and native guild events are mirrored for all events, not only the ones that
+    # need attention. Telegram keeps the attention-only digest. Off by default.
+    calendar_watch_discord_all_events: bool = Field(
+        default=False, validation_alias="CALENDAR_WATCH_DISCORD_ALL_EVENTS"
+    )
 
     # The email-inbox watch (app/email_inbox_watch.py) triages unread
     # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the

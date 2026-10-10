@@ -127,3 +127,38 @@ def test_post_digest_discord_posts_when_enabled(monkeypatch):
 
     assert asyncio.run(cw._post_digest_discord("digest!")) is True
     assert sent == [("999", "digest!")]
+
+
+def test_build_schedule_lists_all_events():
+    far = (datetime.now(timezone.utc) + timedelta(days=20)).isoformat()
+    evs = [
+        _ev(id="a"),
+        _ev(id="b", summary="Quiet lunch", start=far, attendees=[]),
+    ]
+    out = cw.build_schedule(evs)
+    assert "Quiet lunch" in out
+    assert "DAO call" in out
+    assert out.count("•") == 2
+
+
+def test_sync_native_events_mirrors_all_when_enabled(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeAdapter:
+        @staticmethod
+        def create_scheduled_event(**kw):
+            calls.append(kw)
+            return {"id": "d1"}
+
+    import sys
+    import types
+
+    fake = types.ModuleType("app.discord_adapter")
+    fake.create_scheduled_event = FakeAdapter.create_scheduled_event
+    monkeypatch.setitem(sys.modules, "app.discord_adapter", fake)
+    monkeypatch.setattr(cw, "_native_state_path", lambda: tmp_path / "s.json")
+    monkeypatch.setattr(cw.settings, "calendar_watch_discord_all_events", True)
+
+    far = (datetime.now(timezone.utc) + timedelta(days=20)).isoformat()
+    assert cw.sync_native_events([_ev(start=far)]) == 1
+    assert len(calls) == 1
