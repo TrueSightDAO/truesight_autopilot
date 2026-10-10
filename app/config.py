@@ -167,6 +167,14 @@ class Settings(BaseSettings):
     calendar_watch_discord_all_events: bool = Field(
         default=False, validation_alias="CALENDAR_WATCH_DISCORD_ALL_EVENTS"
     )
+    # The watchdog's own self-check marker events (e.g. the retired
+    # "[DAILY] Sophia self-check - calendar + invite follow-up" series) describe
+    # this loop's routine, not a commitment needing prep; left in they pollute
+    # the digest (it pings "confirm prep" for itself). When true (default) such
+    # self-referential markers are filtered from every view.
+    calendar_watch_skip_self_markers: bool = Field(
+        default=True, validation_alias="CALENDAR_WATCH_SKIP_SELF_MARKERS"
+    )
 
     # The email-inbox watch (app/email_inbox_watch.py) triages unread
     # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the

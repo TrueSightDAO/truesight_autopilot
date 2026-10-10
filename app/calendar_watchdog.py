@@ -40,6 +40,20 @@ logger = logging.getLogger("autopilot.calendar.watchdog")
 _TERMINAL = {"accepted", "declined", "tentative"}
 
 
+# The watchdog's OWN self-check marker events (e.g. the retired "[DAILY] Sophia
+# self-check - calendar + invite follow-up" series) describe this loop's routine,
+# not a commitment that needs prep. Left in, one pollutes the very digest the
+# watchdog emits: the digest ends up pinging "confirm prep" for the digest job
+# itself (observed 2026-10-10 -- 2 of 8 attention lines were the marker). Such a
+# marker is a signal to a *human*, not a task, so skip it in EVERY view (Telegram
+# digest, Discord schedule, native mirror). Reversible via
+# CALENDAR_WATCH_SKIP_SELF_MARKERS (default true).
+def _is_self_marker(ev: dict) -> bool:
+    """True for the watchdog's own self-check marker events (pure)."""
+    summary = (ev.get("summary") or "").strip().lower().replace("-", " ")
+    return "self check" in summary
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     """Best-effort ISO parse into an aware UTC datetime."""
     if not value:
@@ -147,6 +161,8 @@ async def calendar_watchdog_loop(interval_seconds: int | None = None):
                 days_ahead,
                 100,
             )
+            if getattr(settings, "calendar_watch_skip_self_markers", True):
+                events = [e for e in events if not _is_self_marker(e)]
             digest = build_digest(events)
             if digest:
                 await _post_digest(digest)
