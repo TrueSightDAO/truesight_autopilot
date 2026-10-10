@@ -149,6 +149,18 @@ class Settings(BaseSettings):
     calendar_watch_enable_posts: bool = Field(
         default=False, validation_alias="CALENDAR_WATCH_ENABLE_POSTS"
     )
+    # Discord delivery target for the same digest. When set, the text digest is
+    # ALSO mirrored into this channel (empty = off). Both deliveries share the
+    # CALENDAR_WATCH_ENABLE_POSTS send gate.
+    calendar_watch_discord_channel_id: str = Field(
+        default="", validation_alias="CALENDAR_WATCH_DISCORD_CHANNEL_ID"
+    )
+    # When true, each attention-worthy event is additionally mirrored as a native
+    # Discord **Guild Scheduled Event** (entity_type EXTERNAL) so members get an
+    # RSVP + countdown. Idempotent across ticks (state file). Off by default.
+    calendar_watch_discord_native_events: bool = Field(
+        default=False, validation_alias="CALENDAR_WATCH_DISCORD_NATIVE_EVENTS"
+    )
 
     # The email-inbox watch (app/email_inbox_watch.py) triages unread
     # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the
