@@ -538,6 +538,45 @@ def send_message(channel_id: str | int, text: str) -> list[str]:
     return ids
 
 
+def create_scheduled_event(
+    name: str,
+    start_iso: str,
+    end_iso: str,
+    location: str = "See calendar",
+    description: str = "",
+) -> dict | None:
+    """Create a native Discord **Guild Scheduled Event** (EXTERNAL), returning
+    the created event object (or None). Requires the bot's role to hold
+    MANAGE_EVENTS.
+
+    ``start_iso`` / ``end_iso`` must be tz-aware ISO-8601 strings. Honours
+    DISCORD_DRY_RUN (logs and returns a dry-run stub).
+    """
+    guild_id = getattr(settings, "discord_guild_id", "") or ""
+    if not guild_id:
+        logger.warning("create_scheduled_event: no DISCORD_GUILD_ID configured")
+        return None
+    if settings.discord_dry_run:
+        logger.info(
+            "[DRY_RUN] would create scheduled event %r @ %s in guild %s",
+            name,
+            start_iso,
+            guild_id,
+        )
+        return {"id": "dry-run", "name": name, "status": 1, "entity_type": 3}
+    payload = {
+        "name": (name or "(event)")[:100],
+        "privacy_level": 2,  # GUILD_ONLY
+        "scheduled_start_time": start_iso,
+        "scheduled_end_time": end_iso,
+        "entity_type": 3,  # EXTERNAL
+        "entity_metadata": {"location": (location or "See calendar")[:100]},
+    }
+    if description:
+        payload["description"] = description[:1000]
+    return _api("POST", f"/guilds/{guild_id}/scheduled-events", payload)
+
+
 def send_voice(channel_id: str | int, file_path: str, caption: str = "") -> bool:
     """Upload an audio file to a channel as a message attachment. Best-effort.
 
