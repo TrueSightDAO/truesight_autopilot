@@ -28,8 +28,10 @@ needs no separate systemd unit.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from .config import settings
 
@@ -119,8 +121,19 @@ async def calendar_watchdog_loop(interval_seconds: int | None = None):
             digest = build_digest(events)
             if digest:
                 await _post_digest(digest)
+                await _post_digest_discord(digest)
             else:
                 logger.info("Calendar watchdog: nothing needs attention")
+            if getattr(settings, "calendar_watch_discord_native_events", False):
+                try:
+                    created = await asyncio.to_thread(sync_native_events, events)
+                    if created:
+                        logger.info(
+                            "Calendar watchdog: mirrored %d native Discord event(s)",
+                            created,
+                        )
+                except Exception as e:  # never kill the loop
+                    logger.exception("Calendar watchdog: native sync failed: %s", e)
         except Exception as e:  # never kill the loop
             logger.exception("Calendar watchdog tick failed: %s", e)
 
@@ -162,3 +175,109 @@ async def _post_digest(digest: str) -> bool:
         return False
     logger.info("Calendar watchdog: posted digest (msg_id=%s)", msg_id)
     return msg_id is not None
+
+
+# ── Discord delivery: text digest + native scheduled events ──────────────────
+
+_NATIVE_STATE_FILE = "calendar_native_events.json"
+
+
+def _native_state_path() -> Path:
+    base = Path(getattr(settings, "session_log_dir", "/tmp/autopilot_sessions"))
+    base.mkdir(parents=True, exist_ok=True)
+    return base / _NATIVE_STATE_FILE
+
+
+def _load_native_state() -> dict:
+    try:
+        return json.loads(_native_state_path().read_text()) or {}
+    except Exception:  # noqa: BLE001 -- missing/corrupt state must not raise
+        return {}
+
+
+def _save_native_state(state: dict) -> None:
+    try:
+        _native_state_path().write_text(json.dumps(state))
+    except Exception:  # noqa: BLE001
+        logger.warning("Calendar watchdog: could not persist native-event state")
+
+
+def _native_event_payload(ev: dict) -> dict | None:
+    """Map a condensed calendar event to a native Discord event payload (pure).
+
+    Returns None when there is no usable start. All-day events get a 1-hour
+    block. Times are normalised to UTC ISO-8601 (Discord requires tz-aware).
+    """
+    start = _parse_dt(ev.get("start"))
+    if start is None:
+        return None
+    end = _parse_dt(ev.get("end"))
+    if end is None or end <= start:
+        end = start + timedelta(hours=1)
+    return {
+        "name": (ev.get("summary") or "(event)")[:100],
+        "start_iso": start.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "end_iso": end.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "location": (ev.get("location") or "See calendar")[:100],
+        "description": (ev.get("htmlLink") or "")[:1000],
+    }
+
+
+def sync_native_events(events: list[dict]) -> int:
+    """Mirror attention-worthy events as native Discord scheduled events.
+
+    Idempotent: a small JSON state file maps calendar event id -> Discord event
+    id so repeated ticks do not create duplicates. Returns the number created.
+    """
+    try:
+        from app.discord_adapter import create_scheduled_event
+    except ImportError:  # pragma: no cover
+        logger.warning("Discord adapter unavailable — cannot sync native events")
+        return 0
+    now = datetime.now(timezone.utc)
+    state = _load_native_state()
+    created = 0
+    for ev in events:
+        eid = str(ev.get("id") or "").strip()
+        if not eid or eid in state:
+            continue
+        if not _needs_attention(ev, now):
+            continue
+        payload = _native_event_payload(ev)
+        if not payload:
+            continue
+        res = create_scheduled_event(**payload)
+        if res and res.get("id"):
+            state[eid] = res["id"]
+            created += 1
+    if created:
+        _save_native_state(state)
+    return created
+
+
+async def _post_digest_discord(digest: str) -> bool:
+    """Mirror the digest into the configured Discord channel (send-gated)."""
+    channel_id = str(
+        getattr(settings, "calendar_watch_discord_channel_id", "") or ""
+    ).strip()
+    if not channel_id:
+        return False
+    if not getattr(settings, "calendar_watch_enable_posts", False):
+        logger.info(
+            "Calendar watchdog: CALENDAR_WATCH_ENABLE_POSTS=false — would post to "
+            "Discord channel %s",
+            channel_id,
+        )
+        return False
+    try:
+        from app.discord_adapter import send_message as discord_send
+    except ImportError:  # pragma: no cover
+        logger.warning("Discord adapter unavailable — cannot post calendar digest")
+        return False
+    try:
+        ids = await asyncio.to_thread(discord_send, channel_id, digest)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Calendar watchdog: Discord post failed: %s", e)
+        return False
+    logger.info("Calendar watchdog: posted Discord digest (ids=%s)", ids)
+    return bool(ids)
