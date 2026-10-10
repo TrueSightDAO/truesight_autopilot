@@ -97,6 +97,35 @@ def build_digest(events: list[dict], now: datetime | None = None) -> str:
     return "\n".join([header, ""] + rows)
 
 
+def build_schedule(events: list[dict]) -> str:
+    """Render a full listing of EVERY upcoming event (pure; '' when none).
+
+    Same shape as :func:`build_digest` but with no attention filter — this is the
+    "show the whole guild calendar" view used for the Discord mirror.
+    """
+
+    def _key(ev: dict) -> datetime:
+        return _parse_dt(ev.get("start")) or datetime.max.replace(tzinfo=timezone.utc)
+
+    rows: list[str] = []
+    for ev in sorted(events, key=_key):
+        start = _parse_dt(ev.get("start"))
+        when = (
+            start.strftime("%a %d %b %H:%M UTC")
+            if start
+            else (ev.get("start") or "(no time)")
+        )
+        line = f"• **{when}** — {ev.get('summary') or '(event)'}"
+        loc = (ev.get("location") or "").strip()
+        if loc:
+            line += f"\n  ↳ {loc}"
+        rows.append(line)
+    if not rows:
+        return ""
+    header = f"🗓 **Guild calendar** — {len(rows)} upcoming event(s)"
+    return "\n".join([header, ""] + rows)
+
+
 async def calendar_watchdog_loop(interval_seconds: int | None = None):
     """Background loop; runs until cancelled."""
     from .tools.google_calendar import fetch_upcoming_events
@@ -121,9 +150,17 @@ async def calendar_watchdog_loop(interval_seconds: int | None = None):
             digest = build_digest(events)
             if digest:
                 await _post_digest(digest)
-                await _post_digest_discord(digest)
             else:
                 logger.info("Calendar watchdog: nothing needs attention")
+
+            # Discord view: the full schedule (every event) when configured, else
+            # the same attention-only digest Telegram receives.
+            if getattr(settings, "calendar_watch_discord_all_events", False):
+                discord_digest = build_schedule(events)
+            else:
+                discord_digest = digest
+            if discord_digest:
+                await _post_digest_discord(discord_digest)
             if getattr(settings, "calendar_watch_discord_native_events", False):
                 try:
                     created = await asyncio.to_thread(sync_native_events, events)
@@ -235,13 +272,14 @@ def sync_native_events(events: list[dict]) -> int:
         logger.warning("Discord adapter unavailable — cannot sync native events")
         return 0
     now = datetime.now(timezone.utc)
+    mirror_all = bool(getattr(settings, "calendar_watch_discord_all_events", False))
     state = _load_native_state()
     created = 0
     for ev in events:
         eid = str(ev.get("id") or "").strip()
         if not eid or eid in state:
             continue
-        if not _needs_attention(ev, now):
+        if not mirror_all and not _needs_attention(ev, now):
             continue
         payload = _native_event_payload(ev)
         if not payload:
