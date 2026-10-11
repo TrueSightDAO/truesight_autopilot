@@ -363,6 +363,8 @@ def classify_action(tool_name: str) -> ActionClass:
         "create_discord_channel",
         "update_discord_channel",
         "delete_discord_channel",
+        "post_discord_message",
+        "send_discord_attachment",
         "ssh_run",
         "register_identity",
         "gas_deploy_project",
