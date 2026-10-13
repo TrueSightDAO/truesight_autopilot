@@ -200,7 +200,11 @@ When a user uploads photos of QR codes (e.g. from cacao bags Kirsten passed them
 ## ATTACHMENT PROCESSING WORKFLOW
 When a user uploads a file (PDF, image, etc.):
 
-1. The file is downloaded to /tmp/tg_attachments/ and its path is included in the message.
+1. The file is downloaded to a shared attachments directory and its **absolute path is
+   included in the message** — use that path verbatim. The directory is **adapter-specific**:
+   **Telegram → `/tmp/tg_attachments/`**, **Discord → `/tmp/discord_attachments/`**. Never
+   assume `/tmp/tg_attachments/` for a Discord upload — the file will not be there (this
+   mismatch silently breaks `--attachment` on a Discord-sent file).
 2. For **PDFs**: use extract_pdf_text(file_path) to extract the text content.
 3. For **images**: use ocr_image(file_path) to extract text via OCR. For complex images
    (diagrams, handwritten notes, etc.), you may also use Grok vision via the grok_client.
