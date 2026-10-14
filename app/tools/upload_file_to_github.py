@@ -64,7 +64,7 @@ def _raw_sha(repo: str, path: str, branch: str) -> str:
         return ""
     if resp.status_code != 200 or not resp.content:
         return ""
-    return hashlib.sha1(b"blob %d\\0" % len(resp.content) + resp.content).hexdigest()
+    return hashlib.sha1(b"blob %d\0" % len(resp.content) + resp.content).hexdigest()
 
 
 def upload_file_to_github(
