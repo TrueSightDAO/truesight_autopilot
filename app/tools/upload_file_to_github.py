@@ -11,6 +11,7 @@ Two surfaces:
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os
 from typing import Any
@@ -32,6 +33,38 @@ def _github_headers() -> dict[str, str]:
     if settings.github_pat:
         headers["Authorization"] = f"Bearer {settings.github_pat}"
     return headers
+
+
+def _api_sha(repo: str, path: str, branch: str) -> str:
+    """Existing blob sha via the Contents API ('' when absent or unreadable)."""
+    url = f"https://api.github.com/repos/TrueSightDAO/{repo}/contents/{path}"
+    try:
+        head = httpx.get(
+            url, headers=_github_headers(), params={"ref": branch}, timeout=15.0
+        )
+        if head.status_code == 200 and isinstance(head.json(), dict):
+            return head.json().get("sha", "") or ""
+    except (httpx.RequestError, ValueError):
+        pass
+    return ""
+
+
+def _raw_sha(repo: str, path: str, branch: str) -> str:
+    """Existing blob sha computed locally from the raw file.
+
+    Sidesteps a rate-limited Contents-API read (403) while writes still
+    authenticate: GitHub's git blob sha is sha1("blob <len>\\0" + content),
+    so it can be computed here with no authenticated read at all. Returns ''
+    when the file is absent or unreadable.
+    """
+    url = f"https://raw.githubusercontent.com/TrueSightDAO/{repo}/{branch}/{path}"
+    try:
+        resp = httpx.get(url, timeout=15.0, follow_redirects=True)
+    except httpx.RequestError:
+        return ""
+    if resp.status_code != 200 or not resp.content:
+        return ""
+    return hashlib.sha1(b"blob %d\0" % len(resp.content) + resp.content).hexdigest()
 
 
 def upload_file_to_github(
@@ -69,20 +102,25 @@ def upload_file_to_github(
         "branch": branch,
     }
 
-    # Existing file? Fetch its sha so the PUT updates instead of failing.
-    try:
-        head = httpx.get(
-            url, headers=_github_headers(), params={"ref": branch}, timeout=15.0
-        )
-        if head.status_code == 200 and isinstance(head.json(), dict):
-            existing_sha = head.json().get("sha", "")
-            if existing_sha:
-                payload["sha"] = existing_sha
-    except httpx.RequestError:
-        pass  # create-path still works; an update will surface the API error below
+    # Existing file? Resolve its sha so the PUT updates instead of failing. The
+    # Contents-API read path can be rate-limited (403) while writes still
+    # authenticate, so fall back to computing the git blob sha from the raw file.
+    existing_sha = _api_sha(repo, path, branch) or _raw_sha(repo, path, branch)
+    if existing_sha:
+        payload["sha"] = existing_sha
 
     try:
         resp = httpx.put(url, headers=_github_headers(), json=payload, timeout=15.0)
+        # 409 (sha mismatch) / 422 ("sha wasn't supplied") arise when the file
+        # was created or changed between resolving the sha and the PUT, or when
+        # the initial resolution was rate-limited. Re-resolve and retry once.
+        if resp.status_code in (409, 422):
+            fresh = _raw_sha(repo, path, branch) or _api_sha(repo, path, branch)
+            if fresh:
+                payload["sha"] = fresh
+                resp = httpx.put(
+                    url, headers=_github_headers(), json=payload, timeout=15.0
+                )
         resp.raise_for_status()
         data = resp.json()
         _content_url = data.get("content", {}).get("html_url", "")
