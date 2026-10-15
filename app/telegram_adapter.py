@@ -1971,6 +1971,19 @@ def _auto_process_attachment(
         else:
             summary += "\n*(No text detected in image)*\n"
 
+        # Burned-in Timemark watermark (field-photo capture code + GPS). This is
+        # NOT EXIF -- it survives recompression, so read it from the pixels. The
+        # code is the app's per-capture id (strongest dedup key: immune to
+        # filename/date mislabeling). Best-effort: never break processing.
+        try:
+            from .tools.timemark_watermark import read_timemark_watermark
+
+            tm = read_timemark_watermark(ocr_path)
+            if tm:
+                summary += f"- \U0001f5c2\ufe0f {tm['summary']}\n"
+        except Exception:  # noqa: BLE001 -- watermark is a bonus, never fatal
+            pass
+
         _update_status(f"✅ OCR complete (confidence: {confidence}%)")
         return summary
 
