@@ -5,8 +5,8 @@ returning a JSON-serialisable dict with row data. Backed by the Sheets v4 API
 via ``google-api-python-client``.
 
 The default service account is whatever ``GOOGLE_APPLICATION_CREDENTIALS``
-points at (typically ``cypher_defense_gdrive_key.json``, which has Viewer on
-the Main Ledger). Pass ``service_account_name`` to switch — e.g. ``"tdg_scoring"``
+points at (now ``agroverse_ledger_manager_gdrive_key.json`` — the broadest writer/
+reader on the Main Ledger). Pass ``service_account_name`` to switch — e.g. ``"tdg_scoring"``
 for sheets only the scoring SA can see.
 """
 
@@ -103,7 +103,8 @@ TOOL_SPEC = ToolSpec(
     name="read_google_sheet",
     description=(
         "Read a range from a Google Sheet (read-only). Default service account "
-        "(Cypher Defense) has access to the Main Ledger (spreadsheet "
+        "(agroverse_ledger_manager) is the broadest reader/writer on the Main "
+        "Ledger (spreadsheet "
         "1GE7PUq-UT6x2rBN-Q2ksogbWpgyuh2SaxJyG_uEK6PU) and the Cypher Defense "
         "ledger. Pass service_account_name to switch to 'tdg_scoring', "
         "'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', or "
@@ -123,7 +124,7 @@ TOOL_SPEC = ToolSpec(
             },
             "service_account_name": {
                 "type": "string",
-                "description": "Optional SA to use: 'cypher_defense' (default), 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', 'agroverse_market_research'.",
+                "description": "Optional SA to use: 'agroverse_ledger_manager' (default), 'cypher_defense', 'tdg_scoring', 'upc_barcode', 'edgar_dapp_listener', 'agroverse_qr_code_manager', 'agroverse_market_research'.",
             },
         },
         "required": ["spreadsheet_id", "range_a1"],
