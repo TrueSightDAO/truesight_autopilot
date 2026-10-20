@@ -44,8 +44,23 @@ from .redaction import redact_secrets
 
 logger = logging.getLogger("autopilot.email_inbox_watch")
 
-# Scopes this watch to the admin+sophia@ inbox view.
-INBOX_QUERY = "to:admin+sophia@truesight.me is:unread"
+# Scopes this watch to the operational inboxes.
+#
+# community@agroverse.shop is included because real business inbound lands there and
+# was previously invisible: the Guilherme export-prequalification email (2026-10-20)
+# and the Brandz Connect retail-network follow-up (2026-10-07) both sat unread.
+#
+# -category:promotions is load-bearing, not cosmetic: community@ receives a steady
+# stream of TikTok Shop / retail promo mail, and without the exclusion those messages
+# exhaust the max_results window and push genuine correspondent mail out of the tick.
+#
+# Override with EMAIL_WATCH_INBOX_QUERY to add or narrow mailboxes without a code change.
+INBOX_QUERY = os.getenv(
+    "EMAIL_WATCH_INBOX_QUERY",
+    "("
+    "to:admin+sophia@truesight.me OR to:community@agroverse.shop"
+    ") is:unread -category:promotions",
+)
 DEFAULT_INTERVAL_SECONDS = 3600  # hourly (plan trigger)
 MAX_TOOL_ROUNDS = int(os.getenv("EMAIL_WATCH_MAX_TOOL_ROUNDS", "4"))
 

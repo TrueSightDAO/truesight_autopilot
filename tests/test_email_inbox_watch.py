@@ -88,6 +88,35 @@ def test_inbox_query_is_plus_alias_scoped():
     assert "is:unread" in INBOX_QUERY
 
 
+def test_inbox_query_covers_both_mailboxes_and_excludes_promotions():
+    """community@ must be watched, and promotions must not crowd out the window.
+
+    The Guilherme export-prequalification email and the Brandz Connect follow-up both
+    landed on community@agroverse.shop and were never seen. Promo exclusion matters
+    because that mailbox gets steady TikTok Shop / retail-blast volume that would
+    otherwise fill max_results before any real correspondent is reached.
+    """
+    assert "admin+sophia@truesight.me" in m.INBOX_QUERY
+    assert "community@agroverse.shop" in m.INBOX_QUERY
+    assert "is:unread" in m.INBOX_QUERY
+    assert "-category:promotions" in m.INBOX_QUERY
+    # must stay a single parenthesised OR group, not two loose clauses
+    assert "(to:" in m.INBOX_QUERY
+
+
+def test_inbox_query_is_env_overridable(monkeypatch):
+    """An operator can narrow or widen the watched mailboxes without a code change."""
+    import importlib
+
+    monkeypatch.setenv("EMAIL_WATCH_INBOX_QUERY", "to:x@y.com is:unread")
+    try:
+        reloaded = importlib.reload(m)
+        assert reloaded.INBOX_QUERY == "to:x@y.com is:unread"
+    finally:
+        monkeypatch.delenv("EMAIL_WATCH_INBOX_QUERY", raising=False)
+        importlib.reload(m)
+
+
 def test_allowed_tools_are_email_plus_calendar_surface():
     # EMAIL_SEND_POLICY.md: the gmail surface plus calendar invites, nothing else.
     assert ALLOWED_TOOLS == frozenset(
