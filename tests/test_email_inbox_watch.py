@@ -88,10 +88,21 @@ def test_inbox_query_is_plus_alias_scoped():
     assert "is:unread" in INBOX_QUERY
 
 
-def test_allowed_tools_are_only_gmail_surface():
+def test_allowed_tools_are_email_plus_calendar_surface():
+    # EMAIL_SEND_POLICY.md: the gmail surface plus calendar invites, nothing else.
     assert ALLOWED_TOOLS == frozenset(
-        {"gmail_search", "gmail_read_message", "gmail_send", "gmail_create_draft"}
+        {
+            "gmail_search",
+            "gmail_read_message",
+            "gmail_send",
+            "gmail_create_draft",
+            "calendar_list_events",
+            "calendar_create_event",
+        }
     )
+    # No shell, no PR, no file or money surface may ever leak in.
+    for forbidden in ("ssh_run", "merge_pr", "git_push_changes", "submit_contribution"):
+        assert forbidden not in ALLOWED_TOOLS
 
 
 def test_poll_once_counts_unread(monkeypatch, tmp_path):
@@ -211,6 +222,100 @@ def test_first_contact_send_downgrades_to_draft(monkeypatch, tmp_path):
     )
     assert called["name"] == "gmail_create_draft"  # went to the DRAFT handler
     assert mode == "draft_only"
+
+
+# --------------------------------------------------------------------------
+# tier 0 - machine senders are never emailed (EMAIL_SEND_POLICY.md S1)
+# --------------------------------------------------------------------------
+
+
+def test_tier0_machine_sender_never_sends(monkeypatch, tmp_path):
+    """A send to a machine mailbox must be a DRAFT even for a known sender.
+
+    10 of the first 16 queued replies were to exactly this class (PyPI x4, npm,
+    hushed verification, internal digital-signature verification mail).
+    """
+    w = _watch(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "SENDS_ENABLED", True)
+    monkeypatch.setattr(m.settings, "dry_run", False)
+    called = {}
+
+    def fake_run(name, args):
+        called["name"] = name
+        return json.dumps({"status": "ok", "draft_id": "d1"})
+
+    monkeypatch.setattr(w, "_run_handler", fake_run)
+
+    for addr in (
+        "noreply@pypi.org",
+        "no-reply@github.com",
+        "verify@hushed.com",
+        "mailer-daemon@example.com",
+        "notifications@npmjs.com",
+    ):
+        called.clear()
+        _result, _disp, mode = w._dispatch_tool(
+            "gmail_send",
+            {"to": addr, "subject": "re", "body": "thanks"},
+            {"thread": "t1"},
+            False,  # NOT first contact - tier0 must still downgrade
+        )
+        assert called.get("name") == "gmail_create_draft", addr
+        assert mode == "tier0_draft_only", addr
+
+
+def test_tier0_does_not_block_human_correspondents():
+    """The tier-0 pattern must not catch ordinary professional addresses."""
+    from app.email_inbox_watch import MACHINE_SENDER_PATTERN
+
+    for addr in (
+        "winnie.tham@amicalaw.com",
+        "brendan.lon@ellacheong.asia",
+        "salsabil@donburk.asia",
+        "garyjob@truesight.me",
+        "mendelgui5@gmail.com",
+    ):
+        assert not MACHINE_SENDER_PATTERN.search(addr), addr
+
+
+# --------------------------------------------------------------------------
+# calendar invites - on the surface, behind the same write gate
+# --------------------------------------------------------------------------
+
+
+def test_calendar_create_event_is_gated_like_a_send(monkeypatch, tmp_path):
+    assert "calendar_create_event" in ALLOWED_TOOLS
+    w = _watch(monkeypatch, tmp_path)
+    called = {}
+
+    def fake_run(name, args):
+        called["name"] = name
+        return json.dumps({"status": "ok", "event_id": "e1"})
+
+    monkeypatch.setattr(w, "_run_handler", fake_run)
+    args = {
+        "summary": "BIONPACT trade mark filing call",
+        "start": "2026-10-21T16:00:00+08:00",
+        "end": "2026-10-21T16:30:00+08:00",
+        "attendees": ["garyjob@truesight.me", "brendan.lon@ellacheong.asia"],
+    }
+
+    # gate OFF -> stubbed, handler never reached
+    monkeypatch.setattr(m, "SENDS_ENABLED", False)
+    monkeypatch.setattr(m.settings, "dry_run", False)
+    _r, _d, mode = w._dispatch_tool(
+        "calendar_create_event", dict(args), {"thread": "t1"}, False
+    )
+    assert "name" not in called
+    assert "gate-off" in (mode or "")
+
+    # gate ON -> handler reached
+    monkeypatch.setattr(m, "SENDS_ENABLED", True)
+    _r, disp, _mode = w._dispatch_tool(
+        "calendar_create_event", dict(args), {"thread": "t1"}, False
+    )
+    assert called.get("name") == "calendar_create_event"
+    assert disp == "calendar_create_event"
 
 
 # --------------------------------------------------------------------------
@@ -376,6 +481,73 @@ def test_thread_triaged_once(monkeypatch, tmp_path):
     assert "t0" in w._get_state()["handled_threads"]
     assert w.poll_once() == 1
     assert llm.calls == 1  # not re-triaged
+
+
+def test_thread_retriaged_when_new_message_arrives(monkeypatch, tmp_path):
+    """A new reply in an already-handled thread must be re-triaged.
+
+    Previously handled_threads was keyed on thread id alone, so later replies were
+    invisible: thread 1a1467c088cb883c was never triaged and a 2026-10-19 Caroline
+    Berube reply sat unread in a thread marked handled on 2026-10-17.
+    """
+    w = _watch(monkeypatch, tmp_path)
+    calls = {"n": 0}
+
+    def _search(**kw):
+        calls["n"] += 1
+        mid = "m1" if calls["n"] >= 3 else "m0"
+        return json.dumps(
+            {
+                "status": "ok",
+                "result_count": 1,
+                "results": [
+                    {
+                        "id": mid,
+                        "thread_id": "t0",
+                        "from": "a@b.com",
+                        "subject": "s",
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(w, "_search", lambda: _search)
+    monkeypatch.setattr(w, "_read", lambda: lambda message_id, account: _ok_read())
+
+    class _LLM:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, system, messages, tools=None, **kw):
+            self.calls += 1
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "routine",
+                            "tool_calls": None,
+                        }
+                    }
+                ]
+            }
+
+        def extract_text(self, c):
+            return "routine"
+
+    llm = _LLM()
+    monkeypatch.setattr(w, "_llm_client", lambda: llm)
+
+    # first sight of m0 -> triaged
+    w.poll_once()
+    assert llm.calls == 1
+    # same message id again -> NOT re-triaged (idempotency preserved)
+    w.poll_once()
+    assert llm.calls == 1
+    # a NEW message id in the same thread -> re-triaged
+    w.poll_once()
+    assert llm.calls == 2
+    assert w._get_state()["handled_threads"]["t0"]["triage_count"] == 2
 
 
 def test_state_write_is_atomic(monkeypatch, tmp_path):
