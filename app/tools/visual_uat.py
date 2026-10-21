@@ -226,6 +226,101 @@ def parse_findings(text: str, max_findings: int = 8) -> list[dict[str, Any]]:
     return findings
 
 
+_REQUIRED_MODES = ("desktop", "mobile")
+
+_ANALYTICS_HOSTS = (
+    "google-analytics.com",
+    "analytics.google.com",
+    "googletagmanager.com",
+    "doubleclick.net",
+    "googleadservices.com",
+    "googlesyndication.com",
+    "connect.facebook.net",
+    "hotjar.com",
+    "segment.io",
+    "mixpanel.com",
+    "clarity.ms",
+    "nr-data.net",
+)
+
+_PAGE_ASSET_EXTS = (
+    ".js",
+    ".mjs",
+    ".css",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".svg",
+    ".ico",
+    ".json",
+    ".woff",
+    ".woff2",
+    ".ttf",
+)
+
+
+def _host(u: str) -> str:
+    """Host portion of a URL without importing urllib (kept dependency-free)."""
+    parts = (u or "").split("://", 1)
+    if len(parts) != 2:
+        return ""
+    return parts[1].split("/", 1)[0].split("?", 1)[0].lower()
+
+
+def _origin(u: str) -> str:
+    """scheme://host of a URL, or '' when the URL is relative/garbage."""
+    parts = (u or "").split("://", 1)
+    if len(parts) != 2:
+        return ""
+    return (parts[0] + "://" + parts[1].split("/", 1)[0]).lower()
+
+
+def missing_required_modes(viewports: list[dict[str, Any]]) -> list[str]:
+    """Which of the required desktop/mobile modes this run did NOT render."""
+    labels = {str(vp.get("label", "")) for vp in viewports}
+    return [m for m in _REQUIRED_MODES if m not in labels]
+
+
+def classify_request_failures(
+    failed: list[dict[str, Any]], page_url: str
+) -> tuple[list[str], list[str], list[str]]:
+    """Split request failures into (page, third_party, analytics).
+
+    ONLY ``page`` may affect the verdict. Analytics beacons and third-party
+    origins are reported for visibility but must never fail a page the site
+    itself renders correctly -- GA4 aborts its ``collect`` call from headless
+    Chromium, which made the verdict flip between identical runs.
+    """
+    page_origin = _origin(page_url)
+    page: list[str] = []
+    third: list[str] = []
+    analytics: list[str] = []
+    for item in failed:
+        url = str(item.get("url", "") or "")
+        label = str(item.get("viewport", "") or "")
+        host = _host(url)
+        leaf = url.split("?")[0].rsplit("/", 1)[-1] or url[:60]
+        line = f"[{label}] {leaf}"
+        if host and any(pat in host for pat in _ANALYTICS_HOSTS):
+            analytics.append(f"{line}  ({host})")
+        elif _origin(url) and _origin(url) != page_origin:
+            third.append(f"{line}  ({host})")
+        elif not host:
+            page.append(f"{line}  (page-relative)")
+        else:
+            page.append(f"{line}  ({host})")
+    return page, third, analytics
+
+
+def is_page_asset(url: str) -> bool:
+    """True when a vanished same-origin request is a real page asset."""
+    path = (url or "").split("?")[0].split("#")[0].lower()
+    return path.endswith(_PAGE_ASSET_EXTS)
+
+
 def build_verdict(
     assertions: list[dict[str, Any]],
     console_errors: list[str],
@@ -395,7 +490,11 @@ def visual_uat(
                 page.on(
                     "requestfailed",
                     lambda r, _lbl=label: failed_requests.append(
-                        f"[{_lbl}] {r.url.split('/')[-1]}"
+                        {
+                            "viewport": _lbl,
+                            "url": r.url,
+                            "reason": str(getattr(r, "failure", "") or ""),
+                        }
                     ),
                 )
                 page.goto(url, wait_until="networkidle", timeout=60000)
@@ -480,16 +579,30 @@ def visual_uat(
                     f["model"] = model
                     f["model_source"] = how
 
-    status = build_verdict(all_assertions, console_errors, failed_requests)
+    # Mode coverage is asserted, not assumed: desktop AND mobile must render.
+    for _mode in missing_required_modes(vps):
+        console_errors.append(f"[config] required viewport mode not rendered: {_mode}")
+
+    page_failures, thirdparty_failures, analytics_failures = classify_request_failures(
+        failed_requests, url
+    )
+    status = build_verdict(all_assertions, console_errors, page_failures)
     return json.dumps(
         {
             "status": "ok",
             "url": url,
             "verdict": status,
-            "verdict_basis": "dom_facts + console + failed_requests only (model prose excluded)",
+            "verdict_basis": (
+                "dom_facts + console + same-origin page-request failures only "
+                "(model prose, analytics beacons and third-party origins excluded)"
+            ),
             "assertions": all_assertions,
             "console_errors": console_errors,
-            "failed_requests": failed_requests,
+            "failed_requests": page_failures,
+            "thirdparty_failed_requests": thirdparty_failures,
+            "analytics_beacons": analytics_failures,
+            "viewport_modes": [str(vp.get("label", "")) for vp in vps],
+            "modes_checked": len(vps),
             "dom_facts": dom_facts,
             "visual_findings": findings,
             "visual_findings_note": (
