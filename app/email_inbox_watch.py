@@ -40,6 +40,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import settings
+from .email_watch_policy import (
+    NUDGE_AFTER_DAYS,
+    due_for_nudge,
+    format_matter_card,
+    format_nudge,
+    notify_discord,
+    route_for,
+)
 from .redaction import redact_secrets
 
 logger = logging.getLogger("autopilot.email_inbox_watch")
@@ -76,9 +84,7 @@ ALLOWED_TOOLS = frozenset(
     }
 )
 # Tools that mutate state / leave the box - gated behind the write gate.
-_WRITE_TOOLS = frozenset(
-    {"gmail_send", "gmail_create_draft", "calendar_create_event"}
-)
+_WRITE_TOOLS = frozenset({"gmail_send", "gmail_create_draft", "calendar_create_event"})
 
 # Tier 0 (EMAIL_SEND_POLICY.md S1): machine mailboxes. A reply to these can only
 # bounce or be discarded, so they are downgraded to a draft and never sent.
@@ -297,7 +303,9 @@ class EmailInboxWatch:
         ``handled_threads`` is skipped, so each thread is triaged once.
         """
         max_results = 20
-        raw = self._search()(query=INBOX_QUERY, account="admin", max_results=max_results)
+        raw = self._search()(
+            query=INBOX_QUERY, account="admin", max_results=max_results
+        )
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
@@ -322,10 +330,18 @@ class EmailInboxWatch:
             if prior and prior.get("last_message_id") == r.get("id"):
                 continue
             try:
-                self._triage(r)
+                dispositions = self._triage(r)
             except Exception:
                 logger.exception("email-watch triage failed for thread %s", thread_id)
                 continue
+            # S4: an inbound that produced a held draft is a *matter*. Surface it
+            # in its channel and record it, so it cannot sit unanswered silently.
+            try:
+                self._post_matter_card(r, dispositions or [])
+            except Exception:
+                logger.exception(
+                    "email-watch matter card failed for thread %s", thread_id
+                )
             handled[thread_id] = {
                 "last_message_id": r.get("id"),
                 "subject": r.get("subject"),
@@ -335,6 +351,12 @@ class EmailInboxWatch:
             }
             triaged_this_tick += 1
             self._save()
+        # S4 nudge loop: anything still unanswered past the threshold surfaces.
+        try:
+            self._nudge_aging_matters()
+        except Exception:
+            logger.exception("email-watch nudge loop failed")
+
         logger.info(
             "[email-inbox-watch] %d unread (max_results=%d), %d newly triaged, "
             "%d thread(s) tracked",
@@ -378,6 +400,7 @@ class EmailInboxWatch:
         )
         messages = [{"role": "user", "content": user_turn}]
         history: list[dict] = []
+        dispositions: list[str] = []
         tools = self._tool_schemas()
         client = self._llm_client()
         system = SOP_PROMPT
@@ -406,9 +429,85 @@ class EmailInboxWatch:
                 result, _disp, _mode = self._dispatch_tool(
                     name, args, ctx, first_contact
                 )
+                if _disp:
+                    dispositions.append(_disp)
                 history.append(
                     {"role": "tool", "tool_call_id": call.get("id"), "content": result}
                 )
+        return dispositions
+
+    # ---- S4 matter cards + nudge ----
+
+    def _post_matter_card(self, summary_row: dict, dispositions: list[str]) -> None:
+        """Post a matter card for a thread whose reply was HELD (not sent).
+
+        Only dispositions meaning "a human must decide" create a matter; a live
+        send needs no card because it is already answered.
+        """
+        held = {
+            "held",
+            "draft_only",
+            "tier0_draft_only",
+            "hold_cc_gary",
+            "halted_cap",
+            "would_gmail_create_draft",
+            "would_hold_cc_gary",
+        }
+        if not any(d in held for d in dispositions):
+            return
+        thread = summary_row.get("thread_id") or summary_row.get("id")
+        subject = summary_row.get("subject") or "(no subject)"
+        sender = summary_row.get("from") or "?"
+        received = summary_row.get("date") or ""
+        channel = route_for(subject, sender)
+        card = format_matter_card(
+            subject=subject,
+            sender=sender,
+            received=received,
+            thread_id=thread or "?",
+            needs="decide whether the held draft goes out (Tier 1: legal/money)",
+            proposed="draft held in Gmail",
+        )
+        if notify_discord(card, channel):
+            logger.info("[email-inbox-watch] matter card posted for %s", thread)
+        state = self._get_state()
+        matters = state.setdefault("matters", {})
+        prior = matters.get(thread) or {}
+        matters[thread] = {
+            "subject": subject,
+            "from": sender,
+            "thread": thread,
+            "channel": channel,
+            "status": "awaiting-decision",
+            "at": prior.get("at") or datetime.now(timezone.utc).isoformat(),
+            "nudged_at": prior.get("nudged_at"),
+        }
+        self._save()
+
+    def _nudge_aging_matters(self) -> None:
+        """Nudge matters unanswered past NUDGE_AFTER_DAYS. Once each, then age visibly."""
+        state = self._get_state()
+        matters = state.get("matters") or {}
+        now = datetime.now(timezone.utc)
+        changed = False
+        for thread, card in list(matters.items()):
+            if not due_for_nudge(card, now):
+                continue
+            try:
+                opened = datetime.fromisoformat(card.get("at", ""))
+                if opened.tzinfo is None:
+                    opened = opened.replace(tzinfo=timezone.utc)
+                age = (now - opened).days
+            except ValueError:
+                age = NUDGE_AFTER_DAYS
+            if notify_discord(format_nudge(card, age), card.get("channel")):
+                card["nudged_at"] = now.isoformat()
+                changed = True
+                logger.info(
+                    "[email-inbox-watch] nudged aging matter %s (%dd)", thread, age
+                )
+        if changed:
+            self._save()
 
     def _is_first_contact(self, sender: str) -> bool:
         """Rule 4 - have we ever corresponded with this sender? (state-derived)."""

@@ -591,18 +591,18 @@ def test_state_write_is_atomic(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_email_watch_enabled_defaults_false():
+def test_email_watch_enabled_defaults_false(monkeypatch):
     """The loop must ship inert: EMAIL_WATCH_ENABLED default False.
 
-    Hermetic: ``_env_file=None`` so the assertion is against the *code* default,
-    not the operator's ``.env``. On a box where ``EMAIL_WATCH_ENABLED=true`` is
-    set in ``.env`` (env_file=".env" is loaded by ``Settings``), a bare
-    ``Settings()`` picks up the override and this test fails -- non-hermetic, as
-    the clean CI runner has no ``.env`` and passes.
+    Hermetic: ``_env_file=None`` only stops pydantic-settings reading the .env
+    FILE -- it still reads ``os.environ``. On the live box the service exports
+    the .env keys into the process environment, so this test failed there while
+    passing on a clean CI runner (no .env, nothing exported). The var is now
+    scrubbed explicitly so the assertion holds on any host.
     """
     from app.config import Settings
 
-    # A fresh Settings with the env file ignored must default to False.
+    monkeypatch.delenv("EMAIL_WATCH_ENABLED", raising=False)
     assert Settings(_env_file=None).email_watch_enabled is False
 
 
