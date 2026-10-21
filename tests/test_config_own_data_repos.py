@@ -11,7 +11,12 @@ from __future__ import annotations
 from app.config import Settings
 
 
-def test_defaults_match_sophias_existing_hardcoded_repos():
+def test_defaults_match_sophias_existing_hardcoded_repos(monkeypatch):
+    # ``_env_file=None`` does not neutralise os.environ; scrub the exported
+    # values so this asserts the CODE defaults on any host (same fix as
+    # tests/test_email_inbox_watch.py::test_email_watch_enabled_defaults_false).
+    monkeypatch.delenv("GITHUB_READ_PAT", raising=False)
+    monkeypatch.delenv("OWN_REPOS", raising=False)
     s = Settings(_env_file=None)
     assert s.own_repos == {
         "context": "agentic_ai_context",
