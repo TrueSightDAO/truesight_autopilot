@@ -43,10 +43,16 @@ from .config import settings
 from .email_watch_policy import (
     NUDGE_AFTER_DAYS,
     due_for_nudge,
+    escalation_channel,
     format_matter_card,
+    format_meeting_escalation,
     format_nudge,
+    is_bulk,
+    is_bulk_by_headers,
+    meeting_requested,
     notify_discord,
     route_for,
+    thread_reply_allowed,
 )
 from .redaction import redact_secrets
 
@@ -192,6 +198,7 @@ def _empty_state() -> dict:
     return {
         "handled_threads": {},
         "sent": {"hour": 0, "day": 0, "hour_window": "", "day_window": ""},
+        "thread_replies": {},
         "audit": [],
     }
 
@@ -235,6 +242,38 @@ def _save_state(state: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def _pause_reason() -> str | None:
+    """Return a non-empty reason when the email watch is PAUSED, else None.
+
+    Governor kill switch. Sends are live, so there must be a way to stop the
+    watch dead without a deploy. Two forms, either one pauses:
+
+    * a file at ``$EMAIL_WATCH_PAUSE_FILE`` (default ``<state dir>/EMAIL_WATCH_PAUSE``)
+      -- the file's first line is used as the reason;
+    * ``$EMAIL_WATCH_PAUSE`` set to a truthy value.
+
+    While paused ``poll_once`` returns before it even searches, so the tick is
+    fully inert: no Gmail reads, no triage turn, no drafts, no sends.
+    """
+    env = (os.getenv("EMAIL_WATCH_PAUSE") or "").strip()
+    if env and env.lower() not in {"0", "false", "no", "off"}:
+        return f"EMAIL_WATCH_PAUSE={env}"
+    path = Path(
+        os.getenv("EMAIL_WATCH_PAUSE_FILE") or (_STATE_DIR / "EMAIL_WATCH_PAUSE")
+    )
+    try:
+        if path.exists():
+            first = ""
+            try:
+                first = path.read_text().strip().splitlines()[0].strip()
+            except (OSError, IndexError):
+                pass
+            return f"pause file {path}" + (f": {first}" if first else "")
+    except OSError:  # pragma: no cover - unreadable dir
+        return None
+    return None
 
 
 class EmailInboxWatch:
@@ -302,6 +341,11 @@ class EmailInboxWatch:
         (Unit 2 dry-run contract): a message whose thread is already
         ``handled_threads`` is skipped, so each thread is triaged once.
         """
+        paused = _pause_reason()
+        if paused:
+            logger.warning("[email-inbox-watch] PAUSED (%s) -> tick is inert", paused)
+            return 0
+
         max_results = 20
         raw = self._search()(
             query=INBOX_QUERY, account="admin", max_results=max_results
@@ -385,12 +429,25 @@ class EmailInboxWatch:
         headers = msg.get("headers", {}) or {}
         sender = (headers.get("from") or "").lower()
         first_contact = self._is_first_contact(sender)
+        # Inbound classification. These were built and tested in
+        # email_watch_policy but never called here, so a correspondent asking
+        # for a meeting got no code-level hold -- only the model's judgement.
+        inbound_text = f"{headers.get('subject') or ''}\n{msg.get('body') or ''}"
+        meeting_trigger = meeting_requested(inbound_text)
+        bulk_reason = is_bulk(summary_row) or is_bulk_by_headers(headers)
         ctx = {
             "thread": msg.get("thread_id") or summary_row.get("thread_id"),
             "message_id": message_id,
             "sender": sender,
             "first_contact": first_contact,
+            "meeting_requested": bool(meeting_trigger),
+            "meeting_trigger": meeting_trigger,
+            "bulk": bulk_reason,
         }
+        if bulk_reason:
+            logger.info(
+                "[email-inbox-watch] bulk inbound (%s) -> no reply", bulk_reason
+            )
 
         user_turn = (
             f"Subject: {headers.get('subject')}\n"
@@ -434,6 +491,28 @@ class EmailInboxWatch:
                 history.append(
                     {"role": "tool", "tool_call_id": call.get("id"), "content": result}
                 )
+        # Governor escalation for a meeting request. Posted AFTER the turn so it
+        # can state truthfully whether a holding draft exists.
+        if meeting_trigger:
+            try:
+                notify_discord(
+                    format_meeting_escalation(
+                        sender=headers.get("from") or sender,
+                        subject=headers.get("subject") or "",
+                        thread=ctx.get("thread"),
+                        matched=meeting_trigger,
+                        snippet=msg.get("body") or "",
+                    ),
+                    escalation_channel(),
+                )
+                self._audit(
+                    "escalated_meeting",
+                    "notify_discord",
+                    ctx,
+                    {"trigger": meeting_trigger},
+                )
+            except Exception:  # a failed notice must not kill the tick
+                logger.exception("email-watch meeting escalation failed")
         return dispositions
 
     # ---- S4 matter cards + nudge ----
@@ -614,7 +693,17 @@ class EmailInboxWatch:
 
             # tier 0 - never email a machine mailbox (EMAIL_SEND_POLICY.md S1).
             # 10 of the first 16 queued replies were to exactly this class.
-            if name == "gmail_send" and MACHINE_SENDER_PATTERN.search(to):
+            # rule 7 - a meeting request is governor territory, never an
+            # autonomous send. Force DRAFT for the thread; the model cannot
+            # talk its way past this. Escalation is posted by _triage.
+            if name == "gmail_send" and ctx.get("meeting_requested"):
+                logger.warning(
+                    "[email-inbox-watch] meeting request (%s) -> force draft",
+                    ctx.get("meeting_trigger"),
+                )
+                name = "gmail_create_draft"
+                mode = "meeting_draft_only"
+            elif name == "gmail_send" and MACHINE_SENDER_PATTERN.search(to):
                 logger.info(
                     "[email-inbox-watch] tier0 machine sender -> draft only: %.60s",
                     to,
@@ -657,6 +746,24 @@ class EmailInboxWatch:
                     ),
                     f"would_{name}",
                     f"{mode}|{gate}",
+                )
+
+            # rule 8 - per-thread reply cap. Checked only when a send will
+            # actually execute: thread_reply_allowed is RESERVE-ON-CHECK, so
+            # calling it in a dry-run tick would silently burn slots.
+            if name == "gmail_send" and not thread_reply_allowed(
+                self._get_state(), ctx.get("thread")
+            ):
+                logger.warning(
+                    "[email-inbox-watch] per-thread cap reached -> held: %.60s", to
+                )
+                self._audit("halted_thread_cap", name, ctx, {"to": to})
+                return (
+                    json.dumps(
+                        {"status": "halted", "reason": "per-thread reply cap reached"}
+                    ),
+                    "halted_thread_cap",
+                    "held",
                 )
 
             result = self._run_handler(name, args)
