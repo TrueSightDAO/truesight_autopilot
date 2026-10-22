@@ -1961,6 +1961,7 @@ def _run_tool_sync(
     session_id: str | None = None,
     governor_name: str | None = None,
     author_role: str = DEFAULT_AUTHOR_ROLE,
+    session_key: str | None = None,
 ) -> str:
     # Phase 0.2: Policy enforcement gate.
     # Every tool invocation is checked against the requester's identity.
@@ -2050,6 +2051,10 @@ def _run_tool_sync(
             "history": history or [],
             "session_id": session_id,
             "governor_name": governor_name,
+            # Raw session key, platform marker intact (tg:/dc:). Callers pass it
+            # when they have it; tools route on THIS rather than on session_id,
+            # which can be an opaque hash with no platform marker.
+            "session_key": session_key or session_id,
         },
     )
     if _registry_result is not None:

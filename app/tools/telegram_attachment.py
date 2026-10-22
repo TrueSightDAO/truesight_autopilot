@@ -61,7 +61,10 @@ def _post_document(
         if caption:
             payload["caption"] = caption[:_CAPTION_LIMIT]
         resp = httpx.post(
-            f"{_API}/bot{token}/sendDocument", data=payload, files=files, timeout=_TIMEOUT
+            f"{_API}/bot{token}/sendDocument",
+            data=payload,
+            files=files,
+            timeout=_TIMEOUT,
         )
     return resp.json()
 
@@ -91,9 +94,33 @@ def send_telegram_attachment(
             ),
         }
 
+    # Self-routing: a Discord conversation has no tg: component, so without this
+    # guard the fallback below would post into TELEGRAM_HOME_GROUP_ID -- the wrong
+    # workspace entirely (2026-10-22 incident). Hand the file to the Discord
+    # sender instead. An explicit chat_id still wins.
+    from .delivery_target import describe_destination, platform_from_session
+
+    if not (chat_id or "").strip() and platform_from_session(session_id) == "discord":
+        from .discord_attachment import send_discord_attachment
+
+        logger.info(
+            "send_telegram_attachment: session is Discord -- routing to "
+            "send_discord_attachment (file=%s)",
+            path,
+        )
+        result = send_discord_attachment(
+            file_path=path, caption=caption, session_id=session_id
+        )
+        result.setdefault("routed_from", "send_telegram_attachment")
+        result.setdefault("destination", describe_destination(session_id))
+        return result
+
     token = settings.telegram_bot_api_key
     if not token:
-        return {"status": "error", "reason": "TELEGRAM_BOT_API_KEY not configured on this box"}
+        return {
+            "status": "error",
+            "reason": "TELEGRAM_BOT_API_KEY not configured on this box",
+        }
 
     target = (
         chat_id
@@ -137,7 +164,9 @@ def send_telegram_attachment(
             if data.get("ok"):
                 logger.info(
                     "sent attachment %s to chat %s (fallback: original thread %s not found)",
-                    path, target, thread,
+                    path,
+                    target,
+                    thread,
                 )
                 return {
                     "status": "ok",
@@ -198,7 +227,7 @@ TOOL_SPEC = ToolSpec(
             caption=args.get("caption"),
             chat_id=args.get("chat_id"),
             thread_id=args.get("thread_id"),
-            session_id=ctx.get("session_id"),
+            session_id=ctx.get("session_key") or ctx.get("session_id"),
         ),
         indent=2,
     ),
