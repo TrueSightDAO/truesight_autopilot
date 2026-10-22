@@ -261,3 +261,73 @@ class TestParseFindings:
             for i in range(20)
         )
         assert len(parse_findings(text, max_findings=3)) == 3
+
+
+# ── viewport-mode coverage + verdict scoping (regression) ─────────────────────
+
+
+def test_required_modes_both_present():
+    from app.tools.visual_uat import missing_required_modes
+
+    vps = [{"label": "desktop"}, {"label": "mobile"}]
+    assert missing_required_modes(vps) == []
+
+
+def test_required_modes_flags_missing_mobile():
+    from app.tools.visual_uat import missing_required_modes
+
+    assert missing_required_modes([{"label": "desktop"}]) == ["mobile"]
+
+
+def test_analytics_beacon_does_not_fail_verdict():
+    """GA4 collect aborts from headless Chromium; must not fail a clean page."""
+    from app.tools.visual_uat import build_verdict, classify_request_failures
+
+    failed = [
+        {
+            "viewport": "desktop",
+            "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-S6EP25EHF4",
+        }
+    ]
+    page, third, analytics = classify_request_failures(
+        failed, "https://agroverse.shop/"
+    )
+    assert page == []
+    assert len(analytics) == 1
+    assert third == []
+    assert build_verdict([{"pass": True}], [], page) == "pass"
+
+
+def test_same_origin_missing_asset_fails_verdict():
+    from app.tools.visual_uat import build_verdict, classify_request_failures
+
+    failed = [
+        {"viewport": "mobile", "url": "https://agroverse.shop/js/journey-stats.js"}
+    ]
+    page, _, analytics = classify_request_failures(failed, "https://agroverse.shop/")
+    assert len(page) == 1
+    assert analytics == []
+    assert build_verdict([{"pass": True}], [], page) == "fail"
+
+
+def test_thirdparty_non_analytics_is_reported_not_failed():
+    from app.tools.visual_uat import build_verdict, classify_request_failures
+
+    failed = [
+        {"viewport": "desktop", "url": "https://fonts.gstatic.com/s/x.woff2"},
+    ]
+    page, third, analytics = classify_request_failures(
+        failed, "https://agroverse.shop/"
+    )
+    assert page == []
+    assert len(third) == 1
+    assert analytics == []
+    assert build_verdict([{"pass": True}], [], page) == "pass"
+
+
+def test_page_asset_helper():
+    from app.tools.visual_uat import is_page_asset
+
+    assert is_page_asset("https://x.shop/js/a.js?v=2") is True
+    assert is_page_asset("https://x.shop/img/a.webp") is True
+    assert is_page_asset("https://x.shop/api/track") is False
