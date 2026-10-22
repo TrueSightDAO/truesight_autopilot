@@ -666,3 +666,143 @@ def test_enabling_loop_does_not_enable_sends(monkeypatch, tmp_path):
     assert disp == "would_gmail_send"
     assert mode == "live|gate-off"
     assert called["n"] == 0  # handler NEVER invoked
+
+
+# --------------------------------------------------------------------------
+# criteria 2/3/6 - meeting hold, per-thread cap, pause switch (wired gates)
+# --------------------------------------------------------------------------
+
+
+def _live(watch, monkeypatch):
+    """Make the write gate live so a real handler call is reachable."""
+    monkeypatch.setattr(m, "SENDS_ENABLED", True)
+    monkeypatch.setattr(m.settings, "dry_run", False)
+    return watch
+
+
+def test_meeting_request_forces_draft_not_send(monkeypatch, tmp_path):
+    """AC2: `meeting_requested` must hold the reply as a DRAFT.
+
+    This is the gap Gary found: the policy function existed and was tested,
+    but _dispatch_tool never consulted it, so a meeting ask went to the model.
+    """
+    w = _live(_watch(monkeypatch, tmp_path), monkeypatch)
+    called = {}
+
+    def fake_run(name, args):
+        called["name"] = name
+        return json.dumps({"status": "ok"})
+
+    monkeypatch.setattr(w, "_run_handler", fake_run)
+    _result, _disp, mode = w._dispatch_tool(
+        "gmail_send",
+        {"to": "c@x.com", "subject": "Re: chat", "body": "sure"},
+        {"thread": "t1", "meeting_requested": True, "meeting_trigger": "let's meet"},
+        False,
+    )
+    assert called["name"] == "gmail_create_draft"  # held, not sent
+    assert mode == "meeting_draft_only"
+
+
+def test_meeting_request_detected_from_inbound_body(monkeypatch, tmp_path):
+    """AC2: detection happens on the INBOUND body inside _triage."""
+    w = _watch(monkeypatch, tmp_path)
+    posted = {}
+
+    class FakeClient:
+        def chat(self, system, messages, tools=None):
+            return {"choices": [{"message": {"content": "noted"}}]}  # no tool calls
+
+    monkeypatch.setattr(w, "_llm_client", lambda: FakeClient())
+    monkeypatch.setattr(
+        w,
+        "_read",
+        lambda: (
+            lambda **kw: json.dumps(
+                {
+                    "status": "ok",
+                    "thread_id": "t9",
+                    "headers": {
+                        "from": "c@x.com",
+                        "subject": "Coffee?",
+                        "to": "admin@truesight.me",
+                    },
+                    "body": "Are you free for a call next week?",
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        w,
+        "_dispatch_tool",
+        lambda name, args, ctx, fc: ('{"status":"ok"}', None, None),
+    )
+    import app.email_inbox_watch as mod
+
+    monkeypatch.setattr(
+        mod,
+        "notify_discord",
+        lambda text, channel=None: posted.setdefault("text", text) or True,
+    )
+    w._triage({"id": "m1", "thread_id": "t9"})
+    assert "text" in posted, "meeting request must post an escalation notice"
+    assert "Meeting request" in posted["text"]
+
+
+def test_per_thread_cap_blocks_third_send(monkeypatch, tmp_path):
+    """AC3: per-thread daily cap must be enforced at real send time."""
+    w = _live(_watch(monkeypatch, tmp_path), monkeypatch)
+    monkeypatch.setenv("EMAIL_WATCH_PER_THREAD_DAILY_CAP", "2")
+    sent = []
+    monkeypatch.setattr(
+        w, "_run_handler", lambda n, a: sent.append(n) or json.dumps({"status": "ok"})
+    )
+    args = {"to": "known@x.com", "subject": "s", "body": "b"}
+    ctx = {"thread": "cap-thread"}
+    r1 = w._dispatch_tool("gmail_send", dict(args), ctx, False)
+    r2 = w._dispatch_tool("gmail_send", dict(args), ctx, False)
+    r3 = w._dispatch_tool("gmail_send", dict(args), ctx, False)
+    assert r1[1] == "gmail_send" and r2[1] == "gmail_send"
+    assert r3[1] == "halted_thread_cap"  # third is held
+    assert sent.count("gmail_send") == 2  # handler ran only twice
+
+
+def test_per_thread_cap_not_consumed_by_dry_run(monkeypatch, tmp_path):
+    """Reserve-on-check must NOT burn a slot when the write is gated off.
+
+    If the cap were checked before the write gate, every dry-run tick would
+    silently consume the day's quota and real replies would be held.
+    """
+    w = _watch(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "SENDS_ENABLED", False)
+    monkeypatch.setattr(m.settings, "dry_run", True)
+    monkeypatch.setenv("EMAIL_WATCH_PER_THREAD_DAILY_CAP", "2")
+    ctx = {"thread": "dry-thread"}
+    for _ in range(5):
+        w._dispatch_tool(
+            "gmail_send", {"to": "k@x.com", "subject": "s", "body": "b"}, ctx, False
+        )
+    assert w._get_state().get("thread_replies", {}).get("dry-thread") is None
+
+
+def test_pause_file_makes_tick_inert(monkeypatch, tmp_path):
+    """AC6: a pause file must stop the tick before it even searches."""
+    w = _watch(monkeypatch, tmp_path)
+    searched = []
+    monkeypatch.setattr(
+        w, "_search", lambda: lambda **kw: searched.append(1) or _ok_search(3)
+    )
+    assert w.poll_once() == 3 and searched  # baseline: it searches
+
+    (tmp_path / "EMAIL_WATCH_PAUSE").write_text("halted by governor\n")
+    monkeypatch.setenv("EMAIL_WATCH_PAUSE_FILE", str(tmp_path / "EMAIL_WATCH_PAUSE"))
+    searched.clear()
+    assert w.poll_once() == 0
+    assert searched == [], "paused tick must not touch Gmail at all"
+
+
+def test_pause_env_var_makes_tick_inert(monkeypatch, tmp_path):
+    """AC6: the env-var form of the kill switch works too."""
+    w = _watch(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMAIL_WATCH_PAUSE", "1")
+    assert w.poll_once() == 0
