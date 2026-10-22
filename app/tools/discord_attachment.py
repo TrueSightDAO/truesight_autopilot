@@ -148,6 +148,29 @@ def send_discord_attachment(
             ),
         }
 
+    # Self-routing: a Telegram conversation carries no dc: channel, so a governor
+    # asking "attach it here" from Telegram would otherwise get a hard
+    # "no target channel". Symmetric to the guard in send_telegram_attachment.
+    from .delivery_target import describe_destination, platform_from_session
+
+    if (
+        not (channel_id or "").strip()
+        and platform_from_session(session_id) == "telegram"
+    ):
+        from .telegram_attachment import send_telegram_attachment
+
+        logger.info(
+            "send_discord_attachment: session is Telegram -- routing to "
+            "send_telegram_attachment (file=%s)",
+            path,
+        )
+        result = send_telegram_attachment(
+            file_path=path, caption=caption, session_id=session_id
+        )
+        result.setdefault("routed_from", "send_discord_attachment")
+        result.setdefault("destination", describe_destination(session_id))
+        return result
+
     cid = _resolve_channel_id(channel_id, session_id)
     if not cid:
         return {
@@ -255,7 +278,7 @@ _ATTACH_SPEC = ToolSpec(
             file_path=args.get("file_path", ""),
             caption=args.get("caption"),
             channel_id=args.get("channel_id"),
-            session_id=ctx.get("session_id"),
+            session_id=ctx.get("session_key") or ctx.get("session_id"),
         ),
         indent=2,
     ),

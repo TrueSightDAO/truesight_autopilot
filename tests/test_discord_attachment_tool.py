@@ -112,7 +112,10 @@ def test_attach_empty_file_errors():
 def test_attach_requires_channel(monkeypatch):
     path = _tmp_file()
     try:
-        out = datt.send_discord_attachment(file_path=path, session_id="tg:1:2")
+        # A session with NO platform marker still hard-errors (unchanged contract).
+        # (A *tg:-marked* session now reroutes to Telegram instead -- see
+        # tests/test_delivery_target.py::test_discord_tool_reroutes_on_telegram_session.)
+        out = datt.send_discord_attachment(file_path=path, session_id="web:abc")
         assert out["status"] == "error" and "no target channel" in out["reason"]
     finally:
         os.remove(path)
