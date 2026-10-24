@@ -34,7 +34,7 @@ import hmac
 import json
 import logging
 import os
-import random
+import secrets
 import re
 import time
 
@@ -242,7 +242,9 @@ async def send_challenge(request: Request) -> JSONResponse:
         )
 
     # Generate a 6-digit code and store it with its issue time (TTL enforced on verify)
-    code = str(random.randint(100000, 999999))
+    # CSPRNG: this code mints a vault JWT, so it must not come from the
+    # Mersenne Twister (which is predictable from observed output).
+    code = str(100000 + secrets.randbelow(900000))
     _challenge_codes[email] = {"code": code, "issued_at": now}
 
     # Send the email via Gmail

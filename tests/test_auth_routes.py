@@ -318,3 +318,26 @@ def test_verify_no_challenge_rejected(sent):
             )
         )
     assert exc.value.status_code == 400
+
+
+# ── challenge codes must come from a CSPRNG, not the Mersenne Twister ────────
+def test_code_generated_from_csprng_not_random(monkeypatch, sent):
+    """A code that mints a vault JWT must be unpredictable.
+
+    ``random.randint`` is the Mersenne Twister and is recoverable from observed
+    output; the handler must draw from ``secrets`` instead.
+    """
+
+    monkeypatch.setattr(auth_routes.secrets, "randbelow", lambda n: 12345)
+    resp = _run(auth_routes.send_challenge(FakeRequest({"email": "gary@truesight.me"})))
+    assert resp.status_code == 200
+    stored = auth_routes._challenge_codes["gary@truesight.me"]["code"]
+    assert stored == "112345", stored
+    # and the module must not reach for the predictable generator
+    src = open(auth_routes.__file__, encoding="utf-8").read()
+    exec_lines = [
+        ln
+        for ln in src.splitlines()
+        if "random" in ln and not ln.strip().startswith("#")
+    ]
+    assert not exec_lines, exec_lines
