@@ -176,6 +176,13 @@ class Settings(BaseSettings):
         default=True, validation_alias="CALENDAR_WATCH_SKIP_SELF_MARKERS"
     )
 
+    # Where to post a "deploy complete" line on every redeploy. Empty (default)
+    # keeps deploy notifications Telegram-only. Set to a Discord channel id to
+    # mirror them into an ops channel the whole guild can see.
+    deploy_notify_discord_channel_id: str = Field(
+        default="", validation_alias="DEPLOY_NOTIFY_DISCORD_CHANNEL_ID"
+    )
+
     # The email-inbox watch (app/email_inbox_watch.py) triages unread
     # admin+sophia@ mail. Unit 4 of SOPHIA_EMAIL_INBOX_WATCH_PLAN.md wires the
     # loop into the lifespan, but it stays OFF by default until the governor

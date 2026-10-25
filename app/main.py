@@ -400,6 +400,16 @@ def _check_deploy_marker() -> None:
             thread_id=data.get("thread_id"),
         )
 
+        # Mirror the completion into the configured Discord ops channel.
+        # No-op unless DEPLOY_NOTIFY_DISCORD_CHANNEL_ID is set; kept independent
+        # of the Telegram path so a Discord failure never blocks boot.
+        try:
+            from .deploy_notify import notify_deploy_complete_discord
+
+            notify_deploy_complete_discord(commit, elapsed)
+        except Exception as e:
+            logger.warning("Discord deploy notification failed: %s", e)
+
         # DEPLOY_PUSH_SOP Phase 2: close the deploy lease + append the success
         # record now that the new process is up (the old process was killed
         # mid-restart, so this runs in the fresh boot).
