@@ -100,6 +100,14 @@ FLEET: dict[str, dict[str, str]] = {
         # Pinned: trusts the box-local sophia_infra key, NOT the vault default.
         "key": "~/.ssh/sophia_infra",
     },
+    "nelanco-claude": {
+        "ip": "100.57.50.48",
+        "user": "ubuntu",
+        "desc": "Interactive Claude Code box (Envoy's seat) — tmux claude sessions + supervisor loop; recover via sops/NELANCO_CLAUDE_RECOVERY_SOP.md",
+        # Pinned: the box trusts sophia_infra (the truesight-autopilot key is in
+        # its authorized_keys), not the vault-first shared Nelanco key.
+        "key": "~/.ssh/sophia_infra",
+    },
     "seni_sk": {
         "ip": "34.234.193.80",
         "user": "ubuntu",
