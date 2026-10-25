@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import tempfile
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("autopilot.tools.pdf_tools")
@@ -45,10 +46,70 @@ _RULE = "#DDDDDD"  # table header fill / separators
 _ZEBRA = "#FBF7EF"  # light cream zebra row
 _WHITE = "#FFFFFF"
 
+# ── Fonts ──────────────────────────────────────────────────────────────────
+# reportlab's built-in Helvetica is a Type-1 font limited to WinAnsi encoding:
+# it has NO glyphs for Latin Extended-A ("a-macron") or the Pali/Sanskrit
+# dot-under letters, so those characters render as the *wrong* glyph entirely
+# ("Ānāpāna" came out "InIpIna") -- silent corruption for any diacritic-bearing
+# doc (Pali terms, Portuguese "São"). We embed DejaVu Sans, which covers Latin
+# Extended + dot-unders + arrows + typographic punctuation, resolved from
+# app/assets/fonts/ first, then the system DejaVu dir. If no TTF is found we
+# degrade to built-in Helvetica (ASCII-safe only).
+_ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
+_FONT_DIRS = (
+    _ASSET_DIR / "fonts",
+    Path("/usr/share/fonts/truetype/dejavu"),
+)
+_LOGO_PATH = _ASSET_DIR / "truesight_dao_logo_long.png"
+
 _FONT = "Helvetica"
 _FONT_BOLD = "Helvetica-Bold"
 _FONT_ITALIC = "Helvetica-Oblique"
 _FONT_MONO = "Courier"
+
+
+def _register_unicode_fonts() -> None:
+    """Embed DejaVu Sans and rebind the _FONT* globals to it (best effort)."""
+    wanted = (
+        ("_FONT", "DejaVuSans", "DejaVuSans.ttf"),
+        ("_FONT_BOLD", "DejaVuSans-Bold", "DejaVuSans-Bold.ttf"),
+        ("_FONT_ITALIC", "DejaVuSans-Oblique", "DejaVuSans-Oblique.ttf"),
+        ("_FONT_MONO", "DejaVuSansMono", "DejaVuSansMono.ttf"),
+    )
+    try:
+        from reportlab.pdfbase import pdfmetrics  # type: ignore
+        from reportlab.pdfbase.pdfmetrics import registerFontFamily  # type: ignore
+        from reportlab.pdfbase.ttfonts import TTFont  # type: ignore
+    except ImportError:  # pragma: no cover - reportlab missing
+        return
+    resolved = []
+    for global_name, font_name, filename in wanted:
+        path = next((d / filename for d in _FONT_DIRS if (d / filename).exists()), None)
+        if path is None:
+            logger.warning("Unicode font %s not found; using Helvetica", filename)
+            return
+        resolved.append((global_name, font_name, path))
+    for _g, font_name, path in resolved:
+        try:
+            pdfmetrics.registerFont(TTFont(font_name, str(path)))
+        except Exception as e:  # noqa: BLE001  # pragma: no cover
+            logger.warning("could not register %s: %s", font_name, e)
+            return
+    try:
+        registerFontFamily(
+            "DejaVuSans",
+            normal="DejaVuSans",
+            bold="DejaVuSans-Bold",
+            italic="DejaVuSans-Oblique",
+            boldItalic="DejaVuSans-BoldOblique",
+        )
+    except Exception as e:  # noqa: BLE001  # pragma: no cover
+        logger.warning("could not register font family: %s", e)
+    globals().update({g: n for g, n, _p in resolved})
+
+
+_register_unicode_fonts()
+
 
 _PAGE_MARGIN = 60  # L/R/bottom margin (pt)
 _BAND_HEIGHT = 42  # saffron header band height (pt)
@@ -227,6 +288,44 @@ def _markdown_to_flowables(markdown: str, styles, content_width) -> list:
     return flowables
 
 
+_LOGO_PILL_W = 96
+
+
+def _draw_logo(canvas, page_h: float) -> bool:
+    """Draw the TrueSight DAO lockup in a white pill inside the saffron band."""
+    from reportlab.lib.colors import HexColor  # type: ignore
+
+    if not _LOGO_PATH.exists():
+        return False
+    try:
+        from reportlab.lib.utils import ImageReader  # type: ignore
+
+        img = ImageReader(str(_LOGO_PATH))
+        iw, ih = img.getSize()
+        pill_h = 28
+        pill_x = _PAGE_MARGIN - 5
+        pill_y = page_h - _BAND_HEIGHT + (_BAND_HEIGHT - pill_h) / 2
+        canvas.saveState()
+        canvas.setFillColor(HexColor(_WHITE))
+        canvas.roundRect(pill_x, pill_y, _LOGO_PILL_W, pill_h, 4, fill=1, stroke=0)
+        pad = 4
+        scale = min((_LOGO_PILL_W - 2 * pad) / iw, (pill_h - 2 * pad) / ih)
+        dw, dh = iw * scale, ih * scale
+        canvas.drawImage(
+            img,
+            pill_x + (_LOGO_PILL_W - dw) / 2,
+            pill_y + (pill_h - dh) / 2,
+            dw,
+            dh,
+            mask="auto",
+        )
+        canvas.restoreState()
+        return True
+    except Exception as e:  # noqa: BLE001  # pragma: no cover
+        logger.warning("logo draw failed: %s", e)
+        return False
+
+
 def _page_furniture(title: str):
     """Return an onPage callback that draws the saffron header band + footer."""
     from reportlab.lib.colors import HexColor  # type: ignore
@@ -236,10 +335,13 @@ def _page_furniture(title: str):
         # Saffron header band, full width, at the top.
         canvas.setFillColor(HexColor(_SAFFRON))
         canvas.rect(0, h - _BAND_HEIGHT, w, _BAND_HEIGHT, fill=1, stroke=0)
+        title_x = _PAGE_MARGIN
+        if _draw_logo(canvas, h):
+            title_x = _PAGE_MARGIN + _LOGO_PILL_W + 10
         canvas.setFillColor(HexColor(_WHITE))
         canvas.setFont(_FONT_BOLD, 14)
         band_title = (title or "TrueSight DAO")[:90]
-        canvas.drawString(_PAGE_MARGIN, h - _BAND_HEIGHT + 14, band_title)
+        canvas.drawString(title_x, h - _BAND_HEIGHT + 14, band_title)
         # Footer: muted org line + page number.
         canvas.setFillColor(HexColor(_MUTED))
         canvas.setFont(_FONT, 8)
