@@ -13,17 +13,22 @@ which keys the autopilot expects to find here at runtime.
 The autopilot tools resolve credentials by name in this order:
 
 1. If the caller passes `service_account_name="<name>"`, look for
-   `<name>_gdrive_key.json` then `<name>_key.json` in this directory.
+   `<name>_gdrive_key.json` then `<name>_key.json` in this directory. A name
+   that resolves to neither is a **hard miss** (error) — the env default is
+   **not** used as a fallback, so a typo'd name can never silently run as a
+   different principal.
 2. Otherwise fall back to `$GOOGLE_APPLICATION_CREDENTIALS`.
 
 | File | Service account | Used for |
 |------|-----------------|---------|
-| `cypher_defense_gdrive_key.json`            | `cypher-defense@get-data-io.iam.gserviceaccount.com` | **Default.** Main Ledger (`1GE7PUq-…`), Cypher Defense Ledger. |
+| `agroverse_ledger_manager_gdrive_key.json`  | `agroverse-ledger-manager@get-data-io.iam.gserviceaccount.com` | **Default.** Main Ledger (`1GE7PUq-…`) — broadest writer/reader; also reads SunMint + Cypher Defense Ledger. |
+| `cypher_defense_gdrive_key.json`            | `cypher-defense@get-data-io.iam.gserviceaccount.com` | Fallback / explicit-only. Cypher Defense Ledger (denied on SunMint). |
 | `tdg_scoring_gdrive_key.json`               | `tdg-scoring-peer-reviewer@get-data-io.iam.gserviceaccount.com` | TDG scoring sheets. |
 | `upc_barcode_gdrive_key.json`               | `upc-barcode@get-data-io.iam.gserviceaccount.com` | UPC barcode sheets. |
 | `edgar_dapp_listener_key.json`              | `edgar-dapp-listener@get-data-io.iam.gserviceaccount.com` | Edgar DApp Telegram logs sheet. |
 | `agroverse_qr_code_manager_gdrive_key.json` | `agroverse-qr-code-manager@get-data-io.iam.gserviceaccount.com` | Agroverse QR code batches; truesight.me / agroverse.shop ops. |
 | `agroverse_market_research_gdrive_key.json` | `agroverse-market-research@get-data-io.iam.gserviceaccount.com` | Market research sheets. |
+| `sunmint_ledger_manager_gdrive_key.json`    | `sunmint-ledger-manager@get-data-io.iam.gserviceaccount.com` | SunMint source sheet + index-rebuild workflows. |
 
 Canonical reference: `agentic_ai_context/GOOGLE_API_CREDENTIALS.md`.
 
@@ -46,6 +51,10 @@ cp ~/Applications/truesight_me/google-service-account.json \
 cp ~/Applications/krake_local/google-service-account.json \
    ~/Applications/truesight_autopilot/config/google/agroverse_market_research_gdrive_key.json
 
+# Agroverse ledger manager — the DEFAULT principal (broadest Main Ledger reach).
+cp ~/creds/agroverse-ledger-manager-google-credentials.json \
+   ~/Applications/truesight_autopilot/config/google/agroverse_ledger_manager_gdrive_key.json
+
 chmod 600 ~/Applications/truesight_autopilot/config/google/*.json
 ```
 
@@ -58,7 +67,7 @@ so once a file lives here locally, the next `./scripts/deploy.sh` ships it.
 The autopilot reads two env vars on the host:
 
 - `GOOGLE_APPLICATION_CREDENTIALS` — absolute path to the default SA JSON.
-  Recommended: `/opt/truesight_autopilot/config/google/cypher_defense_gdrive_key.json`.
+  Recommended: `/opt/truesight_autopilot/config/google/agroverse_ledger_manager_gdrive_key.json`.
 - `GOOGLE_CREDS_DIR`               — directory holding the SA files.
   Recommended: `/opt/truesight_autopilot/config/google`.
 

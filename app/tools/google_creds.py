@@ -12,12 +12,17 @@ naming convention ``<service_account_name>_gdrive_key.json`` (or
 Selection precedence:
 1. If the caller passes ``service_account_name`` (e.g. ``"tdg_scoring"``),
    look for ``{name}_gdrive_key.json`` then ``{name}_key.json`` in
-   ``GOOGLE_CREDS_DIR``.
-2. Otherwise fall back to the path in ``GOOGLE_APPLICATION_CREDENTIALS``.
-3. If neither resolves to an existing file, return ``None`` — tools surface
-   this as a ``{status: "error", reason: "credentials missing"}`` result rather
-   than raising at import time, so the service still boots when the files
-   haven't been provisioned yet.
+   ``GOOGLE_CREDS_DIR``. A name that resolves to neither is a **hard miss** —
+   the env default is deliberately NOT appended as a fallback. Appending it
+   meant an unresolved/typo'd name was silently served by the *default* SA,
+   i.e. the call ran under the wrong principal. On a hard miss the tools
+   surface ``{status: "error", reason: "credentials missing"}``.
+2. Otherwise (no name passed) fall back to the path in
+   ``GOOGLE_APPLICATION_CREDENTIALS``.
+3. If nothing resolves, return ``None`` — tools surface this as a
+   ``{status: "error", reason: "credentials missing"}`` result rather than
+   raising at import time, so the service still boots when the files haven't
+   been provisioned yet.
 
 This module deliberately exposes ``load_credentials()`` (returning a
 ``google.oauth2.service_account.Credentials`` or ``None``) instead of building
@@ -38,16 +43,21 @@ DEFAULT_CREDS_DIR = "/opt/truesight_autopilot/config/google"
 
 
 def _candidate_paths(service_account_name: str | None) -> list[Path]:
-    """Ordered list of paths to try when resolving a credential file."""
-    out: list[Path] = []
+    """Ordered list of paths to try when resolving a credential file.
+
+    When a name is explicitly requested the search is scoped to that name's
+    files only; the env default is *not* appended, so an unresolved name can
+    never be silently served by a different principal. Only an unnamed request
+    falls back to ``GOOGLE_APPLICATION_CREDENTIALS``.
+    """
     creds_dir = os.environ.get("GOOGLE_CREDS_DIR", DEFAULT_CREDS_DIR)
     if service_account_name:
-        out.append(Path(creds_dir) / f"{service_account_name}_gdrive_key.json")
-        out.append(Path(creds_dir) / f"{service_account_name}_key.json")
+        return [
+            Path(creds_dir) / f"{service_account_name}_gdrive_key.json",
+            Path(creds_dir) / f"{service_account_name}_key.json",
+        ]
     env_default = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
-    if env_default:
-        out.append(Path(env_default))
-    return out
+    return [Path(env_default)] if env_default else []
 
 
 def resolve_credentials_path(service_account_name: str | None = None) -> str | None:
