@@ -1847,6 +1847,12 @@ def _resolve_tdg_issued(supplied, contribution_type: str, amount: str) -> str:
     A governor-supplied figure is honoured ONLY when it is an explicit,
     non-zero number. Anything else -- absent, "", "0", or unparseable --
     falls through to the rubric auto-compute.
+
+    Packaging note: the rubric ships in the ``truesight_dao_client`` package.
+    If that package is older than the commit that added ``rubric.py``, the
+    import below raises ``ModuleNotFoundError``. That must be logged loudly --
+    an import failure and a rubric result of zero are indistinguishable to the
+    caller, which is exactly how contributions got silently zeroed before.
     """
     text = (
         "" if supplied is None else str(supplied).strip().lstrip("$").replace(",", "")
@@ -1860,11 +1866,33 @@ def _resolve_tdg_issued(supplied, contribution_type: str, amount: str) -> str:
             return f"{value:.2f}"
     try:
         from truesight_dao_client.rubric import format_tdg, tdg_for
-
+    except ImportError:
+        # The SSOT rubric is unreachable. Do NOT let this look like a zero
+        # result -- that is the failure mode that silently zeroed real
+        # contributions (Cristo Rei, Sitio Torres FSVP, 2026-09).
+        logger.error(
+            "TDG RUBRIC UNAVAILABLE: cannot import "
+            "truesight_dao_client.rubric (contribution_type=%r amount=%r). "
+            "Contributions will be submitted with TDG=0 until this is fixed. "
+            "Remediate with: pip install --force-reinstall --no-deps "
+            "'truesight-dao-client @ git+https://github.com/TrueSightDAO/"
+            "dao_client.git'",
+            contribution_type,
+            amount,
+        )
+        return text or "0.00"
+    try:
         return format_tdg(tdg_for(contribution_type, amount))
     except Exception:
-        # Unknown type / non-numeric amount: never crash the turn; fall back so
-        # downstream validation can flag it.
+        # Unknown type / non-numeric amount are legitimate fall-throughs; never
+        # crash the turn. But log it -- a silent fallback hides real breakage.
+        logger.warning(
+            "TDG auto-compute failed for type=%r amount=%r; falling back to %r",
+            contribution_type,
+            amount,
+            text or "0.00",
+            exc_info=True,
+        )
         return text or "0.00"
 
 
