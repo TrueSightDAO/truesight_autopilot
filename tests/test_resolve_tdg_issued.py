@@ -52,3 +52,35 @@ def test_unparseable_auto_computes():
 def test_unknown_type_does_not_crash():
     # Must never raise mid-tool-loop; returns a string.
     assert isinstance(_resolve_tdg_issued(None, "Bogus", "10"), str)
+
+
+def test_rubric_import_failure_is_loud(monkeypatch, caplog):
+    """A missing rubric module must be an ERROR, not a silent zero.
+
+    2026-10 live incident: the installed ``truesight_dao_client`` predated the
+    commit that added ``rubric.py``, so the import raised ModuleNotFoundError on
+    every call. The blanket ``except Exception`` turned that into "0.00" and
+    nothing was logged, so every auto-computed contribution was quietly zeroed
+    while this test file stayed red and unnoticed.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "truesight_dao_client.rubric":
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with caplog.at_level("ERROR"):
+        result = _resolve_tdg_issued(None, "Time (Minutes)", "60")
+
+    # Still returns a string so the tool loop is never bricked mid-turn.
+    assert isinstance(result, str)
+    # But it must SCREAM, and point at the remediation.
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert errors, "rubric import failure was swallowed silently"
+    assert "RUBRIC UNAVAILABLE" in caplog.text
+    assert "force-reinstall" in caplog.text
