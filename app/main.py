@@ -40,7 +40,11 @@ from .media_archive_pipeline import router as media_archive_pipeline_router
 from .signature_ledger_pipeline import router as signature_ledger_pipeline_router
 from .auto_advance import next_action
 from .config import settings
-from .context_compaction import backup_session_file, compact_history
+from .context_compaction import (
+    backup_session_file,
+    compact_history,
+    compact_open_turn,
+)
 from .turn_convergence import convergence_message, should_converge
 from .context import (
     get_context_file,
@@ -3281,6 +3285,10 @@ async def _run_tool_round_loop(
         # always part of the retained tail and is never touched. The internal
         # cheap fast-path (char-count guard) keeps this a no-op most rounds.
         _maybe_auto_compact(history, session_id)
+        # Intra-turn (Unit 2): _maybe_auto_compact above can only fold
+        # *completed prior* turns, so THIS still-open turn is what grew to
+        # 94K/72K tokens. Fold its early rounds too, keeping the last K raw.
+        _maybe_compact_open_turn(history, session_id)
 
         if _cancel_flags.get(session_id):
             logger.info(
@@ -5140,6 +5148,9 @@ async def _chat_blocking_turn(
             # are ever folded, never the current in-progress one; the internal
             # fast-path guard keeps this a cheap no-op most rounds.
             _maybe_auto_compact(history, session_id)
+            # Intra-turn (Unit 2): the loop above folds completed prior turns
+            # only; this bounds the *in-flight* turn's early rounds.
+            _maybe_compact_open_turn(history, session_id)
             completion = await asyncio.to_thread(
                 client.chat, system_prompt, history, tools=tools
             )
@@ -5768,6 +5779,83 @@ def _maybe_auto_compact(history: list[dict], session_id: str) -> bool:
         return True
     except Exception as e:  # noqa: BLE001 \u2014 never crash the turn (plan 2d)
         logger.exception("Auto-compaction failed; continuing uncompacted: %s", e)
+        return False
+
+
+def _maybe_compact_open_turn(history: list[dict], session_id: str) -> bool:
+    """Context compaction (intra-turn, Unit 2): fold the EARLY tool rounds of the
+    *currently open* turn once that single turn grows past a round/token budget.
+
+    Why this exists: ``_maybe_auto_compact`` can only ever fold *completed prior*
+    turns -- its turn-boundary detection deliberately treats the in-progress turn
+    as part of the retained tail, so it is never touched. A turn that runs 15-30
+    tool rounds therefore grew without bound: the observed 94K- and 72K-token
+    turns were each ONE still-open turn (fixtures in
+    ``tests/fixtures/intraturn/``). This folds that turn's early rounds into a
+    single ``[TURN IN PROGRESS - EARLIER ROUNDS SUMMARY]`` message, keeping the
+    last K rounds verbatim so the model still sees its immediate working set.
+
+    In-place slice assignment keeps the list object live in
+    ``_sessions[session_id]`` (reassigning would leave the in-memory cache
+    stale -- see _log_session).
+
+    Env knobs (tunable without a redeploy):
+      CONTEXT_INTRATURN_COMPACTION_AUTO     default "1"   -- master kill switch
+      CONTEXT_INTRATURN_TOKEN_THRESHOLD     default 40000
+      CONTEXT_INTRATURN_ROUND_THRESHOLD     default 8
+      CONTEXT_INTRATURN_KEEP_LAST_K_ROUNDS  default 4
+
+    Failure is never fatal: any exception logs and the turn continues with the
+    history unfolded rather than blocking (same contract as _maybe_auto_compact).
+    """
+    try:
+        import hashlib  # noqa: PLC0415 - local, mirrors _maybe_auto_compact
+
+        if os.getenv("CONTEXT_INTRATURN_COMPACTION_AUTO", "1") != "1":
+            return False
+        token_threshold = int(os.getenv("CONTEXT_INTRATURN_TOKEN_THRESHOLD", "40000"))
+        round_threshold = int(os.getenv("CONTEXT_INTRATURN_ROUND_THRESHOLD", "8"))
+        keep = int(os.getenv("CONTEXT_INTRATURN_KEEP_LAST_K_ROUNDS", "4"))
+        if token_threshold <= 0 or round_threshold <= 0 or keep <= 0:
+            return False
+
+        compacted = compact_open_turn(
+            history,
+            keep_last_k_rounds=keep,
+            token_threshold=token_threshold,
+            round_threshold=round_threshold,
+        )
+        if len(compacted) >= len(history):
+            return False  # no-op (under both thresholds / nothing foldable)
+
+        # Pre-compaction backup on disk, honoring invariant 1 (full history
+        # recoverable). Only when a session file actually exists.
+        sid_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
+        log_path = SESSION_LOG_DIR / f"{sid_hash}.json"
+        if log_path.exists():
+            try:
+                backup_session_file(log_path)
+            except Exception:  # noqa: BLE001 -- backup is best-effort
+                logger.warning("Intra-turn compaction backup failed for %s", sid_hash)
+
+        before_n = len(history)
+        history[:] = compacted
+        # Defensive: heal any tool orphan a fold could ever produce, so a bug in
+        # the folder degrades to a lost tool output instead of a bricked thread.
+        _sanitise_tool_messages(history)
+        logger.info(
+            "Intra-turn compacted session %s: %d -> %d messages, last %d rounds "
+            "kept verbatim (round_threshold=%d, token_threshold=%d)",
+            sid_hash,
+            before_n,
+            len(history),
+            keep,
+            round_threshold,
+            token_threshold,
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 -- never crash the turn
+        logger.exception("Intra-turn compaction failed; continuing unfolded: %s", e)
         return False
 
 
