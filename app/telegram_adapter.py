@@ -191,6 +191,29 @@ def is_allowed(user_id: int, allowed: set[int]) -> bool:
     return bool(allowed) and user_id in allowed
 
 
+def _record_dispatch_mark(session_id: str) -> None:
+    """Write a Redis *mark* for ``session_id`` -- "this thread has unprocessed work".
+
+    Plan SOPHIA_REDIS_MARK_AND_CLAIM_DISPATCH (PR2). Strictly **additive**: a mark
+    is not a claim, and it does not change when or whether a message is processed.
+    The existing ``_thread_dispatch_lock`` -> ``_run_turn_with_auto_advance`` path
+    remains the *only* thing that dispatches a turn; this just leaves a parallel
+    Redis record so a future idle worker (or the PR7 dashboard) can discover a
+    thread that arrived while nobody was listening.
+
+    Best-effort by design: Redis being down, unconfigured, or slow must NEVER
+    break message handling -- the adapter's job is to answer the governor, not to
+    depend on the dispatch substrate. Failures are logged and swallowed, matching
+    the ``context enrichment must never break dispatch`` convention above.
+    """
+    try:
+        from . import redis_claim
+
+        redis_claim.mark(session_id)
+    except Exception as e:  # noqa: BLE001 -- a mark is advisory; never break dispatch
+        logger.debug("dispatch mark skipped for %s: %s", session_id, e)
+
+
 def build_session_id(chat_id: int, thread_id: int | None) -> str:
     """Map a Telegram chat (+ forum topic) to a stable autopilot session id."""
     return f"tg:{chat_id}:{thread_id or 0}"
@@ -2308,6 +2331,10 @@ def handle_message(
         return
 
     session_id = build_session_id(chat_id, thread_id)
+
+    # PR2: parallel Redis record that this thread has unprocessed work. Additive
+    # only -- does not affect routing, locking, or whether a turn runs.
+    _record_dispatch_mark(session_id)
 
     # Attachment (photo / document): auto-process before LLM dispatch
     if attachment_file_id:
