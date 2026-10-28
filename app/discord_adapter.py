@@ -206,6 +206,30 @@ def is_allowed(user_id: str | int, allowed: set[str]) -> bool:
     return bool(allowed) and str(user_id) in allowed
 
 
+def _record_dispatch_mark(session_id: str) -> None:
+    """Write a Redis *mark* for ``session_id`` -- "this thread has unprocessed work".
+
+    Plan SOPHIA_SIDEKIQ_MULTIPROCESS_PLAN (PR0), mirroring the Telegram half that
+    shipped in ``ed56348`` (#555). Strictly **additive**: a mark is not a claim,
+    and it does not change when or whether a message is processed. The existing
+    per-session dispatch path remains the *only* thing that runs a turn; this just
+    leaves a parallel Redis record so a future idle worker (PR2) or the PR8
+    dashboard can discover a Discord channel that has work waiting. Without it,
+    cross-process claiming would only ever see Telegram sessions.
+
+    Best-effort by design: Redis being down, unconfigured, or slow must NEVER
+    break message handling -- the adapter's job is to answer the governor, not to
+    depend on the dispatch substrate. Failures are logged and swallowed, matching
+    the ``context enrichment must never break dispatch`` convention.
+    """
+    try:
+        from . import redis_claim
+
+        redis_claim.mark(session_id)
+    except Exception as e:  # noqa: BLE001 -- a mark is advisory; never break dispatch
+        logger.debug("dispatch mark skipped for %s: %s", session_id, e)
+
+
 def build_session_id(guild_id: str | int, channel_id: str | int) -> str:
     """Map a Discord (guild, channel) to a stable autopilot session id."""
     return f"dc:{guild_id}:{channel_id}"
@@ -1448,6 +1472,13 @@ def handle_message(
             "\u26a0\ufe0f I can't reach the brain: no governor public key resolved.",
         )
         return
+
+    # PR0: parallel Redis record that this channel has unprocessed work. Additive
+    # only -- does not affect routing, locking, or whether a turn runs. Placed
+    # *after* the gate above on purpose: a bot message, casual chatter, or a
+    # message we cannot dispatch is not "unprocessed work", and marking it would
+    # hand a future worker an invitation it could never honour.
+    _record_dispatch_mark(session_id)
 
     logger.info(
         "Discord %s message from %s (%s) in %s -- dispatching turn",
