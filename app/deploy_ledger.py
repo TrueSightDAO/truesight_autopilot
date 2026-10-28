@@ -32,6 +32,7 @@ from typing import Any
 import httpx
 
 from .config import settings
+from .github_throttle import github_throttle
 
 logger = logging.getLogger("autopilot.deploy_ledger")
 
@@ -91,9 +92,10 @@ def _api_url(path: str) -> str:
 def _read_dir(path: str) -> list[dict[str, Any]]:
     """List a directory in the ledger repo; [] on error/empty."""
     try:
-        resp = httpx.get(_api_url(path), headers=_headers(), timeout=15.0)
-        if resp.status_code == 200 and isinstance(resp.json(), list):
-            return resp.json()
+        with github_throttle():  # global concurrency bound
+            resp = httpx.get(_api_url(path), headers=_headers(), timeout=15.0)
+            if resp.status_code == 200 and isinstance(resp.json(), list):
+                return resp.json()
         return []
     except Exception as e:
         logger.warning("deploy_ledger: list %s failed: %s", path, e)
@@ -103,10 +105,11 @@ def _read_dir(path: str) -> list[dict[str, Any]]:
 def _read_file(path: str) -> dict[str, Any] | None:
     """Read a JSON file from the ledger repo; None on error."""
     try:
-        resp = httpx.get(_api_url(path), headers=_headers(), timeout=15.0)
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
+        with github_throttle():  # global concurrency bound
+            resp = httpx.get(_api_url(path), headers=_headers(), timeout=15.0)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
         if not isinstance(data, dict):
             return None
         raw = data.get("content", "")
@@ -127,16 +130,22 @@ def _put_file(path: str, content: str, message: str) -> dict[str, Any]:
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
     payload = {"message": message, "content": encoded, "branch": "main"}
     try:
-        head = httpx.get(
-            _api_url(path), headers=_headers(), params={"ref": "main"}, timeout=15.0
-        )
-        if head.status_code == 200 and isinstance(head.json(), dict):
-            sha = head.json().get("sha")
-            if sha:
-                payload["sha"] = sha
-        resp = httpx.put(_api_url(path), headers=_headers(), json=payload, timeout=15.0)
-        resp.raise_for_status()
-        data = resp.json()
+        # One permit across BOTH calls: the sha lookup and the write are a single
+        # logical GitHub operation, and releasing between them would let a sibling
+        # worker's write land in the gap and stale our sha.
+        with github_throttle():  # global concurrency bound
+            head = httpx.get(
+                _api_url(path), headers=_headers(), params={"ref": "main"}, timeout=15.0
+            )
+            if head.status_code == 200 and isinstance(head.json(), dict):
+                sha = head.json().get("sha")
+                if sha:
+                    payload["sha"] = sha
+            resp = httpx.put(
+                _api_url(path), headers=_headers(), json=payload, timeout=15.0
+            )
+            resp.raise_for_status()
+            data = resp.json()
         return {
             "status": "success",
             "content_url": data.get("content", {}).get("html_url", ""),
@@ -154,23 +163,24 @@ def _put_file(path: str, content: str, message: str) -> dict[str, Any]:
 def _delete_file(path: str, message: str) -> dict[str, Any]:
     """Delete a file via the Contents API."""
     try:
-        head = httpx.get(
-            _api_url(path), headers=_headers(), params={"ref": "main"}, timeout=15.0
-        )
-        if head.status_code != 200 or not isinstance(head.json(), dict):
-            return {"status": "error", "error": f"cannot fetch sha for {path}"}
-        sha = head.json().get("sha")
-        if not sha:
-            return {"status": "error", "error": f"no sha for {path}"}
-        resp = httpx.request(
-            "DELETE",
-            _api_url(path),
-            headers=_headers(),
-            json={"message": message, "sha": sha, "branch": "main"},
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        return {"status": "success"}
+        with github_throttle():  # global concurrency bound; one permit, both calls
+            head = httpx.get(
+                _api_url(path), headers=_headers(), params={"ref": "main"}, timeout=15.0
+            )
+            if head.status_code != 200 or not isinstance(head.json(), dict):
+                return {"status": "error", "error": f"cannot fetch sha for {path}"}
+            sha = head.json().get("sha")
+            if not sha:
+                return {"status": "error", "error": f"no sha for {path}"}
+            resp = httpx.request(
+                "DELETE",
+                _api_url(path),
+                headers=_headers(),
+                json={"message": message, "sha": sha, "branch": "main"},
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            return {"status": "success"}
     except httpx.HTTPStatusError as exc:
         return {
             "status": "error",
