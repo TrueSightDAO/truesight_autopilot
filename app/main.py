@@ -56,6 +56,7 @@ from .context import (
 )
 from . import turn_heartbeat as _turn_heartbeat
 from . import session_claim
+from . import session_state
 from .deploy_watcher import heartbeat as _dw_heartbeat
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
@@ -473,6 +474,16 @@ def _lock_scope(request: Request, session_id: str) -> str:
     if len(parts) == 3 and parts[0] in ("tg", "dc") and parts[1] and parts[2]:
         return sid
     return session_id
+
+
+def _queue_scope(request: Request, session_id: str) -> str:
+    """Scope for shared queue/cancel state.
+
+    Identical to ``_lock_scope`` by design: the lock protects a conversation, and
+    the queue and cancel flag belong to that same conversation. Keeping one
+    definition means the two can never drift apart.
+    """
+    return _lock_scope(request, session_id)
 
 
 def _thread_from_session(session_id: str) -> int | None:
@@ -1546,22 +1557,35 @@ async def _sse_single_response(text: str):
 
 
 async def _heartbeat_until_done(
-    task: asyncio.Task, phase: str, session_id: str | None = None, **meta
+    task: asyncio.Task,
+    phase: str,
+    session_id: str | None = None,
+    lock_scope: str | None = None,
+    **meta,
 ):
     """Async generator. Yields SSE `heartbeat` events every 15s while `task`
     is still pending. Caller awaits `task` after this generator exits to
     retrieve the result. Keeps the SSE connection alive across long-running
     LLM calls and tool calls (fixes ChunkedEncodingError on idle streams).
 
-    If `session_id` is provided, also polls `_cancel_flags[session_id]` and
-    cancels the inner task when the caller hits `DELETE /chat/active/{sid}`."""
+    If `session_id` is provided, also polls the session cancel flag for
+    `lock_scope` (falling back to `session_id` when no canonical scope is given)
+    and cancels the inner task when the caller hits `DELETE /chat/active/{sid}`.
+    The flag is read through `session_state`, so it is visible across processes
+    when `SESSION_STATE_SHARED` is on."""
+    if lock_scope is None:
+        # Callers on the canonical path always pass an explicit lock_scope. This
+        # fallback only covers tests/legacy callers; it deliberately does NOT
+        # guess a canonical key, because a wrong key would silently address a
+        # different session's state.
+        lock_scope = session_id
     started = time.monotonic()
     while not task.done():
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=15.0)
         except asyncio.TimeoutError:
             elapsed = round(time.monotonic() - started, 1)
-            if session_id and _cancel_flags.get(session_id):
+            if session_id and session_state.is_cancelled(lock_scope):
                 task.cancel()
                 yield _sse_event(
                     "cancelled", {"phase": phase, "elapsed_s": elapsed, **meta}
@@ -3408,7 +3432,11 @@ async def _run_tool_round_loop(
     state: dict,
     queue_msg_id: str | None = None,
     author_role: str = DEFAULT_AUTHOR_ROLE,
+    lock_scope: str | None = None,
 ):
+    # Prefer the canonical conversation scope; fall back to session_id so every
+    # pre-existing (non-adapter) caller keeps its exact previous behaviour.
+    lock_scope = lock_scope or session_id
     """One conversational turn: runs the LLM ↔ tool-call loop up to
     MAX_TOOL_ROUNDS, yielding SSE event strings as it goes.
 
@@ -3449,7 +3477,7 @@ async def _run_tool_round_loop(
         "current_tool": None,
         "current_arg": None,
         "done": [],
-        "queued_behind": len(_message_queues.get(session_id, [])),
+        "queued_behind": session_state.queue_len(lock_scope),
     }
 
     log_prefix = "QUEUE " if queue_msg_id else ""
@@ -3484,7 +3512,7 @@ async def _run_tool_round_loop(
         # 94K/72K tokens. Fold its early rounds too, keeping the last K raw.
         _maybe_compact_open_turn(history, session_id)
 
-        if _cancel_flags.get(session_id):
+        if session_state.is_cancelled(lock_scope):
             logger.info(
                 "[%d] %sCancelled by user before round %d",
                 req_id,
@@ -3504,9 +3532,13 @@ async def _run_tool_round_loop(
         # additional queued messages should accumulate behind it (handled by
         # the caller's outer queue drain).
         if not queue_msg_id:
-            pending = _message_queues.get(session_id, [])
-            while pending:
-                next_msg = pending.pop(0)
+            while True:
+                # Atomic pop: with SESSION_STATE_SHARED the queue is shared, so a
+                # plain read-mutate-write would hand the same message to two
+                # drains.
+                next_msg = session_state.queue_pop(lock_scope)
+                if next_msg is None:
+                    break
                 logger.info("[%d] Mid-round interjection: %s", req_id, next_msg["id"])
                 yield _sse_event(
                     "queue", {"msg_id": next_msg["id"], "status": "interjected"}
@@ -3796,6 +3828,7 @@ async def _stream_chat(
     do_not_publish: bool = False,
     role=None,
     author_role: str = DEFAULT_AUTHOR_ROLE,
+    lock_scope: str | None = None,
 ):
     system_prompt = get_system_prompt_for_role(role)
     client = LLMClient()
@@ -3831,6 +3864,7 @@ async def _stream_chat(
             req_id=req_id,
             state=state,
             author_role=author_role,
+            lock_scope=lock_scope,
         ):
             yield ev
         if state.get("cancelled"):
@@ -3903,9 +3937,10 @@ async def _stream_chat(
     )
 
     # ── Queue processing: after done, check for queued messages ──
-    queue = _message_queues.get(session_id, [])
-    while queue:
-        next_msg = queue.pop(0)
+    while True:
+        next_msg = session_state.queue_pop(lock_scope)
+        if next_msg is None:
+            break
         logger.info("[%d] Processing queued message: %s", req_id, next_msg["id"])
         yield _sse_event("queue", {"msg_id": next_msg["id"], "status": "processing"})
 
@@ -3930,6 +3965,7 @@ async def _stream_chat(
                 state=q_state,
                 queue_msg_id=next_msg["id"],
                 author_role=author_role,
+                lock_scope=lock_scope,
             ):
                 yield ev
             if q_state.get("cancelled"):
@@ -4508,10 +4544,7 @@ async def queue_message(request: Request) -> JSONResponse:
         "timestamp": timestamp,
     }
 
-    if session_id not in _message_queues:
-        _message_queues[session_id] = []
-    _message_queues[session_id].append(queued_msg)
-    position = len(_message_queues[session_id])
+    position = session_state.queue_push(_queue_scope(request, session_id), queued_msg)
 
     return JSONResponse({"queued": True, "position": position, "msg_id": msg_id})
 
@@ -4585,7 +4618,7 @@ async def get_queue(request: Request) -> JSONResponse:
     if not public_key:
         raise HTTPException(status_code=400, detail="X-Public-Key header required")
     session_id = _session_key(public_key, request)
-    queue = _message_queues.get(session_id, [])
+    queue = session_state.queue_snapshot(_queue_scope(request, session_id))
     return JSONResponse({"queue": queue})
 
 
@@ -4596,7 +4629,8 @@ async def delete_queued_message(msg_id: str, request: Request) -> JSONResponse:
     if not public_key:
         raise HTTPException(status_code=400, detail="X-Public-Key header required")
     session_id = _session_key(public_key, request)
-    queue = _message_queues.get(session_id, [])
+    scope = _queue_scope(request, session_id)
+    queue = session_state.queue_snapshot(scope)
     for i, msg in enumerate(queue):
         if msg["id"] == msg_id:
             queue.pop(i)
@@ -4615,7 +4649,8 @@ async def update_queued_message(msg_id: str, request: Request) -> JSONResponse:
     if not new_content:
         raise HTTPException(status_code=400, detail="content is required")
     session_id = _session_key(public_key, request)
-    queue = _message_queues.get(session_id, [])
+    scope = _queue_scope(request, session_id)
+    queue = session_state.queue_snapshot(scope)
     for msg in queue:
         if msg["id"] == msg_id:
             msg["content"] = new_content
@@ -4650,7 +4685,7 @@ async def cancel_active_chat(session_short: str, request: Request) -> JSONRespon
             {"status": "no_active_stream", "session_id_short": session_short},
             status_code=404,
         )
-    _cancel_flags[session_id] = True
+    session_state.set_cancel(_queue_scope(request, session_id))
     logger.info("Cancel requested for session %s", session_id[:16])
     return JSONResponse(
         {"status": "cancel_requested", "session_id_short": session_short}
@@ -4808,7 +4843,7 @@ async def chat(request: Request):
             # panel (separate process) and the deploy gate can see this live turn.
             _register_chat_turn_track(session_id, gov_name)
             # Clear any stale cancel flag from a prior turn so this fresh request runs
-            _cancel_flags.pop(session_id, None)
+            session_state.clear_cancel(_queue_scope(request, session_id))
 
             try:
                 async for event in _stream_chat(
@@ -4819,6 +4854,7 @@ async def chat(request: Request):
                     do_not_publish=do_not_publish,
                     role=role,
                     author_role=author_role,
+                    lock_scope=_queue_scope(request, session_id),
                 ):
                     yield event
             except Exception as exc:
@@ -4828,9 +4864,9 @@ async def chat(request: Request):
                     f"internal error — the thread self-heals, please resend: {exc}",
                 )
             finally:
+                session_state.clear_cancel(_queue_scope(request, session_id))
                 _active_streams.pop(session_id, None)
                 _unregister_chat_turn_track(session_id)
-                _cancel_flags.pop(session_id, None)
 
     return StreamingResponse(
         _stream_with_cleanup(),
