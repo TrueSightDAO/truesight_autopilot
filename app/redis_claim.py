@@ -53,6 +53,19 @@ else
 end
 """
 
+# Check-owner-then-extend. Renewal exists because the claim TTL must outlive the
+# work it protects (a long turn) without being so long that a dead worker blocks
+# a thread for hours. Same atomicity rule as the release above: only the owner
+# may extend, so a worker whose TTL already lapsed cannot resurrect its claim
+# over a peer that has since won the thread.
+_RENEW_LUA = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("EXPIRE", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+
 
 def _redis_url() -> str:
     return os.environ.get("SOPHIA_REDIS_URL", "redis://127.0.0.1:6379/0")
@@ -158,6 +171,31 @@ def release(thread_id: str | int, worker_id: str, client: Any = None) -> bool:
 
     cli = client or get_client()
     result = cli.eval(_RELEASE_LUA, 1, lock_key(thread_id), worker_id)
+    return bool(result)
+
+
+def renew(
+    thread_id: str | int,
+    worker_id: str,
+    ttl: int = DEFAULT_CLAIM_TTL_SECS,
+    client: Any = None,
+) -> bool:
+    """Extend *thread_id*'s claim to *ttl* seconds, ONLY if we still own it.
+
+    A claim TTL has two opposing jobs: outlive the longest plausible turn, and
+    not let a dead worker block a thread for long. Renewal resolves that tension
+    -- the TTL stays short-ish while a live owner keeps pushing it out. Uses a
+    Lua ``EVAL`` for the same atomic check-owner-then-act as ``release``: if our
+    TTL already lapsed and a peer claimed the thread, this returns False and
+    leaves the peer's claim (and its TTL) untouched.
+    """
+    if not worker_id:
+        raise ValueError("worker_id is required to renew a thread claim")
+    if ttl <= 0:
+        raise ValueError(f"ttl must be > 0 (got {ttl!r})")
+
+    cli = client or get_client()
+    result = cli.eval(_RENEW_LUA, 1, lock_key(thread_id), worker_id, int(ttl))
     return bool(result)
 
 
