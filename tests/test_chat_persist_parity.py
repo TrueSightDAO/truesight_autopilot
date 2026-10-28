@@ -95,6 +95,7 @@ def _fake_loop_factory(reply: str):
         state,
         author_role="governor",
         queue_msg_id=None,
+        lock_scope=None,
     ):
         state["assistant_text"] = reply
         if False:  # pragma: no cover -- keeps this an async generator

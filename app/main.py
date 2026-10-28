@@ -476,6 +476,16 @@ def _lock_scope(request: Request, session_id: str) -> str:
     return session_id
 
 
+def _queue_scope(request: Request, session_id: str) -> str:
+    """Scope for shared queue/cancel state.
+
+    Identical to ``_lock_scope`` by design: the lock protects a conversation, and
+    the queue and cancel flag belong to that same conversation. Keeping one
+    definition means the two can never drift apart.
+    """
+    return _lock_scope(request, session_id)
+
+
 def _thread_from_session(session_id: str) -> int | None:
     """Extract the Telegram forum-topic id from a session key.
 
@@ -3422,7 +3432,11 @@ async def _run_tool_round_loop(
     state: dict,
     queue_msg_id: str | None = None,
     author_role: str = DEFAULT_AUTHOR_ROLE,
+    lock_scope: str | None = None,
 ):
+    # Prefer the canonical conversation scope; fall back to session_id so every
+    # pre-existing (non-adapter) caller keeps its exact previous behaviour.
+    lock_scope = lock_scope or session_id
     """One conversational turn: runs the LLM ↔ tool-call loop up to
     MAX_TOOL_ROUNDS, yielding SSE event strings as it goes.
 
@@ -3814,6 +3828,7 @@ async def _stream_chat(
     do_not_publish: bool = False,
     role=None,
     author_role: str = DEFAULT_AUTHOR_ROLE,
+    lock_scope: str | None = None,
 ):
     system_prompt = get_system_prompt_for_role(role)
     client = LLMClient()
@@ -3849,6 +3864,7 @@ async def _stream_chat(
             req_id=req_id,
             state=state,
             author_role=author_role,
+            lock_scope=lock_scope,
         ):
             yield ev
         if state.get("cancelled"):
@@ -3949,6 +3965,7 @@ async def _stream_chat(
                 state=q_state,
                 queue_msg_id=next_msg["id"],
                 author_role=author_role,
+                lock_scope=lock_scope,
             ):
                 yield ev
             if q_state.get("cancelled"):
@@ -4826,7 +4843,7 @@ async def chat(request: Request):
             # panel (separate process) and the deploy gate can see this live turn.
             _register_chat_turn_track(session_id, gov_name)
             # Clear any stale cancel flag from a prior turn so this fresh request runs
-            session_state.clear_cancel(scope)
+            session_state.clear_cancel(_queue_scope(request, session_id))
 
             try:
                 async for event in _stream_chat(
@@ -4837,6 +4854,7 @@ async def chat(request: Request):
                     do_not_publish=do_not_publish,
                     role=role,
                     author_role=author_role,
+                    lock_scope=_queue_scope(request, session_id),
                 ):
                     yield event
             except Exception as exc:
@@ -4846,7 +4864,7 @@ async def chat(request: Request):
                     f"internal error — the thread self-heals, please resend: {exc}",
                 )
             finally:
-                session_state.clear_cancel(scope)
+                session_state.clear_cancel(_queue_scope(request, session_id))
                 _active_streams.pop(session_id, None)
                 _unregister_chat_turn_track(session_id)
 
