@@ -469,12 +469,100 @@ def _acquire_run_lock(force: bool = False):
     return fh
 
 
+# --- API call accounting (a run now reports what it actually spent) ----------
+_API_CALLS = {"get": 0, "put": 0, "tree": 0}
+
+# Whole-repo path -> blob sha, fetched ONCE per process via one recursive tree
+# read. Replaces ~9,000 per-file Contents-API GETs per run.
+_TREE_SHA_CACHE: dict | None = None
+
+TREE_API = (
+    "https://api.github.com/repos/TrueSightDAO/verify_public_signatures/"
+    "git/trees/main?recursive=1"
+)
+
+
+def _invalidate_tree_cache() -> None:
+    global _TREE_SHA_CACHE
+    _TREE_SHA_CACHE = None
+
+
+def _tree_sha_map(token: str) -> dict:
+    """Return {repo_path: blob_sha} for the WHOLE repo in ONE API call.
+
+    Budget fix: the previous code issued one Contents-API GET per candidate
+    file per run -- 8,954 files x 2 runs/hour = ~18,000 calls against a
+    5,000/hr limit, which is why the shared GitHub account sat at 0/5000 and
+    every other DAO write failed intermittently. A single recursive tree read
+    answers "is this path already current?" for every path at once.
+    """
+    global _TREE_SHA_CACHE
+    if _TREE_SHA_CACHE is not None:
+        return _TREE_SHA_CACHE
+    req = urllib.request.Request(TREE_API, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    _API_CALLS["tree"] += 1
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 409):
+            # No main branch yet / empty repository -- nothing published.
+            _TREE_SHA_CACHE = {}
+            return _TREE_SHA_CACHE
+        raise RuntimeError(
+            f"tree read failed with HTTP {e.code} "
+            f"({getattr(e, 'reason', 'no reason')}) -- refusing to fall back to "
+            f"one-GET-per-file, which is what exhausted the rate limit."
+        ) from e
+    if data.get("truncated"):
+        print(
+            "[warn] tree listing truncated by GitHub; uncached paths fall back "
+            "to a single Contents-API GET each"
+        )
+    m = {}
+    for node in data.get("tree", []):
+        if node.get("type") == "blob":
+            m[node["path"]] = node.get("sha")
+    _TREE_SHA_CACHE = m
+    print(f"[info] tree read: {len(m)} blob shas in 1 API call")
+    return _TREE_SHA_CACHE
+
+
+def _content_stamp(entries) -> str:
+    """Deterministic, content-derived replacement for a wall-clock timestamp.
+
+    Index bodies used to carry `_now_iso()`. That made the blob sha of every
+    index.json differ on EVERY run, so the sha-aware "already synced?" check
+    could never match, and all 37 indexes were re-PUT twice an hour forever --
+    the endless re-sync loop (the sync could never see a record as synced).
+
+    The newest `submitted_at` is stable while content is stable and advances
+    only when an event is genuinely added, so the field keeps its meaning as an
+    index-freshness marker without destroying idempotency.
+    """
+    dates = [
+        e.get("submitted_at", "")
+        for e in (entries or [])
+        if isinstance(e, dict) and e.get("submitted_at")
+    ]
+    return max(dates) if dates else ""
+
+
 def _remote_blob_sha(path: str, token: str) -> str | None:
-    """GET the remote file's blob sha, or None if it does not exist yet."""
+    """Cached path -> blob sha. One tree call covers the entire run."""
+    return _tree_sha_map(token).get(path)
+
+
+def _remote_blob_sha_direct(path: str, token: str) -> str | None:
+    """GET a single file's blob sha (one call). Used only when the tree listing
+    may not have been authoritative (e.g. a 422 on a create, or a 409 race)."""
     try:
         req = urllib.request.Request(GH_API + path, method="GET")
         req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Accept", "application/vnd.github+json")
+        _API_CALLS["get"] += 1
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r).get("sha")
     except urllib.error.HTTPError as e:
@@ -529,13 +617,34 @@ def _upload(path: str, payload: dict) -> bool:
     for attempt in range(2):
         req = _put_request(path, body, remote_sha, token)
         try:
+            _API_CALLS["put"] += 1
             with urllib.request.urlopen(req, timeout=30) as r:
-                print(
-                    f"[push] {path} -> {json.load(r).get('commit', {}).get('sha', '?')}"
-                )
+                _resp = json.load(r)
+                # Keep the cached sha coherent with what we just wrote, so a
+                # later file in the same run never PUTs against a stale sha.
+                if _TREE_SHA_CACHE is not None:
+                    _new_sha = (_resp.get("content") or {}).get("sha")
+                    if _new_sha:
+                        _TREE_SHA_CACHE[path] = _new_sha
+                print(f"[push] {path} -> {_resp.get('commit', {}).get('sha', '?')}")
                 _PUSHED_THIS_RUN.append(path)
                 return True
         except urllib.error.HTTPError as e:
+            if e.code == 422 and remote_sha is None and attempt == 0:
+                # We believed the path was absent (tree listing) and PUT without
+                # a sha. GitHub rejected it, so the path DOES exist and the tree
+                # listing was stale or truncated. Resolve the real sha with one
+                # direct GET and retry once -- do NOT report a false failure for
+                # a file that is actually there.
+                print(
+                    f"[warn] {path} -> 422 on create; tree listing stale, "
+                    f"re-GET sha and retry once"
+                )
+                remote_sha = _remote_blob_sha_direct(path, token)
+                if remote_sha == local_sha:
+                    print(f"[skip] {path} -> already current (422 -> sha match)")
+                    return False
+                continue
             if e.code == 422:
                 # 422 Unprocessable Entity on a Contents-API PUT means the write
                 # was rejected. It is NOT evidence the remote already matches us:
@@ -555,7 +664,8 @@ def _upload(path: str, payload: dict) -> bool:
                 # concurrent pass or another writer). Re-GET the fresh sha and
                 # retry once; if the content now matches, it is already live.
                 print(f"[warn] {path} -> 409 stale sha; re-GET + retry once")
-                remote_sha = _remote_blob_sha(path, token)
+                _invalidate_tree_cache()
+                remote_sha = _remote_blob_sha_direct(path, token)
                 if remote_sha == local_sha:
                     print(f"[skip] {path} -> already current (409 -> sha match)")
                     return False
@@ -739,7 +849,9 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
         files[f"{folder}/index.json"] = {
             "status": "success",
             "schema_version": 1,
-            "generated_at": _now_iso(),
+            # Deterministic on purpose: a wall clock here re-PUT every index on
+            # every run and made "already synced" undetectable.
+            "generated_at": _content_stamp(list(entries.values())),
             "event_type": next(iter(entries.values()), {}).get("event_type", ""),
             "count": len(entries),
             # Ordered view: `events` is a dict (id -> metadata); JSON objects are
@@ -775,7 +887,7 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     files["ledger_index.json"] = {
         "status": "success",
         "schema_version": 1,
-        "generated_at": _now_iso(),
+        "generated_at": _content_stamp(list(ledger_rows.values())),
         "ordered_by": "submitted_at",
         "order": "desc",
         "count": len(ledger_rows),
@@ -788,7 +900,9 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     files["index.json"] = {
         "status": "success",
         "schema_version": 1,
-        "generated_at": _now_iso(),
+        "generated_at": _content_stamp(
+            [e for evs in folders.values() for e in evs.values()]
+        ),
         "total_count": sum(len(evs) for evs in folders.values()),
         "test_events_count": signatures.get("test_events_count", 0),
         "excluded_pii_count": signatures.get("excluded_pii_count", 0),
@@ -860,6 +974,8 @@ def _push_ledger(
     a single pass rather than waiting behind ~thousands of event files.
     """
     _PUSHED_THIS_RUN.clear()
+    for _k in _API_CALLS:
+        _API_CALLS[_k] = 0
     paths = sorted(files)
 
     # 1) Summary files FIRST, uncapped. The root "index.json" and every
@@ -917,7 +1033,8 @@ def _push_ledger(
         print(
             f"[info] backfill complete: pushed {pushed} event file(s) "
             f"(+{summary_pushed} summaries), examined {examined} "
-            f"(~{examined} GETs + {pushed} PUTs), cursor cleared"
+            f"({_API_CALLS['tree']} tree + {_API_CALLS['get']} direct GETs "
+            f"+ {_API_CALLS['put']} PUTs), cursor cleared"
         )
 
 
