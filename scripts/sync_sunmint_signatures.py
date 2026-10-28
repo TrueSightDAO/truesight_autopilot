@@ -1006,27 +1006,33 @@ def _push_ledger(
             start = len(events)  # cursor past the end -> nothing to do
     pushed = 0
     examined = 0
-    # Budget is spent on calls ATTEMPTED, not just successful pushes: every
-    # file we touch costs at least one Contents-API GET in _remote_blob_sha,
-    # and an unchanged file costs exactly that. The old cap counted only
-    # `pushed`, so a run where nothing changed (all skips) never tripped it
-    # and walked the entire backlog -- one GET per file, every 30 minutes.
+    # Budget is spent on calls that COST something, not on files examined.
+    # After the tree-API fix (PR #563) an "is this already current?" check is
+    # served from one cached recursive tree read, so examining a file is free:
+    # 11,571 examines cost 1 API call, not 11,571. The cap therefore counts
+    # real spend -- PUTs, plus any direct Contents GETs still needed for paths
+    # missing from a truncated tree -- and no longer throttles the free walk.
+    # Previously this capped `examined`, which throttled the (now nearly free)
+    # walk to 250 files/run, stretching a full pass to ~23 hours.
     for i in range(start, len(events)):
         path = events[i]
-        if examined >= max_uploads or pushed >= max_uploads:
+        if pushed >= max_uploads or _API_CALLS["get"] >= max_uploads:
             remain = len(events) - i
             _save_cursor(cursor_path, events[i - 1] if i > 0 else "")
             print(
-                f"[info] rate-limit guard: hit {max_uploads}/run call cap "
-                f"(examined={examined}, pushed={pushed}); "
+                f"[info] rate-limit guard: hit {max_uploads}/run spend cap "
+                f"(pushed={pushed}, direct_gets={_API_CALLS['get']}); "
                 f"{remain} event files remain for next cron pass(es)"
             )
             break
-        _upload(path, files[path])
+        wrote = _upload(path, files[path])
         examined += 1
         pushed = len(_PUSHED_THIS_RUN)
         _save_cursor(cursor_path, path)
-        time.sleep(0.3)
+        if wrote:
+            # Only a real write needs pacing: a skipped file costs no API call
+            # and must not consume wall-clock (0.3s x 11,571 = 58 minutes).
+            time.sleep(0.3)
     else:
         # finished the whole set
         _save_cursor(cursor_path, "")
