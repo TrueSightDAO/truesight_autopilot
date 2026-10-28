@@ -322,8 +322,25 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot-discord.service /etc/systemd/system/
     sudo systemctl daemon-reload
     sudo systemctl enable truesight-autopilot truesight-autopilot-telegram
-    echo \"Waiting 5s for active requests to drain before restart...\"
-    sleep 5
+    # Drain live chat turns before cycling the service. `sleep 5` was never a
+    # drain: that is why a deploy at 2026-10-28 14:19:32 severed an in-flight
+    # turn mid-tool-call. wait_for_idle.py polls active_tracks.json and refuses
+    # while a turn is live, so we defer instead of bricking the thread.
+    # NOTE: this block runs over ssh with a double-quoted argument, so every
+    # remote-side variable must stay escaped (\$) or it expands locally to
+    # empty. Do not unescape these.
+    echo \"Waiting for active chat turns to drain (up to \${DEPLOY_DRAIN_WAIT_SEC:-180}s)...\"
+    drain_rc=0
+    python3 $REMOTE_DIR/scripts/wait_for_idle.py --repo $REMOTE_DIR --drain \${DEPLOY_DRAIN_WAIT_SEC:-180} || drain_rc=\$?
+    if [ \"\$drain_rc\" != \"0\" ]; then
+        if [ \"\${DEPLOY_FORCE:-0}\" = \"1\" ]; then
+            echo \"DEPLOY_FORCE=1 set -- proceeding and severing live turns.\" >&2
+        else
+            echo \"DEPLOY ABORTED: chat turns still active (rc=\$drain_rc). Nothing restarted.\" >&2
+            echo \"Re-run when idle, or set DEPLOY_FORCE=1 to sever turns deliberately.\" >&2
+            exit 1
+        fi
+    fi
     sudo systemctl restart truesight-autopilot
     # Vault worker (port 8002) — restart so credential-vault fixes actually take
     # effect; it was silently running stale code because deploys skipped it.
