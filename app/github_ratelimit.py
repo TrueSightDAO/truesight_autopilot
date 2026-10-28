@@ -11,6 +11,11 @@ mode; this module supplies the missing half -- read the budget *before* firing,
 warn when it is low, and wait it out when it is critical, rather than firing
 blind into a 403 and letting PyGithub back off for minutes.
 
+GitHub meters these budgets per *user*, not per token: two PATs belonging to
+the same account share one 5,000/h pool (verified 2026-10-28 -- all three of
+Sophia's PATs reported user ID 1079482). So holding a "dedicated" token does
+not buy a second budget; only a different owning account would.
+
 ``GET /rate_limit`` is free (it does not consume the core budget), which makes
 polling it the cheapest way to learn state for callers that cannot see response
 headers -- PyGithub does not surface them.
@@ -35,6 +40,29 @@ WARN_BELOW = int(os.getenv("GITHUB_RATELIMIT_WARN_BELOW", "200"))
 SLEEP_BELOW = int(os.getenv("GITHUB_RATELIMIT_SLEEP_BELOW", "50"))
 MAX_SLEEP = float(os.getenv("GITHUB_RATELIMIT_MAX_SLEEP", "60"))
 STATE_TTL = float(os.getenv("GITHUB_RATELIMIT_STATE_TTL", "30"))
+
+#: Trip at *true* exhaustion only. Kept at 0 rather than ``SLEEP_BELOW``
+#: deliberately: while any budget remains the call can still succeed, so sleeping
+#: is wasteful but harmless. It is only once the budget is gone that firing is
+#: guaranteed to fail.
+BLOCK_BELOW = int(os.getenv("GITHUB_RATELIMIT_BLOCK_BELOW", "0"))
+
+
+class RateLimitExhausted(RuntimeError):
+    """Core budget is gone and the reset is too far out for a capped wait.
+
+    Raised instead of sleeping-and-then-403, so a caller fails fast and honestly
+    rather than spending a minute to earn a guaranteed error.
+    """
+
+    def __init__(self, remaining: int, reset_in: float) -> None:
+        self.remaining = remaining
+        self.reset_in = reset_in
+        super().__init__(
+            "GitHub core rate limit exhausted "
+            f"({remaining} remaining, resets in {reset_in:.0f}s)"
+        )
+
 
 _lock = threading.Lock()
 _state: dict[str, Any] = {"remaining": None, "reset": None, "checked_at": 0.0}
@@ -125,7 +153,24 @@ def wait_if_exhausted(pat: str, *, now_fn=None, sleep_fn=None) -> float:
     if remaining >= SLEEP_BELOW or reset is None:
         return 0.0
 
-    delay = min(max(reset - now_fn(), 0.0) + 1.0, MAX_SLEEP)
+    seconds_to_reset = max(reset - now_fn(), 0.0)
+
+    # Budget fully gone. A capped sleep cannot bridge a reset that is further out
+    # than MAX_SLEEP, so sleeping spends a minute only to fire into a 403 anyway
+    # -- observed in production as a sleep/403 loop from 09:49 to 09:51 on
+    # 2026-10-28 (0 remaining, resets in 1091s, MAX_SLEEP=60). Fail fast so the
+    # caller's own handler turns this into an honest error.
+    if remaining <= BLOCK_BELOW and seconds_to_reset > MAX_SLEEP:
+        logger.error(
+            "GitHub core budget exhausted (%s remaining, resets in %.0fs) -- "
+            "failing fast rather than sleeping %.0fs for a guaranteed 403",
+            remaining,
+            seconds_to_reset,
+            MAX_SLEEP,
+        )
+        raise RateLimitExhausted(remaining=remaining, reset_in=seconds_to_reset)
+
+    delay = min(seconds_to_reset + 1.0, MAX_SLEEP)
     if delay <= 0:
         return 0.0
     logger.warning(
