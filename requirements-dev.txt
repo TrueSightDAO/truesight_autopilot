@@ -3,3 +3,4 @@
 # locally with `pip install -r requirements-dev.txt` to run `pytest`.
 pytest>=8,<9
 ruff==0.15.16  # pinned: codebase clean under 0.15.16; newer ruff adds rules (535 errors)
+redis>=5.0.0  # PR1 of the mark-and-claim plan: tests/test_redis_claim.py talks to the real local Redis (CI runners have none, so the module skips there)
