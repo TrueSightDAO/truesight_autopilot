@@ -11,6 +11,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -187,6 +188,55 @@ _session_locks: dict[
     str, asyncio.Lock
 ] = {}  # session_key -> lock (one writer/executor per thread)
 
+# --- Inner per-turn session-lock staleness expiry (PR1) ----------------------
+# An asyncio.Lock held by a hung turn blocks its thread forever and nothing
+# notices -- the mk3.py / PID 2174824 failure shape (2026-10-26/27). A *cancelled*
+# turn is worse: cancellation skips the ``async with`` release path entirely, so a
+# cancelled turn strands the lock. These two dicts are the holder tracker that
+# makes both recoverable; they share the lock dict's lifetime.
+_session_lock_holders: dict[str, str] = {}  # session_key -> holder token
+_session_lock_acquired_at: dict[str, float] = {}  # session_key -> time.monotonic()
+
+# Staleness timeout for the INNER lock, derived from real observed turn durations
+# rather than guessed (plan section 1). Measured from this box's autopilot journal
+# over 2026-10-20..2026-10-28 by differencing the first and last ``[turn_id]`` log
+# line of each of the 175 completed turns: p50 ~60s, p90 ~220s, max 1295s (21.6
+# min), with 8 turns >= 500s. The default is 4x that observed max (~86 min) because
+# firing EARLY kills live work -- the very bug class this guard exists to prevent,
+# just inverted -- while firing late only leaves a thread blocked longer.
+# Override per host with SESSION_LOCK_STALE_AFTER_SECS.
+DEFAULT_SESSION_LOCK_STALE_AFTER_SECS = 5180.0  # 4 x 1295s observed max
+
+
+def _session_lock_stale_after() -> float:
+    """Staleness timeout in seconds for the inner per-turn session lock."""
+    raw = os.environ.get("SESSION_LOCK_STALE_AFTER_SECS")
+    if raw:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+            logger.error(
+                "SESSION_LOCK_STALE_AFTER_SECS=%r is not > 0 -- using default %.0fs",
+                raw,
+                DEFAULT_SESSION_LOCK_STALE_AFTER_SECS,
+            )
+        except ValueError:
+            logger.error(
+                "SESSION_LOCK_STALE_AFTER_SECS=%r is not a number -- using default %.0fs",
+                raw,
+                DEFAULT_SESSION_LOCK_STALE_AFTER_SECS,
+            )
+    return DEFAULT_SESSION_LOCK_STALE_AFTER_SECS
+
+
+def _session_lock_held_for(session_id: str) -> float | None:
+    """Seconds the inner lock for *session_id* has been held, or None if free."""
+    acquired = _session_lock_acquired_at.get(session_id)
+    if acquired is None:
+        return None
+    return time.monotonic() - acquired
+
 
 def _register_chat_turn_track(session_id: str, governor_name: str | None) -> None:
     """Register an active chat turn in deploy_watcher's file-based registry.
@@ -236,6 +286,62 @@ def _session_lock(session_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _session_locks[session_id] = lock
     return lock
+
+
+@asynccontextmanager
+async def _session_lock_guard(session_id: str) -> AsyncIterator[None]:
+    """Hold the inner per-turn session lock, with staleness expiry.
+
+    If the current holder has held the lock longer than the derived timeout, force
+    release it and log loudly (never silently) -- including the stuck turn's
+    ``_live_progress`` snapshot, which already exists for exactly this kind of
+    introspection. The holder token makes the forced release safe: a stale holder
+    that resumes later finds a mismatched token and does not free the lock a newer
+    holder now owns.
+    """
+    lock = _session_lock(session_id)
+    if lock.locked():
+        held = _session_lock_held_for(session_id)
+        stale_after = _session_lock_stale_after()
+        if held is not None and held > stale_after:
+            logger.error(
+                "SESSION LOCK STALE: force-releasing session=%s held %.0fs by "
+                "holder=%s (timeout %.0fs) -- last progress: %s",
+                session_id,
+                held,
+                _session_lock_holders.get(session_id, "<unknown>"),
+                stale_after,
+                _render_progress(session_id) or "no live progress record",
+            )
+            try:
+                lock.release()
+            except RuntimeError as e:  # released between the check and here
+                logger.error(
+                    "SESSION LOCK STALE: force-release of session=%s failed (%s) -- "
+                    "continuing to acquire (may block)",
+                    session_id,
+                    e,
+                )
+
+    await lock.acquire()
+    token = uuid.uuid4().hex
+    _session_lock_holders[session_id] = token
+    _session_lock_acquired_at[session_id] = time.monotonic()
+    try:
+        yield
+    finally:
+        if _session_lock_holders.get(session_id) == token:
+            _session_lock_holders.pop(session_id, None)
+            _session_lock_acquired_at.pop(session_id, None)
+            if lock.locked():
+                lock.release()
+        else:
+            logger.error(
+                "SESSION LOCK: session=%s exited as a non-holder (token mismatch) -- "
+                "lock was force-released as stale and is owned by another turn; "
+                "not releasing",
+                session_id,
+            )
 
 
 def _render_progress(session_id: str) -> str | None:
@@ -4502,7 +4608,7 @@ async def chat(request: Request):
         # already got this right (lock acquired before touching history at
         # all); this brings /chat in line with it. Different sessions have
         # different locks → still fully parallel across threads.
-        async with _session_lock(session_id):
+        async with _session_lock_guard(session_id):
             history = _load_or_create_session(session_id)
             role = find_role_in_history(history)
 
@@ -4666,7 +4772,7 @@ async def chat_observe(request: Request):
         raise HTTPException(status_code=400, detail="message is required.")
 
     session_id = _session_key(public_key, request)
-    async with _session_lock(session_id):
+    async with _session_lock_guard(session_id):
         _append_observed_message(session_id, user_message, sender_name)
     return {"status": "logged"}
 
@@ -4990,7 +5096,7 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # thread. A second same-thread request waits for the in-flight turn instead of
     # interleaving its writes — the race that bricked threads 3 and 780. Different
     # threads have different locks, so they still run concurrently.
-    async with _session_lock(session_id):
+    async with _session_lock_guard(session_id):
         return await _chat_blocking_turn(
             session_id,
             user_message,
