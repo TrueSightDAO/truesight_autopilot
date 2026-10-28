@@ -442,6 +442,39 @@ def _session_key(public_key: str, request: Request) -> str:
     return f"{public_key[:20]}:{sid}" if sid else public_key
 
 
+def _lock_scope(request: Request, session_id: str) -> str:
+    """Return the key that bounds per-session mutual exclusion.
+
+    Deliberately NOT the same string as ``session_id``. The adapters send a
+    canonical container key as ``X-Session-Id`` -- ``tg:<chat>:<thread>`` for
+    Telegram, ``dc:<guild>:<channel>`` for Discord -- and a Telegram *thread*
+    and a Discord *channel* are the same unit of work, so one shape covers
+    both.
+
+    ``session_id`` is ``<pubkey[:20]>:<X-Session-Id>``: that is the transcript's
+    identity, which is durable and must not move (4,760 files are named
+    ``md5(session_id)[:12]``). The *lock* should instead bound the resource
+    that can actually be corrupted -- one thread/channel's transcript. Two
+    consequences:
+
+    * the lock key is stable across governor-identity config changes, so
+      renaming ``TELEGRAM_GOVERNOR_NAME`` / ``DISCORD_GOVERNOR_NAME`` cannot
+      silently fork the lock namespace (it would still fork history, but that
+      is a separate, deliberate concern);
+    * every worker serving the same thread computes the same lock key -- which
+      is the whole point of the cross-process claim layer.
+
+    Falls back to ``session_id`` when the header is not a recognised adapter
+    key -- e.g. the web UI's per-tab ``sessionStorage`` uuid, which is already
+    unique per tab and needs no stripping, so web behaviour is unchanged.
+    """
+    sid = request.headers.get("X-Session-Id", "")
+    parts = sid.split(":")
+    if len(parts) == 3 and parts[0] in ("tg", "dc") and parts[1] and parts[2]:
+        return sid
+    return session_id
+
+
 def _thread_from_session(session_id: str) -> int | None:
     """Extract the Telegram forum-topic id from a session key.
 
@@ -4663,7 +4696,7 @@ async def chat(request: Request):
         # already got this right (lock acquired before touching history at
         # all); this brings /chat in line with it. Different sessions have
         # different locks → still fully parallel across threads.
-        async with _session_lock_guard(session_id):
+        async with _session_lock_guard(_lock_scope(request, session_id)):
             history = _load_or_create_session(session_id)
             role = find_role_in_history(history)
 
@@ -4827,7 +4860,7 @@ async def chat_observe(request: Request):
         raise HTTPException(status_code=400, detail="message is required.")
 
     session_id = _session_key(public_key, request)
-    async with _session_lock_guard(session_id):
+    async with _session_lock_guard(_lock_scope(request, session_id)):
         _append_observed_message(session_id, user_message, sender_name)
     return {"status": "logged"}
 
@@ -5151,7 +5184,7 @@ async def chat_blocking(request: Request) -> JSONResponse:
     # thread. A second same-thread request waits for the in-flight turn instead of
     # interleaving its writes — the race that bricked threads 3 and 780. Different
     # threads have different locks, so they still run concurrently.
-    async with _session_lock_guard(session_id):
+    async with _session_lock_guard(_lock_scope(request, session_id)):
         return await _chat_blocking_turn(
             session_id,
             user_message,
