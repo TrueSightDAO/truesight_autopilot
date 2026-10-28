@@ -45,6 +45,7 @@ from . import resume_registry
 from .governor_registry import load_governors
 from .voice import transcribe_voice
 from .voice_output import detect_language, synthesize_voice
+from .lock_registry import LockRegistry, TrackedLock
 
 logger = logging.getLogger("autopilot.telegram")
 
@@ -62,18 +63,15 @@ _ATTACH_DIR = "/tmp/tg_attachments"  # adapter + autopilot share the EC2 box / u
 # order) while DIFFERENT topics stay parallel. Attachment prep (download + OCR /
 # extraction) runs BEFORE the lock, so it still parallelizes — only the turn is
 # serialized. See agentic_ai_context/plans/SOPHIA_THREAD_CONCURRENCY_PLAN.md (PR2).
-_thread_dispatch_locks: dict[str, threading.Lock] = {}
-_thread_dispatch_guard = threading.Lock()
+# Bounded registry (rate-limit plan PR3) -- see app/lock_registry.py. This was a
+# plain unbounded dict: one lock per (chat, thread), never evicted, so the map
+# grew for every topic the bot ever saw. The registry keeps the same
+# stable-per-key contract while capping growth and reclaiming idle locks.
+_thread_dispatch_locks = LockRegistry()
 
 
-def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> threading.Lock:
-    key = f"{chat_id}:{thread_id or 0}"
-    with _thread_dispatch_guard:
-        lock = _thread_dispatch_locks.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _thread_dispatch_locks[key] = lock
-        return lock
+def _thread_dispatch_lock(chat_id: int, thread_id: int | None) -> TrackedLock:
+    return _thread_dispatch_locks.get(f"{chat_id}:{thread_id or 0}")
 
 
 # Short status-check phrases that, when sent into a BUSY topic, should be
