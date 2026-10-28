@@ -36,3 +36,8 @@ cos-python-sdk-v5>=1.9.0
 # demands a different browser revision and fails at launch. Provision once with
 # `.venv/bin/playwright install chromium`.
 playwright==1.63.0
+
+# app/redis_claim.py imports this lazily inside get_client(), so a dev-only pin
+# would deploy "successfully" and then fail with ModuleNotFoundError the first
+# time a lock was actually taken on a live host. Runtime dependency.
+redis>=5.0.0
