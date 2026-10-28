@@ -55,6 +55,7 @@ from .context import (
     refresh_system_prompt,
 )
 from . import turn_heartbeat as _turn_heartbeat
+from . import session_claim
 from .deploy_watcher import heartbeat as _dw_heartbeat
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
@@ -303,7 +304,9 @@ def _session_lock(session_id: str) -> asyncio.Lock:
     executor) while letting different threads run concurrently. This is the hard
     guarantee that a second same-thread request can't interleave its transcript
     writes with an in-flight turn — the race that bricked threads 3 and 780.
-    Requires ``--workers 1`` to be effective (the lock lives in one process)."""
+    Requires ``--workers 1`` to be effective (the lock lives in one process);
+    the optional layer-2 Redis claim in ``session_claim`` is what would cover
+    the multi-process case (plans/SOPHIA_SIDEKIQ_MULTIPROCESS_PLAN.md, PR1)."""
     lock = _session_locks.get(session_id)
     if lock is None:
         lock = asyncio.Lock()
@@ -350,9 +353,28 @@ async def _session_lock_guard(session_id: str) -> AsyncIterator[None]:
     token = uuid.uuid4().hex
     _session_lock_holders[session_id] = token
     _session_lock_acquired_at[session_id] = time.monotonic()
+    # Layer 2 (opt-in via SESSION_CLAIM_ENABLED, default OFF): the cross-process
+    # Redis claim that closes the race layer 1 above cannot see -- two workers with
+    # their own asyncio.Lock for the same thread. Best-effort by design: Redis
+    # being slow, down, or already holding the session must never fail or stall a
+    # turn, so acquire() returns None and says so loudly; layer 1 always holds.
+    claim = await session_claim.acquire(session_id, token)
+    session_claim.start_renewer(claim)
     try:
         yield
     finally:
+        # Stop the renewer BEFORE releasing, so no beat can land on a key we are
+        # about to delete and resurrect a claim nobody is running.
+        session_claim.stop_renewer(session_id)
+        try:
+            session_claim.release(claim)
+        except Exception as e:  # noqa: BLE001 -- teardown must never raise
+            logger.error(
+                "SESSION CLAIM: release failed for session=%s (%s) -- the key "
+                "will age out via its TTL instead",
+                session_id,
+                e,
+            )
         if _session_lock_holders.get(session_id) == token:
             _session_lock_holders.pop(session_id, None)
             _session_lock_acquired_at.pop(session_id, None)
