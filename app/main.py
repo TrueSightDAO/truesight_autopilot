@@ -55,6 +55,7 @@ from .context import (
     refresh_system_prompt,
 )
 from . import turn_heartbeat as _turn_heartbeat
+from . import session_claim as _session_claim
 from .deploy_watcher import heartbeat as _dw_heartbeat
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
@@ -303,7 +304,9 @@ def _session_lock(session_id: str) -> asyncio.Lock:
     executor) while letting different threads run concurrently. This is the hard
     guarantee that a second same-thread request can't interleave its transcript
     writes with an in-flight turn — the race that bricked threads 3 and 780.
-    Requires ``--workers 1`` to be effective (the lock lives in one process)."""
+    Requires ``--workers 1`` to be effective (the lock lives in one process).
+    The optional Redis claim layer in ``app.session_claim`` (default OFF) adds
+    cross-process exclusion for a future multi-process deployment."""
     lock = _session_locks.get(session_id)
     if lock is None:
         lock = asyncio.Lock()
@@ -350,9 +353,15 @@ async def _session_lock_guard(session_id: str) -> AsyncIterator[None]:
     token = uuid.uuid4().hex
     _session_lock_holders[session_id] = token
     _session_lock_acquired_at[session_id] = time.monotonic()
+    # Layered: the in-process lock is already held, so this only adds the
+    # cross-process guarantee. No-op unless the flag is on.
+    claim = await _session_claim.acquire_if_enabled(session_id)
     try:
         yield
     finally:
+        # Independent of the token branch below: claim ownership and
+        # in-process-holder identity are different things.
+        await _session_claim.release_if_owned(claim)
         if _session_lock_holders.get(session_id) == token:
             _session_lock_holders.pop(session_id, None)
             _session_lock_acquired_at.pop(session_id, None)

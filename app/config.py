@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     # preserves Sophia's existing behavior; a locked-down sibling sets
     # FOLLOWUPS_ENABLED=false.
     followups_enabled: bool = Field(default=True, validation_alias="FOLLOWUPS_ENABLED")
+    # PR1 of SOPHIA_SIDEKIQ_MULTIPROCESS_PLAN.md: layer a cross-process Redis
+    # claim on top of the in-process session lock. Default OFF so there is zero
+    # live behaviour change; the worker-count flip that needs it is a human gate.
+    session_lock_redis_claim: bool = Field(
+        default=False, validation_alias="SESSION_LOCK_REDIS_CLAIM"
+    )
 
     # Calendar watchdog (app/calendar_watchdog.py) — Sophia's DAILY self-check
     # of the admin@truesight.me calendar, born from a governor ask (Gary,
