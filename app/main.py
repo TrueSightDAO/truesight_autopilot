@@ -9,6 +9,7 @@ import logging
 import mimetypes
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -742,7 +743,13 @@ app.include_router(signature_ledger_pipeline_router)
 
 
 # ── In-memory rate limiter: max 1 req per 2s per IP ──
+# Guarded (rate-limit plan PR3). _check_oracle_rate_limit does a get -> compare ->
+# set read-modify-write; under uvicorn's multiple workers (or any future
+# off-loop caller) two requests for the same IP can interleave and both pass.
+# Every call site is currently synchronous-before-any-await, so this is a latent
+# race rather than an observed one -- the lock is cheap enough not to care.
 _oracle_rate_limit: dict[str, float] = {}
+_oracle_rate_limit_guard = threading.Lock()
 
 
 def _real_client_ip(request: Request) -> str:
@@ -768,12 +775,16 @@ def _real_client_ip(request: Request) -> str:
 
 def _check_oracle_rate_limit(ip: str) -> None:
     now = time.time()
-    last = _oracle_rate_limit.get(ip, 0.0)
-    if now - last < 2.0:
-        raise HTTPException(
-            status_code=429, detail="Rate limited — max 1 request per 2 seconds per IP"
-        )
-    _oracle_rate_limit[ip] = now
+    with _oracle_rate_limit_guard:
+        last = _oracle_rate_limit.get(ip, 0.0)
+        if now - last < 2.0:
+            # Raise INSIDE the guard so check-and-set stays atomic: releasing first
+            # would let a second request slip in between the read and the 429.
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limited — max 1 request per 2 seconds per IP",
+            )
+        _oracle_rate_limit[ip] = now
 
 
 @app.get("/health")

@@ -55,6 +55,7 @@ from .config import settings
 from .governor_registry import load_governors, sentinel_emails
 from .voice import transcribe_voice
 from .voice_output import detect_language, synthesize_voice
+from .lock_registry import LockRegistry, TrackedLock
 
 logger = logging.getLogger("autopilot.discord")
 
@@ -125,19 +126,14 @@ def extract_urls(text: str) -> list[str]:
 # text extraction and attachment ingest run BEFORE the lock, so they still
 # parallelize -- only the turn is serialized. See app/telegram_adapter.py
 # (`_thread_dispatch_lock`) and SOPHIA_THREAD_CONCURRENCY_PLAN.md.
-_channel_dispatch_locks: dict[str, threading.Lock] = {}
-_channel_dispatch_guard = threading.Lock()
+# Bounded registry (rate-limit plan PR3) -- see app/lock_registry.py. Same
+# unbounded-dict defect as the Telegram adapter this was copied from.
+_channel_dispatch_locks = LockRegistry()
 
 
-def _channel_dispatch_lock(channel_id: str | int) -> threading.Lock:
+def _channel_dispatch_lock(channel_id: str | int) -> TrackedLock:
     """Return the stable, per-channel turn lock for ``channel_id``."""
-    key = str(channel_id)
-    with _channel_dispatch_guard:
-        lock = _channel_dispatch_locks.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _channel_dispatch_locks[key] = lock
-        return lock
+    return _channel_dispatch_locks.get(str(channel_id))
 
 
 # Gateway intents (bit flags). We only ask for what we use.
