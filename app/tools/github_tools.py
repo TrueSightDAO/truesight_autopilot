@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import base64
 import os
+import threading
 import time
 from typing import Any
 
 import httpx
 
 from ..config import settings
+from ..github_throttle import github_throttle
 
 # In-memory TTL cache for GitHub API reads. Sophia re-reads the same plan/context/
 # config files across tool rounds (and across parallel threads), and each read is
@@ -20,22 +22,33 @@ _GITHUB_READ_CACHE_TTL = int(os.getenv("GITHUB_READ_CACHE_TTL", "60"))
 _GITHUB_READ_CACHE_MAX = 1000
 _read_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 
+# _read_cache is a plain dict touched from ``asyncio.to_thread`` worker threads
+# (app/main.py runs tool bodies off the event loop), so parallel turns can hit it
+# concurrently. Individual dict operations are atomic under the GIL, but these
+# read-modify-write sequences are NOT: a get-then-pop can race with a clear() and
+# raise, and an unsynchronised len()-then-clear() can evict entries a concurrent
+# writer just added. Guarding every access keeps it consistent. Re-entrant so the
+# helpers stay composable if one ever calls another.
+_read_cache_lock = threading.RLock()
+
 
 def _cache_get(key: tuple[Any, ...]) -> dict[str, Any] | None:
-    hit = _read_cache.get(key)
-    if hit is None:
-        return None
-    ts, val = hit
-    if time.time() - ts >= _GITHUB_READ_CACHE_TTL:
-        _read_cache.pop(key, None)
-        return None
-    return val
+    with _read_cache_lock:
+        hit = _read_cache.get(key)
+        if hit is None:
+            return None
+        ts, val = hit
+        if time.time() - ts >= _GITHUB_READ_CACHE_TTL:
+            _read_cache.pop(key, None)
+            return None
+        return val
 
 
 def _cache_set(key: tuple[Any, ...], val: dict[str, Any]) -> None:
-    if len(_read_cache) >= _GITHUB_READ_CACHE_MAX:
-        _read_cache.clear()
-    _read_cache[key] = (time.time(), val)
+    with _read_cache_lock:
+        if len(_read_cache) >= _GITHUB_READ_CACHE_MAX:
+            _read_cache.clear()
+        _read_cache[key] = (time.time(), val)
 
 
 def _github_headers() -> dict[str, str]:
@@ -61,9 +74,12 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> dict[str, Any]:
     params = {"ref": ref}
 
     try:
-        resp = httpx.get(url, headers=_github_headers(), params=params, timeout=15.0)
-        resp.raise_for_status()
-        data = resp.json()
+        with github_throttle():  # global concurrency bound (app/github_throttle.py)
+            resp = httpx.get(
+                url, headers=_github_headers(), params=params, timeout=15.0
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
         if isinstance(data, list):
             result = {
@@ -121,9 +137,12 @@ def search_codebase(repo: str | None, query: str) -> dict[str, Any]:
     params = {"q": f"{scope} {query}"}
 
     try:
-        resp = httpx.get(url, headers=_github_headers(), params=params, timeout=15.0)
-        resp.raise_for_status()
-        data = resp.json()
+        with github_throttle():  # global concurrency bound (app/github_throttle.py)
+            resp = httpx.get(
+                url, headers=_github_headers(), params=params, timeout=15.0
+            )
+            resp.raise_for_status()
+            data = resp.json()
         result = {
             "type": "search_results",
             "total_count": data.get("total_count", 0),
