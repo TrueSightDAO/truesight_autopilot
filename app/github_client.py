@@ -30,8 +30,11 @@ class GitHubClient:
 
     def __init__(self, pat: str | None = None, retry: int | None = None):
         """``pat`` overrides the default shared ``settings.github_pat`` — used
-        by transcript publishing to isolate its rate-limit budget onto a
-        dedicated token. ``retry`` overrides PyGithub's default retry policy
+        by transcript publishing to keep transcript writes on their own
+        credential for scoping and audit. This does NOT buy a second budget:
+        GitHub meters rate limits per *user*, so two PATs from the same account
+        share one 5,000/h pool (verified 2026-10-28 -- all three of Sophia's
+        PATs reported user ID 1079482). ``retry`` overrides PyGithub's default retry policy
         (10 attempts, sleeping through Retry-After — observed blocking a
         single-worker process for ~25min on a 403). Pass ``retry=0`` for a
         best-effort caller that would rather fail fast and skip than block."""
@@ -56,11 +59,17 @@ class GitHubClient:
         """Consult the core budget before a mutating call.
 
         Free to call: probes the free /rate_limit endpoint at most once per
-        STATE_TTL. Never raises, because a budget check must not be the reason
-        a GitHub operation fails.
+        STATE_TTL. ``RateLimitExhausted`` is deliberately allowed to propagate:
+        when the budget is gone and the reset is further out than a capped sleep
+        can bridge, the caller's own ``except`` turns it into a fast, honest
+        failure instead of a sleep-then-403 loop (observed 09:49-09:51 on
+        2026-10-28). Every other gate error is swallowed, because a budget
+        *check* must never be the reason a GitHub operation fails.
         """
         try:
             github_ratelimit.wait_if_exhausted(self._pat)
+        except github_ratelimit.RateLimitExhausted:
+            raise
         except Exception:
             logger.debug("budget gate failed; proceeding", exc_info=True)
 

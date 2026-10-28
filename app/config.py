@@ -283,10 +283,12 @@ class Settings(BaseSettings):
     # _github_headers() is unchanged for Sophia.
     github_read_pat: str = Field(default="", validation_alias="GITHUB_READ_PAT")
     # Dedicated token for transcript publishing (_publish_transcript in
-    # main.py) — isolates the transcript repo's rate-limit budget from the
-    # shared github_pat used by every other PR/merge/push call. Falls back to
-    # github_pat when unset, so instances without a dedicated token behave
-    # exactly as before.
+    # main.py) — keeps transcript writes on their own credential for scoping
+    # and audit. NOTE: this does NOT isolate rate-limit budget -- GitHub meters
+    # the core quota per *user*, not per token, so multiple PATs from one
+    # account share a single 5,000/h pool (verified 2026-10-28: all three of
+    # Sophia's PATs reported user ID 1079482). Falls back to github_pat when
+    # unset, so instances without a dedicated token behave exactly as before.
     github_transcript_pat: str = Field(
         default="", validation_alias="GITHUB_TRANSCRIPT_PAT"
     )
