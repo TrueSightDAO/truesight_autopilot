@@ -1,6 +1,8 @@
 """Unit tests for scripts/sync_sunmint_signatures.py (no network)."""
 
+import json
 import sys
+import time
 
 import pytest
 
@@ -520,7 +522,7 @@ def test_push_ledger_publishes_summary_files_first(monkeypatch, tmp_path):
     from scripts import sync_sunmint_signatures as m
 
     order = []
-    monkeypatch.setattr(m, "_upload", lambda p, payload: (order.append(p), True)[1])
+    monkeypatch.setattr(m, "_upload", lambda p, payload, *a: (order.append(p), True)[1])
     monkeypatch.setattr(m.time, "sleep", lambda s: None)
     files = {
         "asset_receipt_event/aaa.json": {"x": 1},
@@ -542,7 +544,7 @@ def test_push_ledger_cap_counts_events_not_summaries(monkeypatch, tmp_path):
 
     order = []
 
-    def fake_upload(p, payload):
+    def fake_upload(p, payload, *a):
         order.append(p)
         m._PUSHED_THIS_RUN.append(p)  # mirror real _upload bookkeeping
         return True
@@ -562,6 +564,81 @@ def test_push_ledger_cap_counts_events_not_summaries(monkeypatch, tmp_path):
     assert len(events) == 2
     # cursor saved so the 3rd event resumes next run
     assert cur.read_text().strip() == "b/2.json"
+
+
+def test_content_stamp_is_deterministic_and_ignores_wall_clock():
+    """generated_at must come from payload content, NEVER from now().
+
+    A clock-derived stamp made every summary body differ on every run, so the
+    blob-sha skip in _upload() could never match and all 38 summary files were
+    re-PUT twice an hour forever -- the endless "re-sync what is already
+    synced" loop.
+    """
+    from scripts import sync_sunmint_signatures as m
+
+    entries = {
+        "1": {"submitted_at": "2026-09-01"},
+        "2": {"submitted_at": "2026-09-20"},
+    }
+    first = m._content_stamp(entries)
+    time.sleep(1.1)  # wall clock moves; the stamp must not
+    second = m._content_stamp(entries)
+    assert first == second == "2026-09-20"
+    # a genuinely new event DOES advance it
+    assert m._content_stamp({"3": {"submitted_at": "2026-10-01"}}) == "2026-10-01"
+    # empty payload -> fixed sentinel, never "now"
+    assert m._content_stamp({}) == m._EPOCH_STAMP
+
+
+def test_identical_payload_yields_identical_blob_sha():
+    """Two builds of the same content must be byte-identical (skip burns 0 calls)."""
+    from scripts import sync_sunmint_signatures as m
+
+    payload = {
+        "status": "success",
+        "schema_version": 1,
+        "generated_at": m._content_stamp({"1": {"submitted_at": "2026-09-20"}}),
+        "event_type": "[TREE PLANTING EVENT]",
+    }
+    a = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    time.sleep(1.1)
+    payload["generated_at"] = m._content_stamp({"1": {"submitted_at": "2026-09-20"}})
+    b = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    assert m._git_blob_sha(a) == m._git_blob_sha(b)
+
+
+def test_push_ledger_uses_one_tree_call_instead_of_per_file_gets(monkeypatch, tmp_path):
+    """Every remote sha comes from ONE git-tree call, not one GET per file."""
+    from scripts import sync_sunmint_signatures as m
+
+    calls = {"tree": 0, "get": 0, "uploaded": []}
+    monkeypatch.setenv("GITHUB_TOKEN", "fake")
+
+    def fake_tree(token):
+        calls["tree"] += 1
+        return {"a/1.json": "sha-a1", "index.json": "sha-idx"}  # b/2.json absent
+
+    def fake_get(path, token):
+        calls["get"] += 1
+        return None
+
+    def fake_upload(path, payload, remote_sha=m._REMOTE_SHA_UNKNOWN):
+        calls["uploaded"].append((path, remote_sha))
+        return True
+
+    monkeypatch.setattr(m, "_remote_tree", fake_tree)
+    monkeypatch.setattr(m, "_remote_blob_sha", fake_get)
+    monkeypatch.setattr(m, "_upload", fake_upload)
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+
+    files = {"a/1.json": {}, "b/2.json": {}, "index.json": {}}
+    m._push_ledger(files, max_uploads=250, cursor_path=str(tmp_path / "cur"))
+
+    assert calls["tree"] == 1, "exactly one tree call per run"
+    assert calls["get"] == 0, "tree shas must make per-file GETs unnecessary"
+    got = dict(calls["uploaded"])
+    assert got["a/1.json"] == "sha-a1", "known sha passed through (skip possible)"
+    assert got["b/2.json"] is None, "absent file -> None -> PUT creates it"
 
 
 def _tx(i, txid, when="2026-09-26", marker="[TREE PLANTING EVENT]", who="Gary"):

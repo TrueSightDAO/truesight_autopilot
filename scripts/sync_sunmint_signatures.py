@@ -148,6 +148,56 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Fallback stamp for a payload that contains no timestamped event at all. A
+# fixed sentinel (never "now") is required: any clock value would reintroduce
+# the non-determinism this helper exists to remove.
+_EPOCH_STAMP = "1970-01-01T00:00:00Z"
+_STAMP_KEYS = ("submitted_at", "measured_at", "processed_at")
+
+
+def _content_stamp(*collections) -> str:
+    """Deterministic ``generated_at`` derived from the payload's own content.
+
+    This used to be ``_now_iso()`` -- a live clock -- which made the uploaded
+    body differ on EVERY run. The sha-aware skip in ``_upload()`` compares the
+    git blob sha of the bytes we would upload against the remote file's sha, so
+    a body containing "now" can never match: all 38 summary files (37
+    ``<folder>/index.json`` + ``ledger_index.json`` + root ``index.json``) were
+    re-PUT on every cron pass, forever, even when no event had changed. That
+    endless re-PUT loop -- not the event files, which are immutable -- is what
+    kept the sync "re-syncing records that were already synced".
+
+    Deriving the stamp from the newest event timestamp in the payload keeps the
+    field present, meaningful and monotonic (a new event always advances it)
+    while making an unchanged payload byte-identical, so the skip fires.
+
+    Returns the newest ``submitted_at`` / ``measured_at`` / ``processed_at``
+    found anywhere in the given structures, or ``_EPOCH_STAMP`` when the
+    payload carries no timestamped event.
+    """
+    newest = ""
+
+    def scan(node, depth=0):
+        nonlocal newest
+        if depth > 4:
+            return
+        if isinstance(node, dict):
+            for key in _STAMP_KEYS:
+                val = node.get(key)
+                if isinstance(val, str) and val > newest:
+                    newest = val
+            for val in node.values():
+                if isinstance(val, (dict, list)):
+                    scan(val, depth + 1)
+        elif isinstance(node, list):
+            for item in node:
+                scan(item, depth + 1)
+
+    for coll in collections:
+        scan(coll)
+    return newest or _EPOCH_STAMP
+
+
 def _cell(row: list, key: str, colmap: dict) -> str:
     idx = colmap[key]
     return (row[idx] if idx < len(row) else "").strip()
@@ -343,7 +393,7 @@ def build_signatures(
         }
     return {
         "status": "success",
-        "generated_at": _now_iso(),
+        "generated_at": _content_stamp(events),
         "schema_version": 1,
         "count": len(events),
         "test_events_count": len(test_events),
@@ -392,7 +442,7 @@ def build_measurements(growth_rows: list, chat_by_msg: dict) -> dict:
         )
     return {
         "status": "success",
-        "generated_at": _now_iso(),
+        "generated_at": _content_stamp(items),
         "schema_version": 1,
         "count": len(items),
         "items": items,
@@ -492,6 +542,51 @@ def _remote_blob_sha(path: str, token: str) -> str | None:
         ) from e
 
 
+TREE_API = (
+    "https://api.github.com/repos/TrueSightDAO/verify_public_signatures"
+    "/git/trees/main?recursive=1"
+)
+
+# Sentinel: "the caller did not tell us the remote sha" -> do the per-file GET.
+# ``None`` is NOT the sentinel because it legitimately means "file is absent".
+_REMOTE_SHA_UNKNOWN = object()
+
+
+def _remote_tree(token: str) -> dict:
+    """{repo_path: blob_sha} for every file in the repo, in ONE API call.
+
+    The Contents API reveals a file's sha one path at a time, so comparing
+    ~9,000 already-synced files cost ~9,000 GETs per pass -- twice an hour,
+    ~18,000 calls/hour against an account-wide 5,000/hour budget (every
+    autopilot session shares that pool, so the excess starved real pushes and
+    surfaced as mysterious 403s). The git tree API returns every path + blob
+    sha for the whole tree in a single response, making the same comparison
+    free.
+
+    Returns {} when the tree cannot be used, so the caller falls back to
+    per-file GETs. That fallback is safe rather than silent: ``_remote_blob_sha``
+    re-raises 401/403/5xx, so a genuine auth or rate-limit problem still
+    surfaces loudly on the first file instead of looking like "nothing to do".
+    """
+    req = urllib.request.Request(TREE_API, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+        print(f"[warn] tree API unavailable ({e}); using per-file GETs instead")
+        return {}
+    if data.get("truncated"):
+        print("[warn] tree listing truncated; using per-file GETs instead")
+        return {}
+    return {
+        entry["path"]: entry["sha"]
+        for entry in data.get("tree", [])
+        if entry.get("type") == "blob" and entry.get("path") and entry.get("sha")
+    }
+
+
 def _put_request(path: str, body: str, remote_sha, token: str):
     """Build the Contents-API PUT request for one ledger file."""
     data = json.dumps(
@@ -507,7 +602,7 @@ def _put_request(path: str, body: str, remote_sha, token: str):
     return req
 
 
-def _upload(path: str, payload: dict) -> bool:
+def _upload(path: str, payload: dict, remote_sha=_REMOTE_SHA_UNKNOWN) -> bool:
     """PUT one ledger file; returns True if a new commit was written.
 
     Content-addressed skip: compute the git blob sha of the exact bytes we
@@ -522,7 +617,9 @@ def _upload(path: str, payload: dict) -> bool:
         sys.exit("--push needs GITHUB_TOKEN or GH_TOKEN")
     body = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     local_sha = _git_blob_sha(body)
-    remote_sha = _remote_blob_sha(path, token)
+    if remote_sha is _REMOTE_SHA_UNKNOWN:
+        # No sha supplied by the caller: pay one Contents-API GET to learn it.
+        remote_sha = _remote_blob_sha(path, token)
     if remote_sha == local_sha:
         print(f"[skip] {path} -> already current (blob sha match)")
         return False
@@ -739,7 +836,7 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
         files[f"{folder}/index.json"] = {
             "status": "success",
             "schema_version": 1,
-            "generated_at": _now_iso(),
+            "generated_at": _content_stamp(entries),
             "event_type": next(iter(entries.values()), {}).get("event_type", ""),
             "count": len(entries),
             # Ordered view: `events` is a dict (id -> metadata); JSON objects are
@@ -775,7 +872,7 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     files["ledger_index.json"] = {
         "status": "success",
         "schema_version": 1,
-        "generated_at": _now_iso(),
+        "generated_at": _content_stamp(ledger_rows),
         "ordered_by": "submitted_at",
         "order": "desc",
         "count": len(ledger_rows),
@@ -788,7 +885,7 @@ def _ledger_files(signatures: dict, measurements: dict) -> dict:
     files["index.json"] = {
         "status": "success",
         "schema_version": 1,
-        "generated_at": _now_iso(),
+        "generated_at": _content_stamp(folders, ledger_rows),
         "total_count": sum(len(evs) for evs in folders.values()),
         "test_events_count": signatures.get("test_events_count", 0),
         "excluded_pii_count": signatures.get("excluded_pii_count", 0),
@@ -862,6 +959,19 @@ def _push_ledger(
     _PUSHED_THIS_RUN.clear()
     paths = sorted(files)
 
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    # ONE call for every blob sha in the repo. Without it every file below
+    # costs its own Contents-API GET just to decide "already current?".
+    # No token -> skip the tree; _upload reports the missing credential itself.
+    tree = _remote_tree(token) if token else {}
+    tree_calls = 1 if tree else 0
+
+    def _known_sha(path: str):
+        """Remote sha for `path` from the tree; sentinel when the tree failed."""
+        if not tree:
+            return _REMOTE_SHA_UNKNOWN  # fall back to a per-file GET
+        return tree.get(path)  # None == genuinely absent -> PUT creates it
+
     # 1) Summary files FIRST, uncapped. The root "index.json" and every
     #    "<folder>/index.json" are the publicly-observable surface, but their
     #    names sort LAST: a folder's event files sort before its index.json,
@@ -872,7 +982,7 @@ def _push_ledger(
     #    pushes cheap, and this keeps the public summary correct within one pass.
     summaries = [p for p in paths if p.endswith("index.json")]
     for path in summaries:
-        _upload(path, files[path])
+        _upload(path, files[path], _known_sha(path))
         time.sleep(0.3)
     summary_pushed = len(_PUSHED_THIS_RUN)
 
@@ -897,7 +1007,12 @@ def _push_ledger(
     # and walked the entire backlog -- one GET per file, every 30 minutes.
     for i in range(start, len(events)):
         path = events[i]
-        if examined >= max_uploads or pushed >= max_uploads:
+        # With the tree in hand an examination is FREE (no GET), so only the
+        # PUT cap protects the budget and the whole set can be walked in one
+        # pass. On the per-file fallback each examination costs a GET, so the
+        # examined cap applies too.
+        over_cap = pushed >= max_uploads or (not tree and examined >= max_uploads)
+        if over_cap:
             remain = len(events) - i
             _save_cursor(cursor_path, events[i - 1] if i > 0 else "")
             print(
@@ -906,7 +1021,7 @@ def _push_ledger(
                 f"{remain} event files remain for next cron pass(es)"
             )
             break
-        _upload(path, files[path])
+        _upload(path, files[path], _known_sha(path))
         examined += 1
         pushed = len(_PUSHED_THIS_RUN)
         _save_cursor(cursor_path, path)
@@ -917,7 +1032,8 @@ def _push_ledger(
         print(
             f"[info] backfill complete: pushed {pushed} event file(s) "
             f"(+{summary_pushed} summaries), examined {examined} "
-            f"(~{examined} GETs + {pushed} PUTs), cursor cleared"
+            f"(~{tree_calls + (0 if tree else examined)} GETs + {pushed} PUTs), "
+            f"cursor cleared"
         )
 
 
