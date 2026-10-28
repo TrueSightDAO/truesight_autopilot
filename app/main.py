@@ -54,6 +54,8 @@ from .context import (
     refresh_context_repos,
     refresh_system_prompt,
 )
+from . import turn_heartbeat as _turn_heartbeat
+from .deploy_watcher import heartbeat as _dw_heartbeat
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
 from .governor_registry import load_governors, resolve_key
@@ -258,10 +260,30 @@ def _register_chat_turn_track(session_id: str, governor_name: str | None) -> Non
         )
     except Exception as e:  # noqa: BLE001
         logger.debug("chat-turn track register failed (%s)", e)
+    # Refresh the track's last_heartbeat for as long as the turn runs. Without
+    # this the lease freezes at started_at, so any turn longer than the 120s
+    # telegram_chat lease stops blocking can_deploy and a deploy may restart the
+    # service mid-turn. See plans/LOOP_DAEMON_PLAN.md (P0).
+    try:
+        _turn_heartbeat.start(session_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chat-turn heartbeat start failed (%s)", e)
 
 
 def _unregister_chat_turn_track(session_id: str) -> None:
     """Remove a chat turn from deploy_watcher's registry. Best-effort."""
+    # Stop the ticker first so a beat cannot land after the track is removed,
+    # then take one final beat before unregistering -- unregister only rewrites
+    # `status`, so this leaves the registry showing a fresh, completed turn
+    # rather than one whose lease appears to have expired mid-turn.
+    try:
+        _turn_heartbeat.stop(session_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chat-turn heartbeat stop failed (%s)", e)
+    try:
+        _dw_heartbeat(session_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chat-turn final heartbeat failed (%s)", e)
     try:
         _dw_unregister_track(session_id, status="completed")
     except Exception as e:  # noqa: BLE001
