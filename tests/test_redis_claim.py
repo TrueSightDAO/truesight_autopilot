@@ -172,9 +172,11 @@ def test_mark_records_and_is_idempotent(thread_id):
 
     rc.mark(thread_id, CLIENT, now=2000.0)
     assert CLIENT.zscore(rc.MARKS_KEY, thread_id) == 2000.0
-    # exactly one member for this thread -- no duplicate accumulation
-    assert CLIENT.zcard(rc.MARKS_KEY) == len(
-        [m for m in CLIENT.zrange(rc.MARKS_KEY, 0, -1) if m == thread_id]
+    # exactly one member for this thread -- no duplicate accumulation.
+    # Counted by thread, NOT via global zcard: this suite shares a Redis database
+    # with the running service, so the zset legitimately holds other live marks.
+    assert (
+        sum(1 for m in CLIENT.zrange(rc.MARKS_KEY, 0, -1) if m == thread_id) == 1
     )
     assert score_first == 1000.0
 

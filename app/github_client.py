@@ -7,10 +7,12 @@ that should never be pulled locally — always read/write via the API."""
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from github import Auth, Github
 
+from . import github_ratelimit
 from .config import settings
 
 logger = logging.getLogger("autopilot.github")
@@ -18,6 +20,13 @@ logger = logging.getLogger("autopilot.github")
 
 class GitHubClient:
     ORG = "TrueSightDAO"
+
+    #: PyGithub's default retry policy is 10 attempts, sleeping through
+    #: ``Retry-After``. On a 403 that has been observed blocking a single-worker
+    #: process for ~25 minutes, which on ``--workers 1`` stalls *every* session,
+    #: not just the caller. So the default is clamped to a fail-fast value and
+    #: callers opt *in* to more retries rather than inheriting them.
+    DEFAULT_RETRY = int(os.getenv("GITHUB_CLIENT_DEFAULT_RETRY", "2"))
 
     def __init__(self, pat: str | None = None, retry: int | None = None):
         """``pat`` overrides the default shared ``settings.github_pat`` — used
@@ -29,10 +38,12 @@ class GitHubClient:
         token = pat or settings.github_pat
         if not token:
             raise RuntimeError("TRUESIGHT_DAO_AUTOPILOT not set")
+        self._pat = token
         auth = Auth.Token(token)
-        kwargs: dict[str, Any] = {"auth": auth}
-        if retry is not None:
-            kwargs["retry"] = retry
+        kwargs: dict[str, Any] = {
+            "auth": auth,
+            "retry": self.DEFAULT_RETRY if retry is None else retry,
+        }
         self.g = Github(**kwargs)
         # NOTE: do NOT call get_user() here. It is a synchronous network call
         # that blocks on GitHub's rate-limit Retry-After backoff (observed up to
@@ -40,6 +51,18 @@ class GitHubClient:
         # Resolve the authenticated user lazily instead.
         self._user = None
         logger.info("GitHub client initialized (PAT present; user resolved lazily)")
+
+    def _respect_budget(self) -> None:
+        """Consult the core budget before a mutating call.
+
+        Free to call: probes the free /rate_limit endpoint at most once per
+        STATE_TTL. Never raises, because a budget check must not be the reason
+        a GitHub operation fails.
+        """
+        try:
+            github_ratelimit.wait_if_exhausted(self._pat)
+        except Exception:
+            logger.debug("budget gate failed; proceeding", exc_info=True)
 
     @property
     def user(self):
@@ -124,6 +147,7 @@ class GitHubClient:
     def create_branch(self, repo_name: str, base_branch: str, new_branch: str) -> bool:
         """Create a new branch from base."""
         try:
+            self._respect_budget()
             repo = self.g.get_repo(self._full_name(repo_name))
             base = repo.get_branch(base_branch)
             repo.create_git_ref(ref=f"refs/heads/{new_branch}", sha=base.commit.sha)
@@ -136,6 +160,7 @@ class GitHubClient:
     def delete_branch(self, repo_name: str, branch: str) -> bool:
         """Delete a branch ref. Returns True on success, False otherwise."""
         try:
+            self._respect_budget()
             repo = self.g.get_repo(self._full_name(repo_name))
             ref = repo.get_git_ref(f"heads/{branch}")
             ref.delete()
@@ -179,6 +204,7 @@ class GitHubClient:
     ) -> bool:
         """Commit a file to a branch."""
         try:
+            self._respect_budget()
             repo = self.g.get_repo(self._full_name(repo_name))
             # Check if file exists to get sha for update
             try:
@@ -211,6 +237,7 @@ class GitHubClient:
     ) -> bool:
         """Delete a file from a branch."""
         try:
+            self._respect_budget()
             repo = self.g.get_repo(self._full_name(repo_name))
             existing = repo.get_contents(path, ref=branch)
             repo.delete_file(
@@ -244,6 +271,7 @@ class GitHubClient:
         review is the gate, the label is just a search/filter aid.
         """
         try:
+            self._respect_budget()
             repo = self.g.get_repo(self._full_name(repo_name))
             pr = repo.create_pull(
                 title=title, body=body, head=head, base=base, draft=draft
@@ -413,6 +441,7 @@ class GitHubClient:
         the merge moment. The PR's draft history stays visible in the timeline.
         """
         try:
+            self._respect_budget()
             repo = self.g.get_repo(self._full_name(repo_name))
             pr = repo.get_pull(pr_number)
             # CI gate: refuse to merge when checks are failing/pending; warn
