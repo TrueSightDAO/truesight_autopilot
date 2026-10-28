@@ -477,8 +477,19 @@ def _remote_blob_sha(path: str, token: str) -> str | None:
         req.add_header("Accept", "application/vnd.github+json")
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r).get("sha")
-    except urllib.error.HTTPError:
-        return None  # file may not exist yet -- PUT without sha creates it
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None  # genuinely absent -- PUT without sha creates it
+        # 403 = rate limited / forbidden, 401 = bad token, 5xx = GitHub issue.
+        # These MUST NOT be laundered into "file does not exist": doing so turned
+        # a rate-limit 403 into a PUT-without-sha, which GitHub rejects with 422,
+        # which was then reported as "already current" -- i.e. a silent no-op
+        # sync that looked successful. Surface it instead.
+        raise RuntimeError(
+            f"GET {path} failed with HTTP {e.code} "
+            f"({getattr(e, 'reason', 'no reason')}) -- refusing to treat this "
+            f"as 'file absent'. Rate limit or auth problem."
+        ) from e
 
 
 def _put_request(path: str, body: str, remote_sha, token: str):
@@ -526,7 +537,18 @@ def _upload(path: str, payload: dict) -> bool:
                 return True
         except urllib.error.HTTPError as e:
             if e.code == 422:
-                print(f"[skip] {path} -> already current (422 unchanged)")
+                # 422 Unprocessable Entity on a Contents-API PUT means the write
+                # was rejected. It is NOT evidence the remote already matches us:
+                # a real content match is caught earlier by the blob-sha compare
+                # and never reaches a PUT at all. Historically this branch also
+                # masked rate-limit 403s (swallowed in _remote_blob_sha -> PUT
+                # without sha -> 422), so it reported "already current" for
+                # writes that never happened.
+                print(
+                    f"[error] {path} -> PUT rejected 422 (NOT 'already current': "
+                    f"a genuine content match is caught by the blob-sha compare "
+                    f"before any PUT). Write did not land."
+                )
                 return False
             if e.code == 409 and attempt == 0:
                 # Stale sha: the file changed between our GET and PUT (a
@@ -868,13 +890,19 @@ def _push_ledger(
             start = len(events)  # cursor past the end -> nothing to do
     pushed = 0
     examined = 0
+    # Budget is spent on calls ATTEMPTED, not just successful pushes: every
+    # file we touch costs at least one Contents-API GET in _remote_blob_sha,
+    # and an unchanged file costs exactly that. The old cap counted only
+    # `pushed`, so a run where nothing changed (all skips) never tripped it
+    # and walked the entire backlog -- one GET per file, every 30 minutes.
     for i in range(start, len(events)):
         path = events[i]
-        if pushed >= max_uploads:
+        if examined >= max_uploads or pushed >= max_uploads:
             remain = len(events) - i
             _save_cursor(cursor_path, events[i - 1] if i > 0 else "")
             print(
-                f"[info] rate-limit guard: hit {max_uploads}/run cap; "
+                f"[info] rate-limit guard: hit {max_uploads}/run call cap "
+                f"(examined={examined}, pushed={pushed}); "
                 f"{remain} event files remain for next cron pass(es)"
             )
             break
@@ -888,8 +916,8 @@ def _push_ledger(
         _save_cursor(cursor_path, "")
         print(
             f"[info] backfill complete: pushed {pushed} event file(s) "
-            f"(+{summary_pushed} summaries), examined {examined}, "
-            f"cursor cleared"
+            f"(+{summary_pushed} summaries), examined {examined} "
+            f"(~{examined} GETs + {pushed} PUTs), cursor cleared"
         )
 
 
