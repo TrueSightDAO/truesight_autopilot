@@ -1,0 +1,33 @@
+[Unit]
+Description=TrueSight Autopilot — loop state reconciler (publishes TTL'd loop:status to Redis)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/truesight_autopilot
+Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/opt/truesight_autopilot/.env
+# Absolute paths are REQUIRED, not defensive style. With these unset the daemon
+# falls back to CWD-relative "data/active_tracks.json" and a wrong path degrades
+# SILENTLY to "no sessions" (observed 2026-10-28) — it publishes nothing and
+# looks healthy. Pin them so a misconfigured unit fails visibly instead.
+Environment=ACTIVE_TRACKS_PATH=/opt/truesight_autopilot/data/active_tracks.json
+Environment=SESSION_LOG_DIR=/opt/truesight_autopilot/sessions
+# Read-only reconciler: never mutates tracks, registries or goal logs — it only
+# publishes TTL'd loop:* keys. Sweeps every 60s (DEFAULT_INTERVAL); keys expire
+# at 3x that (TTL_MULTIPLIER), so a dead daemon's last verdict evaporates rather
+# than reporting a stale "busy" forever.
+# DEPLOY ORDER MATTERS: this unit runs app.loop_daemon from the checkout at
+# WorkingDirectory. Do NOT enable/start it before that code is actually deployed
+# to /opt/truesight_autopilot — with Restart=always a missing module becomes a
+# 30s restart spin (the same hazard the Discord adapter note in deploy.sh warns
+# about). Deploy first, then start.
+ExecStart=/opt/truesight_autopilot/.venv/bin/python -m app.loop_daemon
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
