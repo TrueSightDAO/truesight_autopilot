@@ -390,13 +390,20 @@ async def _session_lock_guard(session_id: str) -> AsyncIterator[None]:
             )
 
 
-def _render_progress(session_id: str) -> str | None:
-    """Return a one/two-line templated snapshot of the running turn for
-    *session_id*, or None if nothing is running.
+def _render_progress(scope: str) -> str | None:
+    """Return a one/two-line templated snapshot of the running turn for *scope*.
+
+    *scope* is the canonical conversation key (``_lock_scope``) -- the same one
+    the turn publishes under. Reading shared state rather than the in-process
+    dict is what makes this correct when the turn and this read are in DIFFERENT
+    processes, which is the normal case for ``/chat/progress`` (the Telegram
+    adapter is its own process).
+
+    Returns None if nothing is running.
 
     Fields: instruction excerpt, round, elapsed seconds, current tool + arg,
     done-so-far list, queued_behind count. Instant — no LLM, no lock."""
-    rec = _live_progress.get(session_id)
+    rec = session_state.progress_get(scope)
     if not rec:
         return None
     parts = []
@@ -792,9 +799,7 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Calendar watchdog failed to start: %s", e)
         else:
-            logger.info(
-                "CALENDAR_WATCH_ENABLED=false — calendar watchdog not started"
-            )
+            logger.info("CALENDAR_WATCH_ENABLED=false — calendar watchdog not started")
         try:
             asyncio.create_task(_catalog_refresh_loop())
         except Exception as e:
@@ -3479,6 +3484,19 @@ async def _run_tool_round_loop(
         "done": [],
         "queued_behind": session_state.queue_len(lock_scope),
     }
+    session_state.progress_set(lock_scope, dict(_live_progress[session_id]))
+
+    def _publish_progress() -> None:
+        """Mirror the local record into shared state.
+
+        Dual-write on purpose: ``compact_session_tool`` still reads the
+        process-local dict to refuse compacting a live session, and that guard
+        must keep working exactly as before. The shared copy is what
+        /chat/progress serves from, so a cross-process reader sees the turn.
+        """
+        rec = _live_progress.get(session_id)
+        if rec:
+            session_state.progress_set(lock_scope, dict(rec))
 
     log_prefix = "QUEUE " if queue_msg_id else ""
     raw_label_prefix = "queue-" if queue_msg_id else ""
@@ -3495,6 +3513,7 @@ async def _run_tool_round_loop(
         _live_progress[session_id]["elapsed"] = (
             time.time() - _live_progress[session_id]["started_at"]
         )
+        _publish_progress()
 
         # Context compaction (PR3): the pre-turn _maybe_auto_compact call only
         # fires once, before this loop starts — a long multi-round turn (this
@@ -3525,6 +3544,7 @@ async def _run_tool_round_loop(
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
             _live_progress.pop(session_id, None)
+            session_state.progress_clear(lock_scope)
             return
 
         # Mid-round interjection — only meaningful for the initial turn.
@@ -3567,6 +3587,7 @@ async def _run_tool_round_loop(
             state["cancelled"] = True
             state["assistant_text"] = assistant_text
             _live_progress.pop(session_id, None)
+            session_state.progress_clear(lock_scope)
             return
         _log_raw_llm(
             session_id,
@@ -3650,6 +3671,7 @@ async def _run_tool_round_loop(
                 _live_progress[session_id]["current_arg"] = _redact_for_log(
                     func_args, limit=200
                 )
+                _publish_progress()
 
                 tool_task = asyncio.create_task(
                     _run_tool(
@@ -3693,6 +3715,7 @@ async def _run_tool_round_loop(
                     state["cancelled"] = True
                     state["assistant_text"] = assistant_text
                     _live_progress.pop(session_id, None)
+                    session_state.progress_clear(lock_scope)
                     return
                 except Exception as exc:
                     logger.exception(
@@ -3712,6 +3735,7 @@ async def _run_tool_round_loop(
                 _live_progress[session_id]["current_tool"] = None
                 _live_progress[session_id]["current_arg"] = None
                 _live_progress[session_id]["done"].append(f"{func_name}")
+                _publish_progress()
                 logger.info(
                     "[%d] %sTOOL RESULT: %s result=%.300s",
                     req_id,
@@ -3770,6 +3794,7 @@ async def _run_tool_round_loop(
 
     # Clear live progress — turn ended (success or error)
     _live_progress.pop(session_id, None)
+    session_state.progress_clear(lock_scope)
 
     if not assistant_text:
         logger.info(
@@ -4566,7 +4591,10 @@ async def get_chat_progress(request: Request) -> JSONResponse:
     if not public_key:
         public_key = verify_jwt(request)  # raises 401 if no valid token
     session_id = _session_key(public_key, request)
-    snap = _render_progress(session_id)
+    # The turn publishes under its lock scope, which drops the pubkey prefix.
+    # Rendering under _session_key() (pubkey-prefixed) looked up a key the turn
+    # never wrote, so the snapshot came back empty whenever they differed.
+    snap = _render_progress(_lock_scope(request, session_id))
     if snap:
         return JSONResponse({"running": True, "snapshot": snap})
     return JSONResponse({"running": False, "snapshot": None})
