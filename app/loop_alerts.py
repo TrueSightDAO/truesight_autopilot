@@ -220,13 +220,23 @@ def plan_alerts(
     environ=None,
     now: float | None = None,
     dedupe_s: int = DEFAULT_DEDUPE_S,
-    dry_run: bool = False,
+    dry_run: bool = True,
     max_alerts: int = MAX_ALERTS_PER_SWEEP,
 ) -> AlertRun:
-    """Decide who gets nudged. Pure with respect to the ledger: sends nothing.
+    """Decide who gets nudged. Sends nothing -- but see the claim warning below.
 
-    Dedupe uses ``SET NX EX`` so the claim is atomic. In ``dry_run`` we only
-    *check* the key, so previewing does not swallow the real alert.
+    Dedupe uses ``SET NX EX`` so the claim is atomic. In ``dry_run`` (the
+    DEFAULT) we only *check* the key, so previewing does not swallow the real
+    alert.
+
+    .. warning::
+       With ``dry_run=False`` this function **mutates the ledger**: it consumes
+       one ``loop:alert:<session>:<state>`` claim per returned alert, which
+       silences that alert for ``dedupe_s``. It is therefore NOT read-only.
+       The default is ``dry_run=True`` precisely so that introspection
+       ("show me what would be sent") cannot accidentally swallow alerts --
+       which is exactly what happened once during rollout when this defaulted
+       to ``False``. Pass ``dry_run=False`` only from the real dispatch path.
     """
     run = AlertRun()
     if not alerts_enabled(environ):
