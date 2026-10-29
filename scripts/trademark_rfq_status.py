@@ -47,6 +47,48 @@ CC_ADDR = "garyjob@gmail.com"
 MAX_CHASES = 2
 CHASE_GAP_DAYS = 3
 
+# ── the Applicant (confirmed by Gary 2026-10-21) ─────────────────────────────
+# BIONPACT PTE. LTD. is the filing entity. The UEN came from our own TrueTech
+# invoices; the registered office was verified against the public ACRA
+# aggregator (sgpbusiness.com) -- reconfirm against the Bizfile extract before
+# it goes on a filing.
+APPLICANT = {
+    "name": "BIONPACT PTE. LTD.",
+    "uen": "202620924G",
+    "address": "68 Circular Road, Boat Quay Conservation Area, Singapore 049422",
+    "incorporated": "11 May 2026",
+    "principal_activity": "Development of software and applications",
+}
+
+# TWO class tracks, decided by Gary 2026-10-21: the cacao product line and the
+# software platform are filed as SEPARATE applications, not one broadened
+# specification. Class 30 basis follows Marks & Clerk (Tat Wai Kwok), 2026-10-21:
+# cacao/chocolate goods for human consumption -- NOT raw or unprocessed beans,
+# which he placed in a different class. Class 42 basis follows the ACRA
+# principal activity (software / information technology consultancy).
+GOODS_SERVICES_CLASS30 = (
+    "cocoa and cocoa-based beverages; chocolate and chocolate confectionery; "
+    "cocoa-based food preparations, desserts and consumable preparations made "
+    "from or containing cacao and chocolate"
+)
+
+GOODS_SERVICES_CLASS42 = (
+    "software as a service (SaaS); platform as a service (PaaS); providing "
+    "temporary use of non-downloadable software for supply-chain traceability, "
+    "provenance verification and inventory management; software development "
+    "and information technology consultancy services"
+)
+
+# Filing scope (Gary, 2026-10-21): SINGAPORE ONLY, filed by BIONPACT PTE. LTD.
+# The US and Brazil entities are recorded for reference only -- both filings are
+# DEFERRED, not abandoned. No application is being prepared for either, so no
+# specification or fee estimate is asserted for them.
+FILING_SCOPE = "Singapore (IPOS)"
+DEFERRED_JURISDICTIONS = [
+    ("United States", "TrueTech Inc"),
+    ("Brazil", "Black King"),
+]
+
 # ── the instructed firms ──────────────────────────────────────────────────
 FIRMS = [
     {
@@ -227,7 +269,9 @@ def classify(text: str) -> str:
 
 def scan_firm(svc, firm) -> dict:
     """Return latest inbound mail + classification for one firm."""
-    q = f"from:{firm['domain']} newer_than:30d"
+    # Include outbound to the firm as well: we need OUR replies in the thread to
+    # tell whether a "needs our input" signal is still live or already answered.
+    q = f"(from:{firm['domain']} OR to:{firm['domain']}) newer_than:30d"
     res = svc.users().messages().list(userId="me", q=q, maxResults=25).execute()
     msgs = []
     for ref in res.get("messages", []) or []:
@@ -246,15 +290,36 @@ def scan_firm(svc, firm) -> dict:
                 "subject": hdrs.get("subject", ""),
                 "text": _plain(_body(m["payload"])),
                 "internal_ts": int(m.get("internalDate", "0")) / 1000.0,
+                "ours": "SENT" in (m.get("labelIds") or []),
             }
         )
     if not msgs:
         return {"status": "AWAITING", "count": 0, "last": None, "last_ts": None}
     msgs.sort(key=lambda x: x["internal_ts"], reverse=True)
-    classes = [classify(m["text"]) for m in msgs]
+
+    # Classify ONLY genuine inbound mail. Our own outbound RFQs and chases are
+    # in this thread too (we widened the query on purpose), and scoring them
+    # would fake a reply -- Spruson & Ferguson was wrongly shown as "responded"
+    # purely because our own chase said "we look forward to hearing from you".
+    inbound = [m for m in msgs if not m["ours"]]
+    if not inbound:
+        return {
+            "status": "AWAITING",
+            "count": 0,
+            "last": None,
+            "last_ts": None,
+            "ours_latest_ts": msgs[0]["internal_ts"],
+        }
+
+    classes = [classify(m["text"]) for m in inbound]
     # QUOTED wins if it ever arrived; else the most specific non-quote state.
     if "QUOTED" in classes:
         status = "QUOTED"
+    elif "BLOCKED_ON_US" in classes and msgs[0]["ours"]:
+        # We already answered their request for applicant details (our message
+        # is the newest in the thread), so the blocker has moved to their side:
+        # they owe US a fee indication.
+        status = "FOLLOWED_UP"
     elif "BLOCKED_ON_US" in classes:
         status = "BLOCKED_ON_US"
     elif "ACKNOWLEDGED" in classes:
@@ -263,11 +328,11 @@ def scan_firm(svc, firm) -> dict:
         status = "RESPONDED"
     return {
         "status": status,
-        "count": len(msgs),
-        "last": msgs[0],
-        "last_ts": msgs[0]["internal_ts"],
-        "last_from": msgs[0]["from"],
-        "last_date": msgs[0]["date"],
+        "count": len(inbound),
+        "last": inbound[0],
+        "last_ts": inbound[0]["internal_ts"],
+        "last_from": inbound[0]["from"],
+        "last_date": inbound[0]["date"],
     }
 
 
@@ -293,6 +358,8 @@ def chase_due(firm, info, state, now) -> tuple[bool, str]:
         return False, "already quoted"
     if status == "BLOCKED_ON_US":
         return False, "blocked on us (applicant details)"
+    if status == "FOLLOWED_UP":
+        return False, "already followed up -- awaiting their fee indication"
     if now.weekday() >= 5:
         return False, "weekend"
     if st["chases"] >= MAX_CHASES:
@@ -379,6 +446,7 @@ def build_report(results, state, now) -> tuple[str, str]:
     icon = {
         "QUOTED": "✅ Quoted",
         "BLOCKED_ON_US": "⛔ Needs our input",
+        "FOLLOWED_UP": "→ Followed up, awaiting quote",
         "ACKNOWLEDGED": "⏳ Acknowledged",
         "AWAITING": "🔇 No reply",
         "RESPONDED": "💬 Responded",
@@ -433,14 +501,64 @@ def build_report(results, state, now) -> tuple[str, str]:
 
     lines += [
         "",
+        "## Applicant (confirmed)",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        "| Entity | " + APPLICANT["name"] + " |",
+        "| UEN | " + APPLICANT["uen"] + " |",
+        "| Registered office | " + APPLICANT["address"] + " |",
+        "| Incorporated | " + APPLICANT["incorporated"] + " |",
+        "| ACRA principal activity | " + APPLICANT["principal_activity"] + " |",
+        "",
+        "*UEN taken from our own invoices; the registered office was verified "
+        "against the public ACRA aggregator and should be reconfirmed against "
+        "the Bizfile extract before it goes on a filing.*",
+        "",
+        "## Goods & services — TWO separate filings (decided 2026-10-21)",
+        "",
+        "Gary's instruction: the cacao product line and the software platform are "
+        "filed as **two separate applications**, not one broadened specification.",
+        "",
+        "**Class 30 — cacao product line:** " + GOODS_SERVICES_CLASS30 + ".",
+        "",
+        "*Basis: Marks & Clerk (Tat Wai Kwok) advised on 2026-10-21 that Class 30 "
+        "is the primary class for cacao and chocolate products for human "
+        "consumption, with Class 35 (retail/wholesale services) a possible "
+        "addition, and that raw/unprocessed cacao beans may fall in a different "
+        "class.*",
+        "",
+        "**Class 42 — software platform:** " + GOODS_SERVICES_CLASS42 + ".",
+        "",
+        "*Basis: ACRA principal activity is software / information technology "
+        "consultancy.*",
+        "",
+        "## Filing entity — Singapore only (decided 2026-10-21)",
+        "",
+        "Gary's instruction: the trade mark filing is in **Singapore only**. The "
+        "mark is filed by the Singapore entity. US and Brazil are **deferred**, "
+        "not abandoned — no application is being prepared for either.",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        "| Applicant | BIONPACT PTE. LTD. |",
+        "| Jurisdiction | " + FILING_SCOPE + " |",
+        "| Applications | Two — Class 30 (cacao) and Class 42 (software) |",
+        "",
+        "*Every quotation collected is Singapore-only, so the fee comparison "
+        "covers the entire instructed scope. Deferred for reference only: "
+        "US (TrueTech Inc); BR (Black King).*",
+        "",
         "## Open decision needed from Gary",
         "",
-        "1. **Applicant legal entity** — which entity/individual owns the mark "
-        "(e.g. BIONPACT PTE. LTD.?) and its registered address.",
-        "2. **Goods/services** — a short description so firms can confirm the class "
-        "(Class 5 if a nutraceutical/health product, Class 42 if software, etc.).",
-        "3. **One mark or two** — Amica notes the word mark and logo are separate "
-        "applications; the word mark alone protects BIONPACT in any presentation.",
+        '1. **One mark or two** — the word mark "BIONPACT" alone protects the '
+        "name in any presentation; the logo device is a separate filing "
+        "(Amica and Donaldson both noted this).",
+        "2. **Confirm the UEN against a Bizfile extract** — 202620924G came "
+        "from our own invoices and is not yet independently verified.",
+        "3. **Add Class 35?** — Kwok flagged retail/wholesale services as a "
+        "possible addition to the cacao filing. Useful if we sell "
+        "direct-to-consumer under the mark; say if you want it quoted.",
         "",
         f"*Generated automatically {now.strftime('%Y-%m-%d %H:%M UTC')} by "
         "`trademark_rfq_status.py`. Chase cadence: max "
