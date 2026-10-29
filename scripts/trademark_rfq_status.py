@@ -79,11 +79,12 @@ GOODS_SERVICES_CLASS42 = (
     "and information technology consultancy services"
 )
 
-# Jurisdiction -> filing entity (Gary, 2026-10-21). Only the Singapore row is
-# populated: the US and Brazil entities are named but their registered details
-# have not been captured, so no specification is asserted for them here.
-JURISDICTION_APPLICANTS = [
-    ("Singapore", "BIONPACT PTE. LTD. (UEN 202620924G)"),
+# Filing scope (Gary, 2026-10-21): SINGAPORE ONLY, filed by BIONPACT PTE. LTD.
+# The US and Brazil entities are recorded for reference only -- both filings are
+# DEFERRED, not abandoned. No application is being prepared for either, so no
+# specification or fee estimate is asserted for them.
+FILING_SCOPE = "Singapore (IPOS)"
+DEFERRED_JURISDICTIONS = [
     ("United States", "TrueTech Inc"),
     ("Brazil", "Black King"),
 ]
@@ -532,16 +533,21 @@ def build_report(results, state, now) -> tuple[str, str]:
         "*Basis: ACRA principal activity is software / information technology "
         "consultancy.*",
         "",
-        "## Filing entity by jurisdiction",
+        "## Filing entity — Singapore only (decided 2026-10-21)",
         "",
-        "| Jurisdiction | Applicant |",
+        "Gary's instruction: the trade mark filing is in **Singapore only**. The "
+        "mark is filed by the Singapore entity. US and Brazil are **deferred**, "
+        "not abandoned — no application is being prepared for either.",
+        "",
+        "| Field | Value |",
         "|---|---|",
-    ]
-    lines += ["| " + j + " | " + a + " |" for j, a in JURISDICTION_APPLICANTS]
-    lines += [
+        "| Applicant | BIONPACT PTE. LTD. |",
+        "| Jurisdiction | " + FILING_SCOPE + " |",
+        "| Applications | Two — Class 30 (cacao) and Class 42 (software) |",
         "",
-        "*Quotes collected so far are Singapore-only. Instructing SG does not "
-        "cover US or BR — separate counsel and separate filing fees apply.*",
+        "*Every quotation collected is Singapore-only, so the fee comparison "
+        "covers the entire instructed scope. Deferred for reference only: "
+        "US (TrueTech Inc); BR (Black King).*",
         "",
         "## Open decision needed from Gary",
         "",
@@ -550,8 +556,9 @@ def build_report(results, state, now) -> tuple[str, str]:
         "(Amica and Donaldson both noted this).",
         "2. **Confirm the UEN against a Bizfile extract** — 202620924G came "
         "from our own invoices and is not yet independently verified.",
-        "3. **Scope the US and Brazil filings** — TrueTech Inc and Black "
-        "King have not yet been approached for a quotation.",
+        "3. **Add Class 35?** — Kwok flagged retail/wholesale services as a "
+        "possible addition to the cacao filing. Useful if we sell "
+        "direct-to-consumer under the mark; say if you want it quoted.",
         "",
         f"*Generated automatically {now.strftime('%Y-%m-%d %H:%M UTC')} by "
         "`trademark_rfq_status.py`. Chase cadence: max "
