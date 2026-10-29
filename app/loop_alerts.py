@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 from . import loop_status
@@ -45,6 +46,40 @@ DEFAULT_DEDUPE_S = 3600
 MAX_ALERTS_PER_SWEEP = 10
 #: Keep the nudge readable; goal text can be long.
 MAX_GOAL_CHARS = 280
+
+# A **permanently** dead target (deleted topic / unknown channel / blocked bot)
+# can never succeed no matter how often it is retried. Because a failed send
+# normally releases its dedupe claim so the next sweep can retry it, such a
+# target would be retried every single sweep forever: a oneshot service flipping
+# to `failed` every 10 minutes and masking genuine failures. Permanent failures
+# therefore keep their claim for this long (they are quarantined, not retried).
+QUARANTINE_S = 7 * 86400
+
+# Permanent-failure signatures. Deliberately an explicit list rather than "any
+# 4xx": a 403 is often a transient permissions blip and *should* be retried.
+_PERMANENT_RE = re.compile(
+    r"(thread not found|chat not found|channel not found|unknown channel|"
+    r"bot was blocked|user is deactivated|peer_id_invalid|channel_invalid)",
+    re.I,
+)
+
+# Redis set of quarantined dedupe keys, so dead targets are reportable rather
+# than silently swallowed.
+QUARANTINE_SET = "loop:alert:quarantined"
+
+
+def is_permanent_failure(reason: str) -> bool:
+    """True when retrying could never succeed (deleted topic, unknown channel).
+
+    A ``discord 404`` is permanent; a ``discord 500`` or a timeout is not.
+    """
+    if not reason:
+        return False
+    if _PERMANENT_RE.search(reason):
+        return True
+    # Unknown channel/thread/channel-deleted, reported as a bare 404.
+    return bool(re.search(r"\b(404)\b", reason))
+
 
 _TG_SEND = "https://api.telegram.org"
 _DC_API = "https://discord.com/api/v10"
@@ -470,6 +505,8 @@ def deliver_all(
         errors=list(run.errors),
         capped=run.capped,
     )
+    quarantined: list[str] = []
+    moment_ref = [time.time()]
     for alert in run.planned:
         result = deliver(alert, dry_run=dry_run, environ=environ)
         if result["status"] in ("sent", "dry_run"):
@@ -486,8 +523,39 @@ def deliver_all(
                 "alert failed for %s: %s", alert.session_id, result.get("reason")
             )
             if client is not None and not dry_run:
-                try:
-                    client.delete(alert.dedupe_key)
-                except Exception:  # pragma: no cover - defensive
-                    pass
+                reason = str(result.get("reason", ""))
+                if is_permanent_failure(reason):
+                    # Retrying cannot help. Re-claim for QUARANTINE_S so this
+                    # target stops being retried every sweep, and record it so
+                    # dead targets stay reportable rather than swallowed.
+                    try:
+                        client.set(
+                            alert.dedupe_key, int(moment_ref[0] or 0), ex=QUARANTINE_S
+                        )
+                        client.sadd(QUARANTINE_SET, alert.dedupe_key)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        # Never let bookkeeping break the sweep -- but do not hide
+                        # it either: a silent failure here would re-open the very
+                        # retry loop this branch exists to close.
+                        log.warning(
+                            "quarantine bookkeeping failed for %s: %s",
+                            alert.session_id,
+                            exc,
+                        )
+                    quarantined.append(f"{alert.target.describe()}: {reason[:120]}")
+                    log.warning(
+                        "alert target QUARANTINED for %dd (permanent failure, will not "
+                        "retry): %s -- %s",
+                        QUARANTINE_S // 86400,
+                        alert.target.describe(),
+                        reason[:160],
+                    )
+                else:
+                    # Transient: release the claim so the next sweep retries.
+                    try:
+                        client.delete(alert.dedupe_key)
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+    if quarantined:
+        log.warning("loop_alert_quarantined: n=%d", len(quarantined))
     return out
