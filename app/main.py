@@ -58,7 +58,7 @@ from .context import (
     refresh_system_prompt,
 )
 from . import turn_heartbeat as _turn_heartbeat
-from . import session_claim
+from . import dispatch_registry, session_claim
 from . import session_state
 from .singleton_guard import run_as_singleton
 from .deploy_watcher import heartbeat as _dw_heartbeat
@@ -365,6 +365,10 @@ async def _session_lock_guard(session_id: str) -> AsyncIterator[None]:
     # turn, so acquire() returns None and says so loudly; layer 1 always holds.
     claim = await session_claim.acquire(session_id, token)
     session_claim.start_renewer(claim)
+    # PR-A: record which worker ACCEPTED this session. Observe-only -- nothing
+    # routes on it yet. Fire-and-forget by design: an affinity record must never
+    # add latency to the turn it describes, and a Redis failure is swallowed.
+    dispatch_registry.note_session_accepted(session_id)
     try:
         yield
     finally:
@@ -753,6 +757,15 @@ async def lifespan(app: FastAPI):
         _gc_artifacts(int(os.getenv("ARTIFACT_GC_MAX_AGE_DAYS", "14")))
     except Exception as exc:  # never block startup
         logger.warning("artifact GC on boot failed: %s", exc)
+
+    # ── PR-A: per-worker identity heartbeat (observe-only, default OFF) ──
+    # UN-guarded on purpose -- the opposite of the loops below. run_as_singleton
+    # would let exactly ONE worker register, and a registry listing one worker
+    # out of N is worse than no registry at all (see app/dispatch_registry.py).
+    try:
+        asyncio.create_task(dispatch_registry.heartbeat_loop())
+    except Exception as exc:  # noqa: BLE001 -- never block startup
+        logger.warning("Worker heartbeat failed to start: %s", exc)
 
     if not settings.dry_run:
         # ── Catalog preload: fetch events catalog synchronously at startup ──
