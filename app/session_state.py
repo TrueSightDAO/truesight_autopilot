@@ -79,6 +79,7 @@ def _reset_for_tests() -> None:
     _warned = False
     _LOCAL_QUEUES.clear()
     _LOCAL_CANCELS.clear()
+    _LOCAL_PROGRESS.clear()
 
 
 def _warn(exc: Exception) -> None:
@@ -222,3 +223,77 @@ def clear_cancel(scope: str) -> None:
     except Exception as exc:  # noqa: BLE001
         _warn(exc)
         _LOCAL_CANCELS.pop(scope, None)
+
+
+# --------------------------------------------------------------------------- #
+# live progress
+# --------------------------------------------------------------------------- #
+#: Live progress is ephemeral: a record that outlives its turn is a lie.
+PROGRESS_TTL_SECS = 7200
+
+#: Fallback store, used when sharing is off or Redis is unavailable.
+_LOCAL_PROGRESS: dict[str, dict] = {}
+
+
+def _progress_key(scope: str) -> str:
+    return f"progress:{scope}"
+
+
+def progress_set(scope: str, record: dict) -> None:
+    """Publish the whole progress record for ``scope``.
+
+    One key, one JSON blob, one round-trip. The record is a few hundred bytes and
+    is written once per tool round / per tool boundary -- NOT per token -- so the
+    cost is bounded by round count, not response size.
+    """
+    if not enabled():
+        _LOCAL_PROGRESS[scope] = dict(record)
+        return
+    try:
+        _get_client().setex(_progress_key(scope), PROGRESS_TTL_SECS, json.dumps(record))
+    except Exception as exc:  # noqa: BLE001
+        _warn(exc)
+        _LOCAL_PROGRESS[scope] = dict(record)
+
+
+def progress_get(scope: str) -> dict | None:
+    """Read the progress record for ``scope``, or ``None`` when idle."""
+    if not enabled():
+        rec = _LOCAL_PROGRESS.get(scope)
+        return dict(rec) if rec else None
+    try:
+        raw = _get_client().get(_progress_key(scope))
+        return json.loads(raw) if raw else None
+    except Exception as exc:  # noqa: BLE001
+        _warn(exc)
+        rec = _LOCAL_PROGRESS.get(scope)
+        return dict(rec) if rec else None
+
+
+def progress_clear(scope: str) -> None:
+    """Remove the progress record (turn ended, success or error)."""
+    if not enabled():
+        _LOCAL_PROGRESS.pop(scope, None)
+        return
+    try:
+        _get_client().delete(_progress_key(scope))
+    except Exception as exc:  # noqa: BLE001
+        _warn(exc)
+    _LOCAL_PROGRESS.pop(scope, None)
+
+
+def progress_scopes() -> list[str]:
+    """All scopes currently holding a progress record.
+
+    Used by the manual-compaction tool to refuse touching a session that is
+    mid-turn in another thread. Local-only when sharing is disabled.
+    """
+    scopes = set(_LOCAL_PROGRESS)
+    if enabled():
+        try:
+            client = _get_client()
+            for key in client.scan_iter(match="progress:*", count=200):
+                scopes.add(str(key).split(":", 1)[1])
+        except Exception as exc:  # noqa: BLE001
+            _warn(exc)
+    return sorted(scopes)
