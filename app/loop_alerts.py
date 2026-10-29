@@ -339,7 +339,34 @@ def _telegram_token(environ=None) -> str:
 
 
 def _discord_token(environ=None) -> str:
+    """Resolve the Discord bot token used to post loop alerts.
+
+    Order matters and is deliberate:
+
+    1. Vault ``ENVOY_DISCORD_BOT_TOKEN`` -- loop nudges should speak as
+       ``envoy_truesight``, not as Sophia. This is checked BEFORE anything
+       else so the loop's voice is controlled in exactly one place (the
+       vault) and an ambient ``DISCORD_BOT_TOKEN`` in the process env can
+       never silently re-attribute the nudges back to the autopilot.
+    2. The original chain (env -> settings -> vault ``DISCORD_BOT_TOKEN``),
+       unchanged, so clearing/removing the Envoy key degrades gracefully
+       instead of breaking Discord alerts entirely.
+    """
     env = os.environ if environ is None else environ
+
+    # 1. Envoy-first. Any failure (vault unavailable, key absent, empty
+    #    value) falls through to the legacy chain below -- never raises.
+    envoy_tok = ""
+    try:
+        from .vault import get_vault
+
+        envoy_tok = get_vault().get_value("ENVOY_DISCORD_BOT_TOKEN") or ""
+    except Exception:  # noqa: BLE001  # pragma: no cover - vault/key absent
+        envoy_tok = ""
+    if envoy_tok:
+        return envoy_tok
+
+    # 2. Legacy chain, unchanged.
     for name in ("DISCORD_BOT_TOKEN", "DISCORD_TOKEN"):
         if env.get(name):
             return env[name]
