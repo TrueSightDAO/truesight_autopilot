@@ -40,7 +40,7 @@ import os
 import time
 from typing import Any
 
-from . import session_state
+from . import dispatch_registry, session_state
 
 logger = logging.getLogger(__name__)
 
@@ -209,12 +209,35 @@ def _active_claims() -> tuple[list[dict[str, Any]], str | None]:
     return out, None
 
 
+def _workers() -> tuple[dict[str, Any], str | None]:
+    """Fleet view from ``dispatch_registry`` -- best effort.
+
+    Returns ``(snapshot, note)``. The snapshot is already a public-safe
+    projection (``worker_ref``, never ``host:pid``), so this only guards against
+    a broken registry: the board must degrade, never 500.
+    """
+    try:
+        snap = dispatch_registry.snapshot()
+    except Exception as exc:  # noqa: BLE001 -- registry never raises
+        logger.debug("dispatch_registry.snapshot failed: %s", exc)
+        return (
+            {"enabled": False, "workers": [], "worker_count": 0},
+            "worker registry unavailable",
+        )
+    note = None
+    if snap.get("degraded"):
+        note = snap.get("reason") or "worker registry unavailable"
+    return snap, note
+
+
 def live_state_payload() -> dict[str, Any]:
     """Build the complete public snapshot. Never raises."""
     sessions, sessions_note = _sessions()
     claims, claims_note = _active_claims()
 
-    degraded = [n for n in (sessions_note, claims_note) if n]
+    workers, workers_note = _workers()
+
+    degraded = [n for n in (sessions_note, claims_note, workers_note) if n]
 
     return {
         "enabled": True,
@@ -224,6 +247,7 @@ def live_state_payload() -> dict[str, Any]:
         "sessions": sessions,
         "session_count": len(sessions),
         "active_claims": claims,
+        "workers": workers,
         "claim_count": len(claims),
         "degraded": degraded,
     }
