@@ -460,3 +460,84 @@ def test_default_call_consumes_no_claim():
     assert client.claims == {}, "default call must not claim"
     real = loop_alerts.plan_alerts(statuses, client, environ={}, dry_run=False)
     assert len(real.planned) == 1, "the real send must still be available"
+
+
+# --- Discord token resolution (Envoy-first) ----------------------------------
+
+
+class FakeVault:
+    """Minimal vault stand-in exposing get_value(name) with a name->value map.
+
+    A missing key raises like the real Vault.get_value does, so the tests
+    exercise the real exception path rather than a gentler one.
+    """
+
+    def __init__(self, values: dict[str, str] | None = None):
+        self.values = values or {}
+        self.reads: list[str] = []
+
+    def get_value(self, name: str) -> str:
+        self.reads.append(name)
+        if name not in self.values:
+            raise ValueError(f"Credential '{name}' not found.")
+        return self.values[name]
+
+
+def _patch_vault(monkeypatch, vault):
+    monkeypatch.setattr("app.vault.get_vault", lambda: vault)
+
+
+def test_discord_token_prefers_envoy_vault_key(monkeypatch):
+    """ENVOY_DISCORD_BOT_TOKEN in the vault must beat an ambient env token.
+
+    This is the whole point of the change: loop nudges should post as
+    envoy_truesight even when the process env still carries Sophia's token.
+    """
+    vault = FakeVault(
+        {
+            "ENVOY_DISCORD_BOT_TOKEN": "envoy-tok",
+            "DISCORD_BOT_TOKEN": "sophia-vault-tok",
+        }
+    )
+    _patch_vault(monkeypatch, vault)
+    got = loop_alerts._discord_token(
+        {"DISCORD_BOT_TOKEN": "sophia-env-tok", "DISCORD_TOKEN": "sophia-env-tok2"}
+    )
+    assert got == "envoy-tok"
+    # It must not even need to consult the legacy key.
+    assert vault.reads[0] == "ENVOY_DISCORD_BOT_TOKEN"
+    assert "DISCORD_BOT_TOKEN" not in vault.reads
+
+
+def test_discord_token_falls_back_to_env_when_envoy_empty(monkeypatch):
+    """An empty/cleared Envoy key must degrade to the old chain, not crash."""
+    _patch_vault(monkeypatch, FakeVault({"ENVOY_DISCORD_BOT_TOKEN": ""}))
+    assert (
+        loop_alerts._discord_token({"DISCORD_BOT_TOKEN": "sophia-env-tok"})
+        == "sophia-env-tok"
+    )
+
+
+def test_discord_token_falls_back_when_envoy_key_missing(monkeypatch):
+    """Key absent (ValueError from the vault) -> legacy chain still resolves."""
+    _patch_vault(monkeypatch, FakeVault({"DISCORD_BOT_TOKEN": "sophia-vault-tok"}))
+    assert (
+        loop_alerts._discord_token({"DISCORD_TOKEN": "sophia-env-tok2"})
+        == "sophia-env-tok2"
+    )
+
+
+def test_discord_token_falls_back_to_legacy_vault_key(monkeypatch):
+    """No env, Envoy absent -> the legacy vault DISCORD_BOT_TOKEN is used."""
+    _patch_vault(monkeypatch, FakeVault({"DISCORD_BOT_TOKEN": "sophia-vault-tok"}))
+    assert loop_alerts._discord_token({}) == "sophia-vault-tok"
+
+
+def test_discord_token_survives_vault_unavailable(monkeypatch):
+    """A broken vault must not raise out of delivery -- return "" instead."""
+
+    def _boom():
+        raise RuntimeError("vault exploded")
+
+    monkeypatch.setattr("app.vault.get_vault", _boom)
+    assert loop_alerts._discord_token({}) == ""
