@@ -204,6 +204,61 @@ def test_capping_bounds_a_backlog_first_run():
     assert run.capped == 15
 
 
+def test_already_claimed_alerts_do_not_consume_the_cap():
+    """Regression (sweep #2, 2026-10-29): dedupe must be applied BEFORE the cap.
+
+    Ten already-alerted sessions carried live claims; 9 genuinely-new alerts sat
+    at the tail of the ordering. Capping 19 -> 10 picked only the stale ten,
+    whose claims all failed, so planned=0 while the 9 real alerts were counted
+    as "capped" again -- and would be, on every sweep, forever.
+    """
+    client = FakeRedis()
+    stale = [f"X:tg:-100:{i}" for i in range(10)]
+    fresh = [f"X:tg:-200:{i}" for i in range(9)]
+    statuses = [_status(s, loop_status.STATE_LOST_GOAL, age="900") for s in stale] + [
+        _status(s, loop_status.STATE_LOST_GOAL, age="600") for s in fresh
+    ]
+    # Sweep #1 already delivered the ten older ones, so they hold live claims.
+    for sid in stale:
+        client.claims[f"loop:alert:{sid}:lost_goal"] = 1
+
+    run = loop_alerts.plan_alerts(
+        statuses, client, environ={}, dry_run=False, max_alerts=10
+    )
+    # The stale ten are deduped WITHOUT consuming any of the ten slots...
+    assert sorted(run.skipped_dedupe) == sorted(
+        f"loop:alert:{sid}:lost_goal" for sid in stale
+    )
+    # ...so all nine genuinely-eligible targets get their alert, and nothing
+    # is deferred. Before the fix this was planned=0 capped=9, every sweep.
+    assert sorted(a.session_id for a in run.planned) == sorted(fresh)
+    assert run.capped == 0
+
+
+def test_cap_counts_only_eligible_alerts():
+    """A capped backlog must drain: deferred alerts get sent once slots free up."""
+    client = FakeRedis()
+    statuses = [
+        _status(f"X:tg:-100:{i}", loop_status.LOST_GOAL_PLACEHOLDER, age="900")
+        for i in range(15)
+    ]
+    first = loop_alerts.plan_alerts(
+        statuses, client, environ={}, dry_run=False, max_alerts=10
+    )
+    assert len(first.planned) == 10
+    assert first.capped == 5
+    sent_first = {a.session_id for a in first.planned}
+
+    second = loop_alerts.plan_alerts(
+        statuses, client, environ={}, dry_run=False, max_alerts=10
+    )
+    assert len(second.skipped_dedupe) == 10
+    assert len(second.planned) == 5
+    assert second.capped == 0
+    # Exactly the five that were deferred, none re-sent.
+    assert {a.session_id for a in second.planned}.isdisjoint(sent_first)
+
+
 def test_cap_zero_is_respected():
     many = [_status(f"X:tg:-100:{i}", loop_status.STATE_LOST_GOAL) for i in range(3)]
     run = loop_alerts.plan_alerts(

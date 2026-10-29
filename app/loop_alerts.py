@@ -119,6 +119,7 @@ class AlertRun:
     skipped_dedupe: list[str] = field(default_factory=list)
     unmapped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    #: Eligible (not already claimed) alerts deferred by the per-sweep cap.
     capped: int = 0
 
 
@@ -274,7 +275,13 @@ def plan_alerts(
             goal=record.get("goal") or "",
             age_s=_age_of(record),
         )
-        if client is not None and dry_run:
+        # Skip already-claimed alerts BEFORE the cap -- in live mode too. The
+        # authoritative claim remains the SET NX below; this read is what makes
+        # the per-sweep budget honest. Capping a list that still contains
+        # already-alerted sessions lets those stale entries eat every slot, so
+        # the genuinely-new alerts sitting at the tail of the ordering get
+        # capped again, sweep after sweep, and are never delivered.
+        if client is not None:
             try:
                 already = bool(client.exists(alert.dedupe_key))
             except Exception as exc:  # pragma: no cover - defensive
