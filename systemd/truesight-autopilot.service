@@ -8,21 +8,29 @@ User=ubuntu
 WorkingDirectory=/opt/truesight_autopilot
 Environment=PATH=/opt/truesight_autopilot/.venv/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/opt/truesight_autopilot/.env
-# --workers 4, bumped 2026-10-29 by Envoy per governor go-ahead. Previously pinned to
-# 1 because per-session state (locks, queues, live-progress) lived in module-level
-# dicts, unsafe to fork across workers (bricked threads 3 and 780 on 2026-06-10).
-# PRs #567/#569/#571/#573 moved locks/queues/cancel-flags/live-progress to shared
-# Redis state, and SESSION_CLAIM_ENABLED=true (set in .env) activates the
-# cross-process claim layer. Known residual risk, not yet addressed: the GitHub
-# rate-limit semaphore (app/github_throttle.py) is still per-process, not a shared
-# Redis budget. Also known: 9 singleton background loops (calendar watchdog, email
-# watch, etc.) ran once per worker until app/singleton_guard.py (in progress) added
-# a cross-process guard -- see agentic_ai_context/plans/SOPHIA_SIDEKIQ_MULTIPROCESS_PLAN.md
-# and SOPHIA_MULTI_PROCESS_WORKER_PLAN.md (PR #1740). IMPORTANT: this file is the
-# deploy source of truth (scripts/deploy.sh copies it over /etc/systemd/system/ on
-# every deploy) -- editing only the live unit file does NOT persist past the next
-# deploy from any thread. Rollback: git revert this file's change, or set --workers 1.
-ExecStart=/opt/truesight_autopilot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
+# --workers 1 is REQUIRED until app/singleton_guard.py EXISTS. Verified 2026-10-29:
+# that file is absent and referenced nowhere, so it does not guard anything.
+# Without it, every worker runs its own copy of the lifespan background loops
+# (app/main.py 711-804): email_watch + email_poller (both send OUTBOUND EMAIL),
+# calendar_watchdog (sends nudges), aws_monitor, followup_loop, _context_sync_loop,
+# _branch_janitor_loop, _pending_janitor_loop, _catalog_refresh_loop. At N workers
+# that is N x duplicate outbound mail to real correspondents.
+#
+# Shared per-session state is DONE and no longer the blocker: PRs #567/#569/#571/#573
+# moved locks / queues / cancel-flags / live-progress to Redis, gated by
+# SESSION_STATE_SHARED=1 (set durably in .env) plus SESSION_CLAIM_ENABLED=true.
+# Those are prerequisites for workers > 1, not sufficient on their own.
+#
+# Remaining blockers before bumping to 4:
+#   1. app/singleton_guard.py with a real cross-process guard on all lifespan loops.
+#      A previous revision of this comment claimed it had been added; it had not.
+#   2. app/github_throttle.py is a per-process semaphore -- N workers each track
+#      their own concurrency against one 5000/hr PAT. Needs a shared Redis budget.
+#
+# IMPORTANT: this file is the deploy source of truth (scripts/deploy.sh:315 copies
+# it over /etc/systemd/system/ on EVERY deploy). Editing only the live unit file
+# does NOT persist -- that is how the 2026-10-29 workers bump was silently reverted.
+ExecStart=/opt/truesight_autopilot/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 Restart=always
 RestartSec=10
 StandardOutput=journal
