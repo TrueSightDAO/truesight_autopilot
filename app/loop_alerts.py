@@ -361,7 +361,35 @@ def plan_alerts(
 
 
 def _telegram_token(environ=None) -> str:
+    """Resolve the Telegram bot token used to post loop alerts.
+
+    Order matters and is deliberate (mirrors :func:`_discord_token`):
+
+    1. Vault ``ENVOY_TELEGRAM_BOT_TOKEN`` -- loop nudges should speak as
+       ``@nelanco_claude_bot`` (Envoy's own bot), not as Sophia's bot. This
+       is checked BEFORE anything else so the loop's voice is controlled in
+       exactly one place (the vault) and an ambient
+       ``TELEGRAM_BOT_API_KEY`` in the process env can never silently
+       re-attribute the nudges back to the autopilot.
+    2. The original chain (env ``TELEGRAM_BOT_API_KEY`` -> settings),
+       unchanged, so clearing/removing the Envoy key degrades gracefully
+       instead of breaking Telegram nudges entirely.
+    """
     env = os.environ if environ is None else environ
+
+    # 1. Envoy-first. Any failure (vault unavailable, key absent, empty
+    #    value) falls through to the legacy chain below -- never raises.
+    envoy_tok = ""
+    try:
+        from .vault import get_vault
+
+        envoy_tok = get_vault().get_value("ENVOY_TELEGRAM_BOT_TOKEN") or ""
+    except Exception:  # noqa: BLE001  # pragma: no cover - vault/key absent
+        envoy_tok = ""
+    if envoy_tok:
+        return envoy_tok
+
+    # 2. Legacy chain, unchanged.
     tok = env.get("TELEGRAM_BOT_API_KEY") or ""
     if tok:
         return tok

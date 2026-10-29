@@ -362,6 +362,9 @@ def test_dry_run_delivery_marks_dry_run_no_http(monkeypatch):
 
 
 def test_deliver_telegram_posts_to_thread(monkeypatch):
+    # Isolate from the real vault: once ENVOY_TELEGRAM_BOT_TOKEN is live the
+    # Envoy-first lookup would otherwise hand this test a real bot token.
+    _patch_vault(monkeypatch, FakeVault({}))
     captured = {}
 
     class Resp:
@@ -390,7 +393,12 @@ def test_deliver_telegram_posts_to_thread(monkeypatch):
     assert captured["json"]["message_thread_id"] == 30550
 
 
-def test_deliver_without_token_is_an_error_not_a_crash():
+def test_deliver_without_token_is_an_error_not_a_crash(monkeypatch):
+    # Empty env AND empty vault, and settings neutralised too: on a real box
+    # config loads .env, so without this the "no token" case would resolve a
+    # live token and attempt an actual Telegram post from the test suite.
+    _patch_vault(monkeypatch, FakeVault({}))
+    monkeypatch.setattr("app.config.settings.telegram_bot_api_key", "")
     alert = loop_alerts.Alert(
         session_id=TG, state="lost_goal", target=loop_alerts.target_for_session(TG)
     )
@@ -541,3 +549,89 @@ def test_discord_token_survives_vault_unavailable(monkeypatch):
 
     monkeypatch.setattr("app.vault.get_vault", _boom)
     assert loop_alerts._discord_token({}) == ""
+
+
+# --- Telegram token resolution (Envoy-first) ---------------------------------
+
+
+def test_telegram_token_prefers_envoy_vault_key(monkeypatch):
+    """ENVOY_TELEGRAM_BOT_TOKEN must beat an ambient TELEGRAM_BOT_API_KEY.
+
+    This is the whole point of the change: loop nudges should post as
+    @nelanco_claude_bot even when the process env still carries Sophia's
+    TELEGRAM_BOT_API_KEY.
+    """
+    vault = FakeVault({"ENVOY_TELEGRAM_BOT_TOKEN": "envoy-tg-tok"})
+    _patch_vault(monkeypatch, vault)
+    got = loop_alerts._telegram_token({"TELEGRAM_BOT_API_KEY": "sophia-env-tok"})
+    assert got == "envoy-tg-tok"
+    # It must not even need to consult the legacy key.
+    assert vault.reads[0] == "ENVOY_TELEGRAM_BOT_TOKEN"
+    assert "TELEGRAM_BOT_API_KEY" not in vault.reads
+
+
+def test_telegram_token_falls_back_to_env_when_envoy_empty(monkeypatch):
+    """An empty/cleared Envoy key must degrade to the old chain, not crash."""
+    _patch_vault(monkeypatch, FakeVault({"ENVOY_TELEGRAM_BOT_TOKEN": ""}))
+    assert (
+        loop_alerts._telegram_token({"TELEGRAM_BOT_API_KEY": "sophia-env-tok"})
+        == "sophia-env-tok"
+    )
+
+
+def test_telegram_token_falls_back_when_envoy_key_missing(monkeypatch):
+    """Key absent (ValueError from the vault) -> the env chain still resolves."""
+    _patch_vault(monkeypatch, FakeVault({}))
+    assert (
+        loop_alerts._telegram_token({"TELEGRAM_BOT_API_KEY": "sophia-env-tok"})
+        == "sophia-env-tok"
+    )
+
+
+def test_telegram_token_falls_back_to_settings(monkeypatch):
+    """No Envoy key and no env -> settings.telegram_bot_api_key, as before."""
+    _patch_vault(monkeypatch, FakeVault({}))
+    monkeypatch.setattr("app.config.settings.telegram_bot_api_key", "settings-tok")
+    assert loop_alerts._telegram_token({}) == "settings-tok"
+
+
+def test_telegram_token_survives_vault_unavailable(monkeypatch):
+    """A broken vault must not raise out of delivery -- it falls through."""
+
+    def _boom():
+        raise RuntimeError("vault exploded")
+
+    monkeypatch.setattr("app.vault.get_vault", _boom)
+    monkeypatch.setattr("app.config.settings.telegram_bot_api_key", "settings-tok")
+    assert loop_alerts._telegram_token({}) == "settings-tok"
+
+
+def test_deliver_telegram_uses_envoy_token(monkeypatch):
+    """End-to-end proof: the token in the send URL is Envoy's, not Sophia's."""
+    captured = {}
+
+    class Resp:
+        status_code = 200
+        text = "{}"
+
+        def __init__(self):
+            self.headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        return Resp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    _patch_vault(monkeypatch, FakeVault({"ENVOY_TELEGRAM_BOT_TOKEN": "envoy-tg-tok"}))
+    alert = loop_alerts.Alert(
+        session_id=TG, state="lost_goal", target=loop_alerts.target_for_session(TG)
+    )
+    out = loop_alerts.deliver(
+        alert, dry_run=False, environ={"TELEGRAM_BOT_API_KEY": "sophia-env-tok"}
+    )
+    assert out["status"] == "sent"
+    assert "/botenvoy-tg-tok/sendMessage" in captured["url"]
+    assert "sophia-env-tok" not in captured["url"]
