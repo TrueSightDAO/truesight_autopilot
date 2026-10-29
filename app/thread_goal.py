@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 
 GOAL_OPEN = "open"
 GOAL_COMPLETED = "completed"
+# Terminal, but NOT the same as completed: a dismissed goal was dropped by a
+# governor, not delivered. Both stop the loop and silence ``lost_goal``
+# alerting; only ``completed`` means the work actually happened.
+GOAL_DISMISSED = "dismissed"
 
 # A3 wires CHAT_MAX_GOAL_TURNS to this; A1 keeps the ceiling a plain parameter so
 # the primitive stays pure and unit-testable.
@@ -132,7 +136,7 @@ def current_goal(session_id: str, *, path: Path | None = None) -> ThreadGoal | N
     """Reconstruct the current goal for ``session_id`` from the event log.
 
     Returns ``None`` when no goal has ever been opened for that session. A later
-    ``open`` supersedes an earlier one; ``complete`` is sticky until the next
+    ``open`` supersedes an earlier one; ``complete``/``dismiss`` are sticky until the next
     ``open`` (a stray ``turn`` after completion must not resurrect the goal).
     """
     if not session_id:
@@ -174,6 +178,17 @@ def current_goal(session_id: str, *, path: Path | None = None) -> ThreadGoal | N
                 goal_text=goal.goal_text,
                 done_criteria=goal.done_criteria,
                 status=GOAL_COMPLETED,
+                opened_ts=goal.opened_ts,
+                updated_ts=ts,
+                turns=goal.turns,
+                last_progress_ts=goal.last_progress_ts,
+            )
+        elif kind == "dismiss":
+            goal = ThreadGoal(
+                session_id=session_id,
+                goal_text=goal.goal_text,
+                done_criteria=goal.done_criteria,
+                status=GOAL_DISMISSED,
                 opened_ts=goal.opened_ts,
                 updated_ts=ts,
                 turns=goal.turns,
@@ -241,6 +256,37 @@ def complete_goal(
         return None
     ts = time.time() if now is None else now
     _append_event({"event": "complete", "session_id": session_id, "ts": ts}, path=path)
+    return current_goal(session_id, path=path)
+
+
+def dismiss_goal(
+    session_id: str,
+    *,
+    reason: str = "",
+    now: float | None = None,
+    path: Path | None = None,
+) -> ThreadGoal | None:
+    """Mark the session's goal dismissed -- abandoned, and it will not be done.
+
+    Unlike :func:`complete_goal` this does **not** claim the work was delivered:
+    it records that a governor decided to drop the goal. The goal loop treats
+    both as terminal, so a dismissed goal stops auto-advance *and* stops
+    ``lost_goal`` alerting (``loop_daemon.load_goals`` only surfaces
+    ``GOAL_OPEN`` goals). The distinction survives in the event log so a
+    dismissed goal is never mistaken for a completed one.
+    """
+    if not session_id:
+        return None
+    ts = time.time() if now is None else now
+    _append_event(
+        {
+            "event": "dismiss",
+            "session_id": session_id,
+            "reason": (reason or "").strip(),
+            "ts": ts,
+        },
+        path=path,
+    )
     return current_goal(session_id, path=path)
 
 
