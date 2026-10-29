@@ -271,18 +271,19 @@ async def heartbeat_loop(
         await asyncio.sleep(max(1.0, float(interval)))
 
 
-def workers(client: Any = None, *, now: float | None = None) -> list[dict]:
-    """Every worker ever registered, alive ones first. Never raises."""
-    ts = float(now if now is not None else time.time())
-    try:
-        cli = client or redis_claim.get_client()
-        members = cli.zrange(WORKERS_INDEX, 0, -1, withscores=True)
-        if not members:
-            return []
-        raws = cli.mget([worker_key(str(m)) for m, _ in members])
-    except Exception as ex:  # noqa: BLE001
-        _warn(ex)
+def _read_workers(client: Any, ts: float) -> list[dict]:
+    """Read and shape the fleet. RAISES on Redis failure; callers decide.
+
+    Kept separate from :func:`workers` so :func:`snapshot` can tell "no workers"
+    apart from "Redis is broken". Collapsing both into an empty list would make
+    a dead Redis render as a healthy empty fleet -- exactly the lie a dashboard
+    must not tell.
+    """
+    cli = client or redis_claim.get_client()
+    members = cli.zrange(WORKERS_INDEX, 0, -1, withscores=True)
+    if not members:
         return []
+    raws = cli.mget([worker_key(str(m)) for m, _ in members])
 
     out: list[dict[str, Any]] = []
     for (member, score), raw in zip(members, raws, strict=False):
@@ -310,6 +311,16 @@ def workers(client: Any = None, *, now: float | None = None) -> list[dict]:
     # Alive first, then freshest beat first.
     out.sort(key=lambda r: (not r["alive"], r["age_secs"]))
     return out
+
+
+def workers(client: Any = None, *, now: float | None = None) -> list[dict]:
+    """Every worker ever registered, alive ones first. Never raises."""
+    ts = float(now if now is not None else time.time())
+    try:
+        return _read_workers(client, ts)
+    except Exception as ex:  # noqa: BLE001
+        _warn(ex)
+        return []
 
 
 def alive_workers(client: Any = None) -> list[dict]:
@@ -428,8 +439,9 @@ def snapshot(client: Any = None, *, now: float | None = None) -> dict[str, Any]:
             "reason": "DISPATCH_REGISTRY_ENABLED is off; set it to register workers.",
         }
 
+    ts = float(now if now is not None else time.time())
     try:
-        records = workers(client, now=now)
+        records = _read_workers(client, ts)
     except Exception as ex:  # noqa: BLE001
         _warn(ex)
         return {
