@@ -101,6 +101,61 @@ def complete_thread_goal(session_id: str | None = None) -> str:
     )
 
 
+def dismiss_thread_goal(reason: str = "", session_id: str | None = None) -> str:
+    """Drop this thread's goal without claiming it was delivered.
+
+    Use when a governor decides the work is no longer wanted. ``lost_goal``
+    alerting goes quiet for the thread, but the log records a *dismissal*, not a
+    completion -- so reporting can still tell abandoned work from delivered work.
+    """
+    sid = session_id
+    if not sid:
+        return json.dumps(
+            {
+                "status": "error",
+                "reason": "no session_id in context -- nothing to dismiss",
+            }
+        )
+    before = thread_goal.current_goal(sid)
+    if before is None:
+        return json.dumps(
+            {
+                "status": "ok",
+                "note": "no goal was set for this thread -- nothing to dismiss",
+            }
+        )
+    if before.status != thread_goal.GOAL_OPEN:
+        return json.dumps(
+            {
+                "status": "ok",
+                "goal": {"goal_text": before.goal_text, "status": before.status},
+                "note": "goal is already terminal -- nothing to dismiss",
+            }
+        )
+    g = thread_goal.dismiss_goal(sid, reason=reason)
+    logger.info(
+        "thread-goal dismissed: session=%s goal=%r reason=%r",
+        sid,
+        before.goal_text,
+        reason,
+    )
+    return json.dumps(
+        {
+            "status": "ok",
+            "goal": {
+                "goal_text": (g.goal_text if g else before.goal_text),
+                "status": (g.status if g else thread_goal.GOAL_DISMISSED),
+                "turns": (g.turns if g else before.turns),
+            },
+            "reason": (reason or "").strip(),
+            "note": (
+                "Goal dismissed (not completed) -- auto-continue stops and "
+                "loop-alert nudges for this thread stop."
+            ),
+        }
+    )
+
+
 TOOL_SPECS = [
     ToolSpec(
         name="set_thread_goal",
@@ -142,5 +197,33 @@ TOOL_SPECS = [
         ),
         parameters={"type": "object", "properties": {}, "required": []},
         handler=lambda args, ctx: complete_thread_goal(session_id=_session_from(ctx)),
+    ),
+    ToolSpec(
+        name="dismiss_thread_goal",
+        description=(
+            "Drop this thread's goal WITHOUT claiming it was delivered. Call this "
+            "when a governor decides the work is no longer wanted (superseded, "
+            "obsolete, or deliberately abandoned). It stops auto-advance and stops "
+            "the hourly loop-alert nudges for this thread, while recording a "
+            "dismissal rather than a completion -- so abandoned work stays "
+            "distinguishable from work that actually shipped. Prefer "
+            "complete_thread_goal when the done criteria were met."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why the goal is being dropped (superseded / no longer "
+                        "wanted / blocked). Recorded in the event log."
+                    ),
+                }
+            },
+            "required": [],
+        },
+        handler=lambda args, ctx: dismiss_thread_goal(
+            args.get("reason", ""), session_id=_session_from(ctx)
+        ),
     ),
 ]
