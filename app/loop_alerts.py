@@ -274,14 +274,9 @@ def plan_alerts(
             goal=record.get("goal") or "",
             age_s=_age_of(record),
         )
-        if client is not None:
+        if client is not None and dry_run:
             try:
-                if dry_run:
-                    already = bool(client.exists(alert.dedupe_key))
-                else:
-                    already = not bool(
-                        client.set(alert.dedupe_key, int(moment), nx=True, ex=dedupe_s)
-                    )
+                already = bool(client.exists(alert.dedupe_key))
             except Exception as exc:  # pragma: no cover - defensive
                 run.errors.append(f"{sid}: dedupe check failed: {exc}")
                 continue
@@ -297,7 +292,26 @@ def plan_alerts(
             len(run.planned),
             max_alerts,
         )
+        # Cap BEFORE claiming: a capped alert was never delivered, so it must not
+        # burn its dedupe claim (that would silence it for dedupe_s).
         run.planned = run.planned[:max_alerts]
+
+    # Live mode: consume a claim only for the alerts we are about to deliver.
+    if client is not None and not dry_run:
+        claimed: list[Alert] = []
+        for alert in run.planned:
+            try:
+                ok = bool(
+                    client.set(alert.dedupe_key, int(moment), nx=True, ex=dedupe_s)
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                run.errors.append(f"{alert.session_id}: dedupe claim failed: {exc}")
+                continue
+            if ok:
+                claimed.append(alert)
+            else:
+                run.skipped_dedupe.append(alert.dedupe_key)
+        run.planned = claimed
     return run
 
 
@@ -331,7 +345,15 @@ def _discord_token(environ=None) -> str:
                 return tok
     except Exception:  # pragma: no cover - defensive
         pass
-    return ""
+    # Production convention (see config.py): the Discord token lives in the
+    # VAULT, never in env. Without this fallback every Discord alert fails with
+    # "DISCORD_BOT_TOKEN not configured" and the target is never reached.
+    try:
+        from .vault import get_vault
+
+        return get_vault().get_value("DISCORD_BOT_TOKEN") or ""
+    except Exception:  # pragma: no cover - vault unavailable
+        return ""
 
 
 def deliver(alert: Alert, *, dry_run: bool = False, environ=None) -> dict:
