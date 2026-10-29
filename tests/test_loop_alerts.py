@@ -239,7 +239,7 @@ def test_cap_counts_only_eligible_alerts():
     """A capped backlog must drain: deferred alerts get sent once slots free up."""
     client = FakeRedis()
     statuses = [
-        _status(f"X:tg:-100:{i}", loop_status.LOST_GOAL_PLACEHOLDER, age="900")
+        _status(f"X:tg:-100:{i}", loop_status.STATE_LOST_GOAL, age="900")
         for i in range(15)
     ]
     first = loop_alerts.plan_alerts(
