@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 import logging
 
+from .. import thread_goal
 from ..config import settings
 from ..tool_registry import ToolSpec
-from .. import thread_goal
 
 logger = logging.getLogger("autopilot.tools.thread_goal_tools")
 
@@ -30,6 +30,18 @@ def _session_from(ctx: dict) -> str | None:
     """The session key the brain keys goals on. None -> the tool fails closed."""
     sid = (ctx or {}).get("session_id")
     return sid or None
+
+
+def _explicit_sid(args: dict | None) -> str | None:
+    """A session_id the caller named explicitly -- used ONLY when ctx has none.
+
+    Rule 5 (no cross-thread bleed) keeps context authoritative: a tool call can
+    never be steered onto another thread by an argument while a live session key
+    is present. The explicit value exists only for contexts carrying no key, so
+    a CLI/ops one-off can close a thread it did not itself start.
+    """
+    sid = (args or {}).get("session_id")
+    return sid.strip() or None if isinstance(sid, str) else None
 
 
 def set_thread_goal(
@@ -195,8 +207,24 @@ TOOL_SPECS = [
             "actually met -- it is the signal that ends the loop. Safe to call when "
             "no goal was set (it reports 'nothing to complete')."
         ),
-        parameters={"type": "object", "properties": {}, "required": []},
-        handler=lambda args, ctx: complete_thread_goal(session_id=_session_from(ctx)),
+        parameters={
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Normally LEAVE UNSET -- this thread's own "
+                        "session key is taken from context. Set it only to name "
+                        "a session explicitly from a context that has none (e.g. "
+                        "a CLI/ops one-off); context always wins."
+                    ),
+                }
+            },
+            "required": [],
+        },
+        handler=lambda args, ctx: complete_thread_goal(
+            session_id=_session_from(ctx) or _explicit_sid(args)
+        ),
     ),
     ToolSpec(
         name="dismiss_thread_goal",
@@ -218,12 +246,22 @@ TOOL_SPECS = [
                         "Why the goal is being dropped (superseded / no longer "
                         "wanted / blocked). Recorded in the event log."
                     ),
-                }
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Normally LEAVE UNSET -- this thread's own "
+                        "session key is taken from context. Set it only to name "
+                        "a session explicitly from a context that has none (e.g. "
+                        "a CLI/ops one-off); context always wins."
+                    ),
+                },
             },
             "required": [],
         },
         handler=lambda args, ctx: dismiss_thread_goal(
-            args.get("reason", ""), session_id=_session_from(ctx)
+            args.get("reason", ""),
+            session_id=_session_from(ctx) or _explicit_sid(args),
         ),
     ),
 ]

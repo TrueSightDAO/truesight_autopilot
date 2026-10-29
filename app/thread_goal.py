@@ -52,15 +52,31 @@ DEFAULT_MAX_GOAL_TURNS = 40
 
 _STATE_FILENAME = "thread_goals.jsonl"
 
+# The repo root (``app/..``). A *relative* state dir anchors HERE, never on the
+# process CWD. A bare ``data/thread_goals.jsonl`` used to resolve against
+# whatever directory each process happened to start in, so the web server, the
+# loop daemon and a one-off CLI / pytest run could each read and write a
+# DIFFERENT file -- a goal set by one looked absent to the other, which is the
+# ``lost_goal`` false alarm and the "nothing to complete" false negative.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _state_path() -> Path:
-    """Default JSONL path: under the deploy-watcher state dir (survives deploys)."""
+    """Default JSONL path: under the deploy-watcher state dir (survives deploys).
+
+    A relative state dir is anchored to the repo root, so every process on the
+    box resolves the SAME absolute file regardless of its CWD. An absolute
+    ``THREAD_GOAL_STATE_DIR`` / ``DEPLOY_WATCHER_STATE_DIR`` is used verbatim.
+    """
     base = (
         os.getenv("THREAD_GOAL_STATE_DIR")
         or os.getenv("DEPLOY_WATCHER_STATE_DIR")
         or "data"
     )
-    return Path(base) / _STATE_FILENAME
+    path = Path(base)
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path / _STATE_FILENAME
 
 
 @dataclass(frozen=True)
