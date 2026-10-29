@@ -37,6 +37,7 @@ from .auth import (
     author_name_from_claims,
     author_role_from_claims,
     create_jwt,
+    is_governor,
     verify_jwt,
     verify_jwt_claims,
     verify_payload,
@@ -45,6 +46,7 @@ from .media_archive_pipeline import router as media_archive_pipeline_router
 from .signature_ledger_pipeline import router as signature_ledger_pipeline_router
 from .auto_advance import next_action
 from .config import settings
+from . import loop_surface
 from .context_compaction import (
     backup_session_file,
     compact_history,
@@ -914,6 +916,29 @@ async def health():
         "governors_count": len(gov_data.get("governors", [])),
         "governors_updated_at": gov_data.get("updated_at", ""),
     }
+
+
+@app.get("/loop/status")
+async def loop_status_surface(request: Request) -> JSONResponse:
+    """Expose the loop daemon's published verdicts (U3).
+
+    Read-only and governor-gated. Before this, answering "why did nothing poke
+    me?" required an SSH session and a redis-cli one-liner; the daemon's verdicts
+    were correct but invisible. Governor-gated because session ids and goal text
+    appear in the payload -- useful to us, not public.
+
+    Never 500s on a Redis problem: ``build_report`` returns a ``degraded`` report
+    instead, because a surface whose job is to reveal loop unhealthiness must not
+    fail closed exactly when the loop is unhealthy.
+    """
+    public_key = request.headers.get("X-Public-Key", "")
+    if not public_key:
+        raise HTTPException(status_code=400, detail="X-Public-Key header required")
+    if not is_governor(public_key):
+        raise HTTPException(status_code=403, detail="Governor access required")
+
+    report = await asyncio.to_thread(loop_surface.build_report)
+    return JSONResponse(report)
 
 
 @app.get("/", response_class=HTMLResponse)
