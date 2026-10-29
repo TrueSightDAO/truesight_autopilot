@@ -131,6 +131,71 @@ def extract_urls(text: str) -> list[str]:
 _channel_dispatch_locks = LockRegistry()
 
 
+def _fetch_progress_snapshot(session_id: str, public_key: str) -> str | None:
+    """Fetch the running turn's live-progress snapshot from the brain over HTTP.
+
+    Parity with ``telegram_adapter._fetch_progress_snapshot``. The adapter is a
+    SEPARATE process from the FastAPI brain, so the in-process ``_live_progress``
+    dict (populated by the running turn inside the brain) is ALWAYS empty here --
+    reading it directly would make every mid-turn ack generic. We cross the
+    process boundary via ``/chat/progress``. Returns the snapshot, or None when
+    nothing is running or the call fails (caller then sends a plain ack).
+    """
+    try:
+        token = create_jwt(public_key)
+        resp = httpx.get(
+            f"{settings.autopilot_chat_url.rstrip('/')}/chat/progress",
+            headers={"Authorization": f"Bearer {token}", "X-Session-Id": session_id},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("running") and data.get("snapshot"):
+                return data["snapshot"]
+    except Exception:  # noqa: BLE001 -- progress is best-effort; never break the ack
+        pass
+    return None
+
+
+def _ack_queued_if_busy(
+    lock: TrackedLock,
+    channel_id: str | int,
+    session_id: str | None = None,
+    public_key: str | None = None,
+) -> None:
+    """If a turn is already running in this channel, immediately tell the governor
+    their new message was received and queued -- it will be handled after the
+    current turn finishes.
+
+    Parity with ``telegram_adapter._ack_queued_if_busy``. Without this, a Discord
+    message sent mid-task blocks silently on ``_channel_dispatch_lock`` for the
+    entire duration of the running turn. The hourglass reaction and the typing
+    bubble are attached to the *previous* turn's message, so from the governor's
+    side a second message produces no visible response at all -- it reads as
+    dropped when it was actually queued.
+
+    If *session_id* and *public_key* are provided, includes a live-progress
+    snapshot from the running turn (current tool, round, elapsed).
+    """
+    if not lock.locked():
+        return
+    progress = ""
+    if session_id and public_key:
+        snap = _fetch_progress_snapshot(session_id, public_key)
+        if snap:
+            progress = f"\n\nRight now: {snap}"
+    try:
+        send_message(
+            channel_id,
+            "\U0001f4e5 Got it -- I'm still finishing the previous task in this channel. "
+            "I've added this to the queue and will get to it right after." + progress,
+        )
+    except Exception:  # noqa: BLE001 -- an unacknowledged message beats a dropped one
+        logger.warning(
+            "queued-ack send failed for channel %s", channel_id, exc_info=True
+        )
+
+
 def _channel_dispatch_lock(channel_id: str | int) -> TrackedLock:
     """Return the stable, per-channel turn lock for ``channel_id``."""
     return _channel_dispatch_locks.get(str(channel_id))
@@ -1512,7 +1577,9 @@ def handle_message(
         # `_thread_dispatch_lock`): the hourglass ack above already fired, so a
         # queued turn still reads as "received", but two governor messages in
         # one channel can never run overlapping turns on the same session.
-        with _channel_dispatch_lock(channel_id):
+        _lock = _channel_dispatch_lock(channel_id)
+        _ack_queued_if_busy(_lock, channel_id, session_id, public_key)
+        with _lock:
             with TypingIndicator(channel_id):
                 reply, shown = call_chat_with_progress(
                     channel_id, prompt, session_id, public_key, role, username

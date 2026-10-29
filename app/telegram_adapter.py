@@ -163,12 +163,21 @@ def _ack_queued_if_busy(
             snap = _fetch_progress_snapshot(session_id, public_key)
             if snap:
                 progress = f"\n\nRight now: {snap}"
-        send_message(
-            chat_id,
-            "📥 Got it — I'm still finishing the previous task in this topic. "
-            "I've added this to the queue and will get to it right after." + progress,
-            thread_id,
-        )
+        try:
+            send_message(
+                chat_id,
+                "📥 Got it — I'm still finishing the previous task in this topic. "
+                "I've added this to the queue and will get to it right after."
+                + progress,
+                thread_id,
+            )
+        except Exception:  # noqa: BLE001 -- an unacknowledged message beats a dropped one
+            logger.warning(
+                "queued-ack send failed for chat %s topic %s",
+                chat_id,
+                thread_id,
+                exc_info=True,
+            )
 
 
 # ── Pure helpers (unit-tested) ─────────────────────────────────────────────
