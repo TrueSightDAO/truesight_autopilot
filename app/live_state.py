@@ -68,6 +68,11 @@ _CLAIMS_PATH = "handoffs/active_supervision.json"
 #: an unbounded public response; the board only ever shows a handful.
 MAX_SESSIONS = 25
 
+#: Hard bound on how many scopes we will *scan*. Sessions are sorted before
+#: being truncated to :data:`MAX_SESSIONS`, so this must exceed it -- otherwise
+#: "newest first" would really mean "first N in arbitrary scope order".
+MAX_SCAN = 200
+
 
 def enabled() -> bool:
     """True when the public live-state surface is switched on.
@@ -145,7 +150,7 @@ def _sessions() -> tuple[list[dict[str, Any]], str | None]:
         return [], "progress store unavailable"
 
     sessions: list[dict[str, Any]] = []
-    for scope in list(scopes)[:MAX_SESSIONS]:
+    for scope in list(scopes)[:MAX_SCAN]:
         try:
             record = session_state.progress_get(scope)
         except Exception as exc:  # pragma: no cover
@@ -157,6 +162,8 @@ def _sessions() -> tuple[list[dict[str, Any]], str | None]:
 
     # Most recently started first; missing/unparseable start times sort last.
     sessions.sort(key=lambda s: s.get("started_at") or 0, reverse=True)
+    # Truncate AFTER sorting: the board wants the newest N, not an arbitrary N.
+    sessions = sessions[:MAX_SESSIONS]
 
     note = None
     if not sessions and not scopes:

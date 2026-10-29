@@ -102,7 +102,9 @@ def test_payload_degrades_without_redis(monkeypatch):
         raise RuntimeError("redis is down")
 
     monkeypatch.setattr(live_state.session_state, "progress_scopes", boom)
-    monkeypatch.setattr(live_state, "_active_claims", lambda: ([], "claims file unavailable"))
+    monkeypatch.setattr(
+        live_state, "_active_claims", lambda: ([], "claims file unavailable")
+    )
 
     payload = live_state.live_state_payload()
 
@@ -119,7 +121,9 @@ def test_payload_caps_session_count(monkeypatch):
         for i in range(50)
     }
     fake = _FakeProgress(records)
-    monkeypatch.setattr(live_state.session_state, "progress_scopes", fake.progress_scopes)
+    monkeypatch.setattr(
+        live_state.session_state, "progress_scopes", fake.progress_scopes
+    )
     monkeypatch.setattr(live_state.session_state, "progress_get", fake.progress_get)
     monkeypatch.setattr(live_state.session_state, "enabled", fake.enabled)
     monkeypatch.setattr(live_state, "_active_claims", lambda: ([], None))
