@@ -57,6 +57,7 @@ from .context import (
 from . import turn_heartbeat as _turn_heartbeat
 from . import session_claim
 from . import session_state
+from .singleton_guard import run_as_singleton
 from .deploy_watcher import heartbeat as _dw_heartbeat
 from .deploy_watcher import register_track as _dw_register_track
 from .deploy_watcher import unregister_track as _dw_unregister_track
@@ -708,7 +709,7 @@ def _start_email_watch_if_enabled() -> bool:
         return False
     try:
         email_watch = EmailInboxWatch()
-        asyncio.create_task(email_watch.run_loop())
+        asyncio.create_task(run_as_singleton("email_watch", email_watch.run_loop()))
         logger.info(
             "Email inbox watch started (interval=%.0fs, sends_enabled=%s)",
             float(os.getenv("EMAIL_WATCH_INTERVAL_SECONDS", "3600")),
@@ -765,43 +766,55 @@ async def lifespan(app: FastAPI):
 
         try:
             email_poller = EmailPoller()
-            asyncio.create_task(email_poller.run_loop())
+            asyncio.create_task(
+                run_as_singleton("email_poller", email_poller.run_loop())
+            )
         except Exception as e:
             logger.warning("Email poller failed to start: %s", e)
         _start_email_watch_if_enabled()
         try:
             aws_monitor = AWSMonitor()
-            asyncio.create_task(aws_monitor.run_loop())
+            asyncio.create_task(run_as_singleton("aws_monitor", aws_monitor.run_loop()))
         except Exception as e:
             logger.warning("AWS monitor failed to start: %s", e)
         try:
-            asyncio.create_task(_branch_janitor_loop())
+            asyncio.create_task(
+                run_as_singleton("_branch_janitor_loop", _branch_janitor_loop())
+            )
         except Exception as e:
             logger.warning("Branch janitor failed to start: %s", e)
         try:
-            asyncio.create_task(_pending_janitor_loop())
+            asyncio.create_task(
+                run_as_singleton("_pending_janitor_loop", _pending_janitor_loop())
+            )
         except Exception as e:
             logger.warning("Pending janitor failed to start: %s", e)
         try:
-            asyncio.create_task(_context_sync_loop())
+            asyncio.create_task(
+                run_as_singleton("_context_sync_loop", _context_sync_loop())
+            )
         except Exception as e:
             logger.warning("Context sync failed to start: %s", e)
         if settings.followups_enabled:
             try:
-                asyncio.create_task(followup_loop())
+                asyncio.create_task(run_as_singleton("followup_loop", followup_loop()))
             except Exception as e:
                 logger.warning("Follow-up loop failed to start: %s", e)
         else:
             logger.info("FOLLOWUPS_ENABLED=false — follow-up loop not started")
         if settings.calendar_watch_enabled:
             try:
-                asyncio.create_task(calendar_watchdog_loop())
+                asyncio.create_task(
+                    run_as_singleton("calendar_watchdog_loop", calendar_watchdog_loop())
+                )
             except Exception as e:
                 logger.warning("Calendar watchdog failed to start: %s", e)
         else:
             logger.info("CALENDAR_WATCH_ENABLED=false — calendar watchdog not started")
         try:
-            asyncio.create_task(_catalog_refresh_loop())
+            asyncio.create_task(
+                run_as_singleton("_catalog_refresh_loop", _catalog_refresh_loop())
+            )
         except Exception as e:
             logger.warning("Events catalog refresh loop failed to start: %s", e)
     else:
