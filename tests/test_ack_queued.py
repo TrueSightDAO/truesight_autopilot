@@ -103,3 +103,20 @@ def test_ack_plain_when_snapshot_unavailable(monkeypatch):
 
     assert len(sent) == 1
     assert "Right now:" not in sent[0][1]
+
+
+def test_ack_failure_never_raises(monkeypatch):
+    """A Telegram hiccup while acknowledging must not break the dispatch path.
+    The guard is pre-existing behaviour made explicit: an unacknowledged message
+    beats an exception that aborts handling of the governor's actual message."""
+
+    def _boom(*a, **k):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(ta, "send_message", _boom)
+    lock = ta._thread_dispatch_lock(-100, 7)
+    lock.acquire()
+    try:
+        ta._ack_queued_if_busy(-100, 7, lock)  # must not raise
+    finally:
+        lock.release()
