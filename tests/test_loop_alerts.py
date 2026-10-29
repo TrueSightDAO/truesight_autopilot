@@ -94,6 +94,7 @@ def test_master_switch_off_plans_nothing():
         [_status(TG, loop_status.STATE_LOST_GOAL)],
         FakeRedis(),
         environ={"LOOP_ALERTS_ENABLED": "false"},
+        dry_run=False,
     )
     assert run.planned == []
 
@@ -128,7 +129,7 @@ def test_only_lost_goal_planned_from_mixed_states():
         _status(DC, loop_status.STATE_STALLED),
         _status(DC, loop_status.STATE_AWAITING),
     ]
-    run = loop_alerts.plan_alerts(statuses, FakeRedis(), environ={})
+    run = loop_alerts.plan_alerts(statuses, FakeRedis(), environ={}, dry_run=False)
     assert len(run.planned) == 1
     assert run.planned[0].state == loop_status.STATE_LOST_GOAL
 
@@ -138,7 +139,10 @@ def test_only_lost_goal_planned_from_mixed_states():
 
 def test_session_without_channel_is_reported_not_dropped():
     run = loop_alerts.plan_alerts(
-        [_status(NOC, loop_status.STATE_LOST_GOAL)], FakeRedis(), environ={}
+        [_status(NOC, loop_status.STATE_LOST_GOAL)],
+        FakeRedis(),
+        environ={},
+        dry_run=False,
     )
     assert run.planned == []
     assert len(run.unmapped) == 1
@@ -151,8 +155,8 @@ def test_session_without_channel_is_reported_not_dropped():
 def test_second_sweep_is_deduped():
     client = FakeRedis()
     statuses = [_status(TG, loop_status.STATE_LOST_GOAL)]
-    first = loop_alerts.plan_alerts(statuses, client, environ={})
-    second = loop_alerts.plan_alerts(statuses, client, environ={})
+    first = loop_alerts.plan_alerts(statuses, client, environ={}, dry_run=False)
+    second = loop_alerts.plan_alerts(statuses, client, environ={}, dry_run=False)
     assert len(first.planned) == 1
     assert second.planned == []
     assert len(second.skipped_dedupe) == 1
@@ -162,10 +166,10 @@ def test_dedupe_is_per_state():
     client = FakeRedis()
     env = {"LOOP_ALERTS_STALLED": "true"}
     a = loop_alerts.plan_alerts(
-        [_status(TG, loop_status.STATE_LOST_GOAL)], client, environ=env
+        [_status(TG, loop_status.STATE_LOST_GOAL)], client, environ=env, dry_run=False
     )
     b = loop_alerts.plan_alerts(
-        [_status(TG, loop_status.STATE_STALLED)], client, environ=env
+        [_status(TG, loop_status.STATE_STALLED)], client, environ=env, dry_run=False
     )
     assert len(a.planned) == 1 and len(b.planned) == 1
 
@@ -193,14 +197,18 @@ def test_dedupe_key_shape():
 
 def test_capping_bounds_a_backlog_first_run():
     many = [_status(f"X:tg:-100:{i}", loop_status.STATE_LOST_GOAL) for i in range(25)]
-    run = loop_alerts.plan_alerts(many, FakeRedis(), environ={}, max_alerts=10)
+    run = loop_alerts.plan_alerts(
+        many, FakeRedis(), environ={}, dry_run=False, max_alerts=10
+    )
     assert len(run.planned) == 10
     assert run.capped == 15
 
 
 def test_cap_zero_is_respected():
     many = [_status(f"X:tg:-100:{i}", loop_status.STATE_LOST_GOAL) for i in range(3)]
-    run = loop_alerts.plan_alerts(many, FakeRedis(), environ={}, max_alerts=0)
+    run = loop_alerts.plan_alerts(
+        many, FakeRedis(), environ={}, dry_run=False, max_alerts=0
+    )
     assert run.planned == []
     assert run.capped == 3
 
@@ -211,8 +219,10 @@ def test_ordering_is_deterministic():
         _status("X:tg:-100:1", "lost_goal", age="10"),
         _status("X:tg:-100:2", "lost_goal", age="900"),
     ]
-    r1 = loop_alerts.plan_alerts(list(a), FakeRedis(), environ={})
-    r2 = loop_alerts.plan_alerts(list(reversed(a)), FakeRedis(), environ={})
+    r1 = loop_alerts.plan_alerts(list(a), FakeRedis(), environ={}, dry_run=False)
+    r2 = loop_alerts.plan_alerts(
+        list(reversed(a)), FakeRedis(), environ={}, dry_run=False
+    )
     assert [x.session_id for x in r1.planned] == [x.session_id for x in r2.planned]
     assert r1.planned[0].session_id == "X:tg:-100:2"  # oldest idle first
 
@@ -338,7 +348,7 @@ def test_failed_delivery_releases_dedupe_claim_so_it_retries(monkeypatch):
     """A send failure must not lose the alert for a whole hour."""
     client = FakeRedis()
     statuses = [_status(TG, loop_status.STATE_LOST_GOAL)]
-    run = loop_alerts.plan_alerts(statuses, client, environ={})
+    run = loop_alerts.plan_alerts(statuses, client, environ={}, dry_run=False)
     assert run.planned[0].dedupe_key in client.claims
 
     def fake_fail(alert, dry_run=False, environ=None):
@@ -349,7 +359,7 @@ def test_failed_delivery_releases_dedupe_claim_so_it_retries(monkeypatch):
     assert len(out.errors) == 1
     assert run.planned[0].dedupe_key not in client.claims
     # and the next sweep is free to try again
-    again = loop_alerts.plan_alerts(statuses, client, environ={})
+    again = loop_alerts.plan_alerts(statuses, client, environ={}, dry_run=False)
     assert len(again.planned) == 1
 
 
@@ -360,7 +370,38 @@ def test_deliver_all_counts_sent(monkeypatch):
         lambda a, dry_run=False, environ=None: {"status": "sent"},
     )
     client = FakeRedis()
-    run = loop_alerts.plan_alerts([_status(TG, "lost_goal")], client, environ={})
+    run = loop_alerts.plan_alerts(
+        [_status(TG, "lost_goal")], client, environ={}, dry_run=False
+    )
     out = loop_alerts.deliver_all(run, dry_run=False, environ={}, client=client)
     assert len(out.sent) == 1
     assert out.errors == []
+
+
+def test_plan_alerts_defaults_to_not_claiming():
+    """Regression: the default MUST be read-only.
+
+    During U4 rollout ``plan_alerts`` claimed by default, so a preview script
+    written to "show me what would be sent" silently consumed all 19 pending
+    alerts (TTL ~1h) and the next real sweep planned nothing. Introspection
+    must never swallow alerts, so the safe mode is the default and callers
+    must opt IN to claiming.
+    """
+    import inspect
+
+    sig = inspect.signature(loop_alerts.plan_alerts)
+    assert sig.parameters["dry_run"].default is True, (
+        "plan_alerts must default to dry_run=True -- claiming by default made "
+        "a read-only preview silence the real alerts"
+    )
+
+
+def test_default_call_consumes_no_claim():
+    """A bare call (no dry_run kwarg) must leave the dedupe ledger untouched."""
+    client = FakeRedis()
+    statuses = [_status(TG, loop_status.STATE_LOST_GOAL)]
+    default_call = loop_alerts.plan_alerts(statuses, client, environ={})
+    assert len(default_call.planned) == 1
+    assert client.claims == {}, "default call must not claim"
+    real = loop_alerts.plan_alerts(statuses, client, environ={}, dry_run=False)
+    assert len(real.planned) == 1, "the real send must still be available"
