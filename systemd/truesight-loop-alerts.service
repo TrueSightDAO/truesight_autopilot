@@ -1,0 +1,24 @@
+[Unit]
+Description=Loop Alerts (U4) - nudge threads whose goal was left open
+Documentation=https://github.com/TrueSightDAO/agentic_ai_context/blob/main/plans/LOOP_DAEMON_PLAN.md
+# Runs AFTER the reconciler has published status keys. A messaging outage must
+# never take down reconciliation, hence a separate unit and no hard Requires=.
+After=truesight-loop-daemon.service redis-server.service
+Wants=truesight-loop-daemon.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/truesight_autopilot
+Environment=ACTIVE_TRACKS_PATH=/opt/truesight_autopilot/data/active_tracks.json
+Environment=SESSION_LOG_DIR=/opt/truesight_autopilot/sessions
+Environment=LOOP_ALERTS_ENABLED=true
+# lost_goal pages a governor; stalled is log-only (a resuming turn self-heals).
+Environment=LOOP_ALERTS_LOST_GOAL=true
+Environment=LOOP_ALERTS_STALLED=false
+EnvironmentFile=-/opt/truesight_autopilot/.env
+ExecStart=/opt/truesight_autopilot/.venv/bin/python /opt/truesight_autopilot/scripts/loop_alert.py
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

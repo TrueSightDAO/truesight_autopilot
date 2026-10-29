@@ -1,0 +1,13 @@
+[Unit]
+Description=Run loop alerts every 10 minutes
+
+[Timer]
+# Every 10 min, not 60s: alerts are deduped hourly anyway, so a tighter period
+# only adds API calls without improving latency-to-nudge.
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Unit=truesight-loop-alerts.service
+
+[Install]
+WantedBy=timers.target
