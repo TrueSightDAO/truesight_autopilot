@@ -20,6 +20,9 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+
+from .live_state import enabled as live_state_enabled
+from .live_state import live_state_payload
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -1125,6 +1128,38 @@ def _cors_json_response(content: dict, status_code: int = 200) -> JSONResponse:
     interactions. The oracle frontend at oracle.truesight.me calls this
     endpoint via fetch() and requires Access-Control-Allow-Origin: *."""
     return JSONResponse(content=content, status_code=status_code, headers=_CORS_HEADERS)
+
+
+# --- Live state panel (SOPHIA_LIVE_PROGRESS_PLAN §2.6 follow-through) -------
+# Read-only, default-OFF. Gated by LIVE_STATE_PUBLIC so nothing is exposed
+# until a governor flips the flag. See app/live_state.py for the field
+# whitelist and the reasons it exists (this surface is PUBLIC).
+
+
+@app.api_route("/live-state", methods=["GET", "OPTIONS"])
+async def live_state(request: Request):
+    """Public read-only snapshot of in-flight sessions.
+
+    Answers "what are the workers doing right now?" for the sprint board.
+    Deliberately excludes instruction text, tool arguments, and session
+    identities -- see ``live_state.PUBLIC_FIELDS``.
+    """
+    if request.method == "OPTIONS":  # CORS preflight
+        return JSONResponse(content={}, status_code=204, headers=_CORS_HEADERS)
+
+    if not live_state_enabled():
+        # Default OFF. Report the flag honestly rather than 404, so the board
+        # can distinguish "not enabled yet" from "broken".
+        return _cors_json_response(
+            {
+                "enabled": False,
+                "reason": "LIVE_STATE_PUBLIC is off; set LIVE_STATE_PUBLIC=1 to expose.",
+            },
+            status_code=200,
+        )
+
+    payload = live_state_payload()
+    return _cors_json_response(payload, status_code=200)
 
 
 @app.api_route("/oracle-advisory", methods=["GET", "OPTIONS"])
