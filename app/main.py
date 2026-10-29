@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from .live_state import enabled as live_state_enabled
 from .live_state import live_state_payload
 from fastapi.responses import (
     FileResponse,
@@ -1146,9 +1147,7 @@ async def live_state(request: Request):
     if request.method == "OPTIONS":  # CORS preflight
         return JSONResponse(content={}, status_code=204, headers=_CORS_HEADERS)
 
-    if not live_state_payload.__module__ or not os.environ.get(
-        "LIVE_STATE_PUBLIC", ""
-    ).strip().lower() in ("1", "true", "yes", "on"):
+    if not live_state_enabled():
         # Default OFF. Report the flag honestly rather than 404, so the board
         # can distinguish "not enabled yet" from "broken".
         return _cors_json_response(
