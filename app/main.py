@@ -3604,6 +3604,11 @@ async def _run_tool_round_loop(
         _live_progress[session_id]["elapsed"] = (
             time.time() - _live_progress[session_id]["started_at"]
         )
+        # Heartbeat: lets readers distinguish a genuinely live turn from an entry
+        # leaked by a turn that died without popping (see compact_session_tool's
+        # _live_progress_is_fresh). Refreshed here, once per round, so there is no
+        # per-token cost and no additional write site.
+        _live_progress[session_id]["heartbeat"] = time.time()
         _publish_progress()
 
         # Context compaction (PR3): the pre-turn _maybe_auto_compact call only
