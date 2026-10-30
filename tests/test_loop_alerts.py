@@ -815,3 +815,107 @@ def test_fallback_text_omits_session_line_when_not_redirected():
         dry_run=False,
     )
     assert "Session: " not in run.planned[0].text()
+
+
+# ---------------------------------------------------------------- multi-target
+
+
+def test_fallback_targets_parses_one():
+    got = loop_alerts.fallback_targets(
+        {"LOOP_ALERTS_FALLBACK_TARGET": "tg:-1003919341801"}
+    )
+    assert len(got) == 1
+    assert got[0].kind == "telegram" and got[0].chat_id == "-1003919341801"
+
+
+def test_fallback_targets_parses_comma_separated_both_surfaces():
+    """The governor asked for Telegram *and* Discord General."""
+    got = loop_alerts.fallback_targets(
+        {"LOOP_ALERTS_FALLBACK_TARGET": "tg:-1003919341801,dc:923008087315587075"}
+    )
+    assert [(t.kind, t.chat_id) for t in got] == [
+        ("telegram", "-1003919341801"),
+        ("discord", "923008087315587075"),
+    ]
+
+
+def test_fallback_targets_tolerates_spaces_and_dedupes():
+    got = loop_alerts.fallback_targets(
+        {"LOOP_ALERTS_FALLBACK_TARGET": " tg:-1003919341801 , tg:-1003919341801 "}
+    )
+    assert len(got) == 1, "same target twice must not double-post"
+
+
+def test_fallback_targets_one_bad_entry_does_not_kill_the_others():
+    got = loop_alerts.fallback_targets(
+        {"LOOP_ALERTS_FALLBACK_TARGET": "nonsense,-1003919341801,dc:923008087315587075"}
+    )
+    assert [t.kind for t in got] == ["discord"], (
+        "both junk entries dropped, discord survives"
+    )
+
+
+def test_fallback_targets_unset_is_empty():
+    assert loop_alerts.fallback_targets({}) == []
+
+
+def test_fallback_dedupe_key_differs_per_destination():
+    """Without this, fan-out to two surfaces would dedupe the 2nd one away."""
+    tg = loop_alerts.Target("telegram", "-1003919341801", None)
+    dc = loop_alerts.Target("discord", "923008087315587075", None)
+    a = loop_alerts.Alert(
+        session_id="H:orphan", state="lost_goal", target=tg, via_fallback=True
+    )
+    b = loop_alerts.Alert(
+        session_id="H:orphan", state="lost_goal", target=dc, via_fallback=True
+    )
+    assert a.dedupe_key != b.dedupe_key, (
+        "two fallback destinations must not share a claim"
+    )
+    assert "telegram" in a.dedupe_key and "discord" in b.dedupe_key
+
+
+def test_non_fallback_dedupe_key_unchanged():
+    """Own-channel alerts keep the original key shape -- no ledger migration."""
+    t = loop_alerts.Target("telegram", "-1003919341801", "41214")
+    a = loop_alerts.Alert(session_id="H:thread", state="awaiting_stale", target=t)
+    assert a.dedupe_key == "loop:alert:H:thread:awaiting_stale"
+
+
+def test_plan_alerts_fans_out_to_every_fallback_target():
+    st = [
+        {
+            "session_id": "H:orphan",
+            "state": "lost_goal",
+            "goal": "g",
+            "awaiting_age_s": 7200,
+        }
+    ]
+    run = loop_alerts.plan_alerts(
+        st,
+        dry_run=True,
+        environ={
+            "LOOP_ALERTS_FALLBACK_TARGET": "tg:-1003919341801,dc:923008087315587075",
+            "LOOP_ALERTS_STATES": "lost_goal",
+        },
+    )
+    assert len(run.planned) == 2, "one alert per destination"
+    assert {a.target.kind for a in run.planned} == {"telegram", "discord"}
+    assert all(a.via_fallback for a in run.planned)
+    assert run.unmapped == []
+    assert len(run.fallback) == 2
+
+
+def test_plan_alerts_unset_fallback_still_reports_unmapped():
+    st = [
+        {
+            "session_id": "H:orphan",
+            "state": "lost_goal",
+            "goal": "g",
+            "awaiting_age_s": 7200,
+        }
+    ]
+    run = loop_alerts.plan_alerts(
+        st, dry_run=True, environ={"LOOP_ALERTS_STATES": "lost_goal"}
+    )
+    assert len(run.unmapped) == 1 and run.fallback == [] and run.planned == []

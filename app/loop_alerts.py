@@ -123,7 +123,14 @@ class Alert:
 
     @property
     def dedupe_key(self) -> str:
-        return f"loop:alert:{self.session_id}:{self.state}"
+        base = f"loop:alert:{self.session_id}:{self.state}"
+        if self.via_fallback:
+            # A fallback alert fans out to every configured destination. Without
+            # the destination in the key, the second destination would find the
+            # first one's claim and be skipped as a duplicate -- so only one
+            # surface would ever be told.
+            base += f":{self.target.kind}:{self.target.chat_id}"
+        return base
 
     def text(self) -> str:
         """The message a governor actually reads in their thread."""
@@ -242,6 +249,45 @@ def fallback_target(environ=None) -> Target | None:
         return Target("discord", m.group("channel"), m.group("thread"))
     log.warning("%s=%r is not a valid target; ignoring", FALLBACK_ENV, raw)
     return None
+
+
+def fallback_targets(environ=None) -> list[Target]:
+    """Parse ``LOOP_ALERTS_FALLBACK_TARGET`` into a list of Targets (may be empty).
+
+    Comma-separated so a governor who wants a nudge to reach BOTH a Telegram
+    and a Discord surface can say so::
+
+        LOOP_ALERTS_FALLBACK_TARGET=tg:-1003919341801,dc:923008087315587075
+
+    Each entry is parsed independently: one typo drops that entry with a
+    warning and leaves the other entries working, rather than disabling the
+    fallback wholesale. Unparseable-or-empty yields ``[]``, which callers treat
+    exactly like "unset" (report as ``unmapped``, post nothing) -- fail-closed
+    to the pre-fallback behaviour.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get(FALLBACK_ENV) or "").strip()
+    if not raw:
+        return []
+    out: list[Target] = []
+    for chunk in raw.split(","):
+        piece = chunk.strip()
+        if not piece:
+            continue
+        m = _FALLBACK_TG_RE.match(piece)
+        if m:
+            t = Target("telegram", m.group("chat"), m.group("thread"))
+        else:
+            m = _FALLBACK_DC_RE.match(piece)
+            if not m:
+                log.warning(
+                    "%s entry %r is not a valid target; ignoring", FALLBACK_ENV, piece
+                )
+                continue
+            t = Target("discord", m.group("channel"), m.group("thread"))
+        if t not in out:  # same target listed twice should not double-post
+            out.append(t)
+    return out
 
 
 def _truthy(value: str | None, default: bool) -> bool:
@@ -363,37 +409,42 @@ def plan_alerts(
         target = target_for_session(sid)
         via_fallback = False
         if target is None:
-            target = fallback_target(environ)
-            if target is None:
+            fb = fallback_targets(environ)
+            if not fb:
                 run.unmapped.append(f"{sid} [{state}]")
                 continue
+            targets = fb
             via_fallback = True
-            run.fallback.append(f"{sid} [{state}] -> {target.describe()}")
-        alert = Alert(
-            session_id=sid,
-            state=state,
-            target=target,
-            reason=record.get("reason") or "",
-            goal=record.get("goal") or "",
-            age_s=_age_of(record),
-            via_fallback=via_fallback,
-        )
-        # Skip already-claimed alerts BEFORE the cap -- in live mode too. The
-        # authoritative claim remains the SET NX below; this read is what makes
-        # the per-sweep budget honest. Capping a list that still contains
-        # already-alerted sessions lets those stale entries eat every slot, so
-        # the genuinely-new alerts sitting at the tail of the ordering get
-        # capped again, sweep after sweep, and are never delivered.
-        if client is not None:
-            try:
-                already = bool(client.exists(alert.dedupe_key))
-            except Exception as exc:  # pragma: no cover - defensive
-                run.errors.append(f"{sid}: dedupe check failed: {exc}")
-                continue
-            if already:
-                run.skipped_dedupe.append(alert.dedupe_key)
-                continue
-        run.planned.append(alert)
+        else:
+            targets = [target]
+        for target in targets:
+            if via_fallback:
+                run.fallback.append(f"{sid} [{state}] -> {target.describe()}")
+            alert = Alert(
+                session_id=sid,
+                state=state,
+                target=target,
+                reason=record.get("reason") or "",
+                goal=record.get("goal") or "",
+                age_s=_age_of(record),
+                via_fallback=via_fallback,
+            )
+            # Skip already-claimed alerts BEFORE the cap -- in live mode too. The
+            # authoritative claim remains the SET NX below; this read is what makes
+            # the per-sweep budget honest. Capping a list that still contains
+            # already-alerted sessions lets those stale entries eat every slot, so
+            # the genuinely-new alerts sitting at the tail of the ordering get
+            # capped again, sweep after sweep, and are never delivered.
+            if client is not None:
+                try:
+                    already = bool(client.exists(alert.dedupe_key))
+                except Exception as exc:  # pragma: no cover - defensive
+                    run.errors.append(f"{sid}: dedupe check failed: {exc}")
+                    continue
+                if already:
+                    run.skipped_dedupe.append(alert.dedupe_key)
+                    continue
+            run.planned.append(alert)
 
     if len(run.planned) > max_alerts:
         run.capped = len(run.planned) - max_alerts
