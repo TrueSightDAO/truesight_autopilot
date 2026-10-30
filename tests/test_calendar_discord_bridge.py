@@ -91,6 +91,11 @@ def test_sync_skips_events_needing_no_attention(monkeypatch, tmp_path):
     fake.create_scheduled_event = FakeAdapter.create_scheduled_event
     monkeypatch.setitem(sys.modules, "app.discord_adapter", fake)
     monkeypatch.setattr(cw, "_native_state_path", lambda: tmp_path / "s.json")
+    # Hermetic: a developer .env may set CALENDAR_WATCH_DISCORD_ALL_EVENTS=true,
+    # which mirrors EVERY event and deliberately bypasses the attention gate. This
+    # test exercises the gate itself, so pin the switch off instead of inheriting
+    # whatever the local .env happens to say.
+    monkeypatch.setattr(cw.settings, "calendar_watch_discord_all_events", False)
 
     far = (datetime.now(timezone.utc) + timedelta(days=20)).isoformat()
     assert cw.sync_native_events([_ev(start=far)]) == 0
