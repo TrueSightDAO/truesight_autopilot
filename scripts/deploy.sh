@@ -63,7 +63,9 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
                 git -C $REMOTE_DIR diff --name-only | sed 's/^/    /'
                 echo "  -> commit or revert these; they are not in origin/main"
             else
-                echo "  WARNING: could NOT re-apply local edits; patch saved at \$local_patch"
+                git -C $REMOTE_DIR reset --hard origin/main
+                echo "  ERROR: could NOT re-apply local edits; box left CLEAN at origin/main"
+                echo "         your edits are saved at \$local_patch -- re-apply manually"
             fi
         fi
         git -C $REMOTE_DIR clean -nd | sed 's/^/  untracked (kept): /' || true
@@ -168,7 +170,9 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
                 echo \"  WARNING: local edits CARRIED in context/agentic_ai_context:\"
                 git -C $REMOTE_DIR/context/agentic_ai_context diff --name-only | sed 's/^/    /'
             else
-                echo \"  WARNING: could NOT re-apply context edits; patch saved at \$local_patch\"
+                git -C $REMOTE_DIR/context/agentic_ai_context reset --hard origin/main
+                echo \"  ERROR: could NOT re-apply context edits; box left CLEAN at origin/main\"
+                echo \"         your edits are saved at \$local_patch -- re-apply manually\"
             fi
         fi
     else
@@ -193,7 +197,9 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
                 echo \"  WARNING: local edits CARRIED in context/tokenomics:\"
                 git -C $REMOTE_DIR/context/tokenomics diff --name-only | sed 's/^/    /'
             else
-                echo \"  WARNING: could NOT re-apply tokenomics edits; patch saved at \$local_patch\"
+                git -C $REMOTE_DIR/context/tokenomics reset --hard origin/main
+                echo \"  ERROR: could NOT re-apply tokenomics edits; box left CLEAN at origin/main\"
+                echo \"         your edits are saved at \$local_patch -- re-apply manually\"
             fi
         fi
     else
