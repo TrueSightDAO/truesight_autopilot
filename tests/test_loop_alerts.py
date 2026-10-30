@@ -717,3 +717,101 @@ def test_stale_awaiting_reaches_dispatch():
     )
     assert [a.state for a in run.planned] == [loop_status.STATE_AWAITING_STALE]
     assert run.unmapped == []
+
+
+# --- fallback target ---------------------------------------------------------
+
+
+def test_no_fallback_keeps_unmapped_behaviour():
+    """Unset fallback must reproduce the old behaviour exactly."""
+    run = loop_alerts.plan_alerts(
+        [_status(NOC, loop_status.STATE_LOST_GOAL)],
+        FakeRedis(),
+        environ={},
+        dry_run=False,
+    )
+    assert run.planned == []
+    assert len(run.unmapped) == 1
+    assert run.fallback == []
+
+
+def test_unmapped_session_routes_to_telegram_fallback():
+    run = loop_alerts.plan_alerts(
+        [_status(NOC, loop_status.STATE_LOST_GOAL)],
+        FakeRedis(),
+        environ={"LOOP_ALERTS_FALLBACK_TARGET": "tg:-1003919341801:41214"},
+        dry_run=False,
+    )
+    assert run.unmapped == []
+    assert len(run.fallback) == 1
+    assert NOC in run.fallback[0]
+    assert len(run.planned) == 1
+    alert = run.planned[0]
+    assert alert.via_fallback is True
+    assert alert.target.kind == "telegram"
+    assert alert.target.chat_id == "-1003919341801"
+    assert alert.target.thread_id == "41214"
+
+
+def test_fallback_accepts_discord_channel_without_thread():
+    run = loop_alerts.plan_alerts(
+        [_status(NOC, loop_status.STATE_AWAITING_STALE)],
+        FakeRedis(),
+        environ={"LOOP_ALERTS_FALLBACK_TARGET": "dc:923008087315587072"},
+        dry_run=False,
+    )
+    assert len(run.planned) == 1
+    assert run.planned[0].target.kind == "discord"
+    assert run.planned[0].target.thread_id is None
+    assert run.planned[0].target.describe() == "discord:923008087315587072"
+
+
+def test_malformed_fallback_fails_closed_to_unmapped():
+    """A typo must not crash the sweep -- and must not invent a target."""
+    run = loop_alerts.plan_alerts(
+        [_status(NOC, loop_status.STATE_LOST_GOAL)],
+        FakeRedis(),
+        environ={"LOOP_ALERTS_FALLBACK_TARGET": "not-a-real-target"},
+        dry_run=False,
+    )
+    assert run.planned == []
+    assert len(run.unmapped) == 1
+    assert run.fallback == []
+
+
+def test_mapped_session_ignores_fallback():
+    """A session with its own channel must never be redirected."""
+    run = loop_alerts.plan_alerts(
+        [_status(TG, loop_status.STATE_AWAITING_STALE)],
+        FakeRedis(),
+        environ={
+            "LOOP_ALERTS_ENABLED": "true",
+            "LOOP_ALERTS_FALLBACK_TARGET": "dc:923008087315587072",
+        },
+        dry_run=False,
+    )
+    assert len(run.planned) == 1
+    assert run.planned[0].via_fallback is False
+    assert run.planned[0].target.kind == "telegram"
+
+
+def test_fallback_text_names_its_origin_session():
+    """In a shared channel the reader must know which session this is about."""
+    run = loop_alerts.plan_alerts(
+        [_status(NOC, loop_status.STATE_LOST_GOAL)],
+        FakeRedis(),
+        environ={"LOOP_ALERTS_FALLBACK_TARGET": "dc:923008087315587072"},
+        dry_run=False,
+    )
+    text = run.planned[0].text()
+    assert f"Session: {NOC}" in text
+
+
+def test_fallback_text_omits_session_line_when_not_redirected():
+    run = loop_alerts.plan_alerts(
+        [_status(TG, loop_status.STATE_AWAITING_STALE)],
+        FakeRedis(),
+        environ={"LOOP_ALERTS_ENABLED": "true"},
+        dry_run=False,
+    )
+    assert "Session: " not in run.planned[0].text()

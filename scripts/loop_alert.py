@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
                     "sent": len(run.sent),
                     "skipped_dedupe": len(run.skipped_dedupe),
                     "unmapped": len(run.unmapped),
+                    "fallback": len(run.fallback),
                     "capped": run.capped,
                     "errors": run.errors,
                     "targets": [
@@ -107,10 +108,15 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"loop_alert: read={len(statuses)} planned={len(run.planned)} "
         f"{verb}={len(run.sent)} deduped={len(run.skipped_dedupe)} "
-        f"unmapped={len(run.unmapped)} capped={run.capped} errors={len(run.errors)}"
+        f"unmapped={len(run.unmapped)} fallback={len(run.fallback)} "
+        f"capped={run.capped} errors={len(run.errors)}"
     )
     for alert in run.planned:
         print(f"  [{alert.state}] {alert.target.describe()}  {alert.session_id[-32:]}")
+    if run.fallback:
+        print("  no channel of their own -> routed to fallback:")
+        for f in run.fallback[:10]:
+            print(f"    {f}")
     if run.unmapped:
         print("  no channel to post into (reporting, not dropping):")
         for u in run.unmapped[:10]:
