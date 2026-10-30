@@ -213,6 +213,18 @@ def reconcile(
     leases = load_tracks(tracks_path)
     telegram_awaiting, discord_awaiting = load_awaiting(moment)
     goals = load_goals()
+    # Companion to `goals`: when each live goal was last touched, so the
+    # classifier can distinguish a 20-minute-old open goal from a 31-day-old
+    # one instead of treating both as the same hourly defect.
+    last_ts: dict[str, float | None] = {}
+    goal_path_env = os.environ.get("THREAD_GOALS_PATH")
+    goal_path = Path(goal_path_env) if goal_path_env else thread_goal._state_path()
+    for sid in goals:
+        try:
+            last_ts[sid] = thread_goal.last_event_ts(sid, path=goal_path)
+        except Exception:  # pragma: no cover - defensive
+            log.warning("goal timestamp failed for %s", sid, exc_info=True)
+            last_ts[sid] = None
 
     # Sessions appear in any of the three sources; a goal opened but never
     # turned (no track yet) is exactly the `lost_goal` case worth catching.
@@ -246,6 +258,7 @@ def reconcile(
                     fresh_s=None,
                 ),
                 open_goal_text=goals.get(sid),
+                open_goal_last_ts=last_ts.get(sid),
                 now=moment,
                 auto_advance=auto_advance,
                 label=lease.label if lease is not None else "",

@@ -123,6 +123,26 @@ def _append_event(event: dict, *, path: Path | None = None) -> None:
         )
 
 
+def last_event_ts(session_id: str, *, path: Path | None = None) -> float | None:
+    """Timestamp of the most recent goal event for ``session_id``.
+
+    ``None`` when the session has no events. Used by the loop daemon to tell a
+    *live* open goal from one that was opened and then silently walked away
+    from -- see ``STATE_GOAL_ABANDONED``.
+    """
+    try:
+        events = _iter_events(session_id, path=path)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    ts: list[float] = []
+    for event in events:
+        try:
+            ts.append(float(event.get("ts") or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return max(ts) if ts else None
+
+
 def _iter_events(session_id: str, *, path: Path | None = None) -> list[dict]:
     """Replay the JSONL, returning this session's events in order.
 

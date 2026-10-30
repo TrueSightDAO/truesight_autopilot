@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "tracks": []
+  "tracks": [
+    {
+      "id": "MIIBIjANBgkqhkiG9w0B:dc:923008087315587072:1558324521151373353",
+      "label": "Telegram chat \u2014 envoy_truesight",
+      "track_type": "telegram_chat",
+      "started_at": "2026-10-30T12:57:21.976Z",
+      "last_heartbeat": "2026-10-30T12:57:51.983Z",
+      "expected_max_duration_s": 120,
+      "status": "running",
+      "metadata": {
+        "session_id": "MIIBIjANBgkqhkiG9w0B:dc:923008087315587072:1558324521151373353"
+      }
+    }
+  ]
 }

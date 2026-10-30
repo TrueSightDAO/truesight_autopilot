@@ -47,6 +47,15 @@ STATE_AWAITING = "awaiting"
 #: Sophia is waiting on the governor, and neither side is told.
 STATE_AWAITING_STALE = "awaiting_stale"
 STATE_LOST_GOAL = "lost_goal"
+#: An open goal whose last event is older than the abandon threshold. Split from
+#: ``STATE_LOST_GOAL`` because the two need opposite treatment: a *fresh* open
+#: goal with nothing running is the genuine "work evaporated" case worth a nudge,
+#: while an open goal nobody has touched in ~2 weeks was walked away from. Alert
+#: dedupe is hourly, so classifying abandoned goals as defects made them the
+#: loudest thing in the channel -- 8 of them, one 31 days old -- for work the
+#: governor had already moved past. The goal stays OPEN (so it can still be
+#: resumed deliberately); it is only removed from the defect/auto-advance set.
+STATE_GOAL_ABANDONED = "goal_abandoned"
 STATE_IDLE = "idle"
 
 ALL_STATES: tuple[str, ...] = (
@@ -55,6 +64,7 @@ ALL_STATES: tuple[str, ...] = (
     STATE_AWAITING,
     STATE_AWAITING_STALE,
     STATE_LOST_GOAL,
+    STATE_GOAL_ABANDONED,
     STATE_IDLE,
 )
 
@@ -66,6 +76,11 @@ DEFECT_STATES: frozenset[str] = frozenset(
 )
 
 # ── defaults ──────────────────────────────────────────────────────────────────
+
+#: How long an open goal may go untouched before it stops being nudged as a
+#: defect. Two weeks: comfortably longer than any healthy multi-day plan, short
+#: enough that a genuinely dropped goal does not shout hourly for a month.
+DEFAULT_ABANDONED_AFTER_S: float = 14 * 86400.0
 
 #: Fallback lease when a track omits ``expected_max_duration_s``.
 DEFAULT_TRACK_LEASE_S = 120.0
@@ -346,6 +361,8 @@ def classify_session(
     awaiting_age_s: float | None,
     awaiting_any_age_s: float | None = None,
     open_goal_text: str | None = None,
+    open_goal_last_ts: float | None = None,
+    abandoned_after_s: float = DEFAULT_ABANDONED_AFTER_S,
     now: float,
     auto_advance: bool,
     label: str = "",
@@ -408,6 +425,24 @@ def classify_session(
             label=label or (lease.label if lease else ""),
             goal=goal,
         )
+
+    # Checked BEFORE the lost_goal fallthrough: an untouched goal would otherwise
+    # be re-nudged every dedupe window forever.
+    if goal and open_goal_last_ts is not None:
+        idle_s = now - open_goal_last_ts
+        if idle_s >= abandoned_after_s:
+            return SessionStatus(
+                session_id=session_id,
+                state=STATE_GOAL_ABANDONED,
+                reason=(
+                    f"goal untouched for {idle_s / 86400:.1f}d "
+                    f"(abandon threshold {abandoned_after_s / 86400:.0f}d)"
+                    " \u2014 not nudged; resume or dismiss it"
+                ),
+                age_s=idle_s,
+                label=label or (lease.label if lease else ""),
+                goal=goal,
+            )
 
     if goal and auto_advance:
         return SessionStatus(

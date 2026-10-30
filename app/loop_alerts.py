@@ -309,6 +309,11 @@ def state_enabled(state: str, environ=None) -> bool:
         return _truthy(env.get("LOOP_ALERTS_LOST_GOAL"), True)
     if state == loop_status.STATE_STALLED:
         return _truthy(env.get("LOOP_ALERTS_STALLED"), False)
+    # Off by default: an abandoned goal is not a live defect. The whole point of
+    # the split from STATE_LOST_GOAL is that these stop shouting hourly. Opt in
+    # only if a one-off digest of dropped work is actually wanted.
+    if state == loop_status.STATE_GOAL_ABANDONED:
+        return _truthy(env.get("LOOP_ALERTS_GOAL_ABANDONED"), False)
     # A thread blocked on the governor alerts by default: that is the whole
     # point of the split from STATE_AWAITING, which stays silent because a
     # fresh prompt is the system working as designed.
