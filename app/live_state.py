@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from . import dispatch_registry, session_state
@@ -174,6 +175,30 @@ def _sessions() -> tuple[list[dict[str, Any]], str | None]:
     return sessions, None
 
 
+#: How long a supervision claim stays *believable* without re-attestation.
+#:
+#: ``supervision.claim()`` upserts on every turn start, so ``claimed_at`` is
+#: re-written whenever a thread is actually picked up. A claim that has not moved
+#: in this long is therefore not evidence of anyone working on it -- it is
+#: evidence that nobody has touched it since. Matches the ~60 min lifetime
+#: ``app/main.py:5449`` already promises for a mid-turn crash.
+CLAIM_FRESHNESS_SECONDS = 60 * 60
+
+
+def _claim_age_seconds(claimed_at: Any, *, now: float | None = None) -> float | None:
+    """Seconds since ``claimed_at``, or ``None`` if it cannot be parsed."""
+    if not claimed_at:
+        return None
+    try:
+        raw = str(claimed_at).strip().replace("Z", "+00:00")
+        ts = datetime.fromisoformat(raw)
+        if ts.tzinfo is None:  # naive timestamps are written as UTC
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (now if now is not None else time.time()) - ts.timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def _active_claims() -> tuple[list[dict[str, Any]], str | None]:
     """Read ``handoffs/active_supervision.json`` -- best effort.
 
@@ -200,14 +225,24 @@ def _active_claims() -> tuple[list[dict[str, Any]], str | None]:
     for entry in claims:
         if not isinstance(entry, dict):
             continue
+        age = _claim_age_seconds(entry.get("claimed_at"))
         out.append(
             {
                 "plan_file": entry.get("plan_file"),
                 "supervisor": entry.get("supervisor"),
                 "claimed_at": entry.get("claimed_at"),
                 "note": (entry.get("note") or "")[:160],
+                # A claim is a lease, not a promise. ``release()`` only fires on a
+                # clean turn completion and only for the claimer's *own* claims,
+                # and nothing ages a claim out -- so a crashed or abandoned turn
+                # leaves a permanent row. Without this flag the board cannot tell
+                # "claimed and being worked" from "claimed and long dead", and a
+                # 44-day-old row reads as active supervision.
+                "age_seconds": None if age is None else int(age),
+                "fresh": age is not None and age <= CLAIM_FRESHNESS_SECONDS,
             }
         )
+    # Newest first: a stale claim is the least interesting thing on the board.
     out.sort(key=lambda c: c.get("claimed_at") or "", reverse=True)
     return out, None
 
@@ -257,5 +292,12 @@ def live_state_payload() -> dict[str, Any]:
         "active_claims": claims,
         "workers": workers,
         "claim_count": len(claims),
+        # ``claim_count`` is what the file says; these two say what it means.
+        # The board shows "N open claims", which overstates activity whenever
+        # releases did not fire.
+        "claim_count_fresh": sum(1 for c in claims if c.get("fresh")),
+        "claim_count_stale": sum(
+            1 for c in claims if c.get("age_seconds") is not None and not c.get("fresh")
+        ),
         "degraded": degraded,
     }
