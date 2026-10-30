@@ -28,6 +28,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -199,6 +200,24 @@ class Sweep:
         return counts
 
 
+def _session_activity_ts(sid: str) -> float | None:
+    """mtime of this session's log file, or None when it can't be proven.
+
+    Main names each session log ``<md5(session_key)[:12]>.json`` (see the
+    transcript-URL construction in app/main.py). Any read failure returns None
+    rather than a guess, so an unreadable log degrades to today's behaviour
+    instead of suppressing a prompt.
+    """
+    try:
+        from .config import settings
+
+        digest = hashlib.md5(str(sid).encode()).hexdigest()[:12]
+        path = settings.session_log_dir / f"{digest}.json"
+        return path.stat().st_mtime
+    except (OSError, AttributeError, ValueError, ImportError):
+        return None
+
+
 def reconcile(
     *,
     now: float | None = None,
@@ -246,6 +265,7 @@ def reconcile(
                     fresh_s=None,
                 ),
                 open_goal_text=goals.get(sid),
+                last_activity_ts=_session_activity_ts(sid),
                 now=moment,
                 auto_advance=auto_advance,
                 label=lease.label if lease is not None else "",

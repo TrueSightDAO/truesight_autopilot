@@ -19,6 +19,7 @@ from app.loop_status import (
     STATE_STALLED,
     Lease,
     SessionStatus,
+    _prompt_superseded,
     awaiting_age,
     classify_session,
     lease_age,
@@ -576,3 +577,70 @@ def test_awaiting_any_age_ignores_the_freshness_cutoff():
     )
     assert capped is None
     assert uncapped == 90_000.0
+
+
+# ── stale-awaiting suppression ────────────────────────────────────────────────
+# An awaiting prompt whose registry entry is never removed ages forever and the
+# loop keeps announcing a decision already made (seen at 77h). The guard must be
+# positive-evidence-only: it may stop a false nag, never swallow a real question.
+
+
+def _awaiting_kwargs(**over):
+    kw = {
+        "lease": None,
+        "awaiting_age_s": None,
+        "awaiting_any_age_s": 3600.0,
+        "open_goal_text": "finish the thing",
+        "now": NOW,
+        "auto_advance": True,
+    }
+    kw.update(over)
+    return kw
+
+
+def test_stale_awaiting_kept_when_no_activity_evidence():
+    """No activity timestamp -> unchanged behaviour, still awaiting."""
+    st = classify_session("s1", **_awaiting_kwargs())
+    assert st.state == STATE_AWAITING_STALE
+
+
+def test_stale_awaiting_suppressed_when_session_acted_after_prompt():
+    """Activity strictly newer than the prompt proves the governor replied."""
+    prompt_ts = NOW - 3600.0
+    st = classify_session("s1", **_awaiting_kwargs(last_activity_ts=prompt_ts + 60))
+    assert st.state != STATE_AWAITING_STALE
+
+
+def test_stale_awaiting_kept_when_activity_precedes_prompt():
+    """Activity older than the prompt is not evidence of a reply."""
+    prompt_ts = NOW - 3600.0
+    st = classify_session("s1", **_awaiting_kwargs(last_activity_ts=prompt_ts - 60))
+    assert st.state == STATE_AWAITING_STALE
+
+
+def test_fresh_awaiting_suppressed_when_session_acted_after_prompt():
+    prompt_ts = NOW - 120.0
+    st = classify_session(
+        "s1",
+        **_awaiting_kwargs(awaiting_age_s=120.0, last_activity_ts=prompt_ts + 30),
+    )
+    assert st.state != STATE_AWAITING
+
+
+def test_fresh_awaiting_kept_without_activity_evidence():
+    st = classify_session("s1", **_awaiting_kwargs(awaiting_age_s=120.0))
+    assert st.state == STATE_AWAITING
+
+
+def test_suppression_never_swallows_a_goal():
+    """A suppressed prompt must not leave the session looking done."""
+    prompt_ts = NOW - 3600.0
+    st = classify_session("s1", **_awaiting_kwargs(last_activity_ts=prompt_ts + 60))
+    assert st.state != STATE_IDLE
+    assert st.goal == "finish the thing"
+
+
+def test_prompt_superseded_rejects_missing_and_garbage():
+    assert _prompt_superseded(None, NOW, NOW) is False
+    assert _prompt_superseded(3600.0, None, NOW) is False
+    assert _prompt_superseded(3600.0, "not-a-number", NOW) is False
