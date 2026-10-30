@@ -63,7 +63,7 @@ def test_window_is_longer_than_a_single_tool_round():
 def _main_or_skip():
     try:
         from app import main
-    except Exception as exc:  # pragma: no cover - env dependent
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover - env dependent
         pytest.skip(f"app.main not importable here: {exc}")
     return main
 
