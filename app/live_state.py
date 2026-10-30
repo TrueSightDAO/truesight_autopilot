@@ -165,10 +165,13 @@ def _sessions() -> tuple[list[dict[str, Any]], str | None]:
     # Truncate AFTER sorting: the board wants the newest N, not an arbitrary N.
     sessions = sessions[:MAX_SESSIONS]
 
-    note = None
-    if not sessions and not scopes:
-        note = "no in-flight sessions"
-    return sessions, note
+    # An empty board is not a fault. Reporting it through ``degraded`` made the
+    # public board show "Partially degraded -- some sections could not be read:
+    # no in-flight sessions" whenever no turn happened to be mid-flight, which
+    # is most of the time. It also buried genuine read failures in the same
+    # list, so a real fault looked identical to a quiet moment. The empty case
+    # is now surfaced separately as the informational ``sessions_note``.
+    return sessions, None
 
 
 def _active_claims() -> tuple[list[dict[str, Any]], str | None]:
@@ -246,6 +249,11 @@ def live_state_payload() -> dict[str, Any]:
         "shared_state": session_state.enabled(),
         "sessions": sessions,
         "session_count": len(sessions),
+        # Informational, NOT a fault: distinguishes "nothing is running right
+        # now" from "we could not read the state". The board renders an empty
+        # lane as plain text (its own "nothing is in flight" copy); only
+        # ``degraded`` earns the warning banner.
+        "sessions_note": None if sessions else "no in-flight sessions",
         "active_claims": claims,
         "workers": workers,
         "claim_count": len(claims),
