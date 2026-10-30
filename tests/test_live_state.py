@@ -142,3 +142,57 @@ def test_malformed_claims_file_is_tolerated(monkeypatch):
     payload = live_state.live_state_payload()
     assert payload["active_claims"] == []
     assert "claims file malformed" in payload["degraded"]
+
+
+def _quiet_sources(monkeypatch):
+    """Pin all three sources to a clean, empty read."""
+    monkeypatch.setattr(live_state, "_sessions", lambda: ([], None))
+    monkeypatch.setattr(live_state, "_active_claims", lambda: ([], None))
+    monkeypatch.setattr(
+        live_state,
+        "_workers",
+        lambda: ({"enabled": False, "workers": [], "worker_count": 0}, None),
+    )
+
+
+def test_idle_board_is_not_degraded(monkeypatch):
+    """Zero in-flight sessions is a normal state, not a degraded read.
+
+    Regression: the public board showed "Partially degraded -- Some sections
+    could not be read: no in-flight sessions" whenever no turn was mid-flight,
+    because the empty case was pushed into ``degraded`` alongside real failures.
+    """
+    _quiet_sources(monkeypatch)
+    payload = live_state.live_state_payload()
+    assert payload["degraded"] == []
+    assert payload["sessions_note"] == "no in-flight sessions"
+
+
+def test_real_read_failure_still_degrades(monkeypatch):
+    """The empty-session fix must not silence a genuine read failure."""
+    monkeypatch.setattr(
+        live_state, "_sessions", lambda: ([], "progress store unavailable")
+    )
+    monkeypatch.setattr(live_state, "_active_claims", lambda: ([], None))
+    monkeypatch.setattr(
+        live_state,
+        "_workers",
+        lambda: ({"enabled": False, "workers": [], "worker_count": 0}, None),
+    )
+    payload = live_state.live_state_payload()
+    assert "progress store unavailable" in payload["degraded"]
+    assert payload["sessions_note"] == "no in-flight sessions"
+
+
+def test_sessions_note_absent_when_busy(monkeypatch):
+    """A live session means no 'nothing is in flight' note at all."""
+    monkeypatch.setattr(live_state, "_sessions", lambda: ([{"label": "busy"}], None))
+    monkeypatch.setattr(live_state, "_active_claims", lambda: ([], None))
+    monkeypatch.setattr(
+        live_state,
+        "_workers",
+        lambda: ({"enabled": False, "workers": [], "worker_count": 0}, None),
+    )
+    payload = live_state.live_state_payload()
+    assert payload["sessions_note"] is None
+    assert payload["degraded"] == []
