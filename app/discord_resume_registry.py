@@ -228,3 +228,35 @@ def peek_options(key: str) -> list[str] | None:
     except Exception as e:  # never block a turn
         logger.debug("peek_options failed: %s", e)
         return None
+
+
+def consume_channel(channel_id: int | str) -> int:
+    """Drop every resume-awaiting entry that points at ``channel_id``.
+
+    Discord counterpart of ``resume_registry.consume_thread``: a governor's plain
+    text reply is the go-signal, and ``handle_message`` never looks messages up
+    by id, so the entry would otherwise survive to the TTL and keep nagging.
+
+    Returns the number of entries removed.
+    """
+    try:
+        cid = str(channel_id).strip()
+        if not cid:
+            return 0
+        with _lock:
+            data = _load()
+            _prune(data)
+            stale = [
+                mid
+                for mid, entry in data.items()
+                if isinstance(entry, dict)
+                and str(entry.get("channel_id", "")).strip() == cid
+            ]
+            for mid in stale:
+                data.pop(mid, None)
+            if stale:
+                _save(data)
+            return len(stale)
+    except Exception as e:  # never block a turn
+        logger.debug("discord_resume_registry consume_channel failed: %s", e)
+        return 0

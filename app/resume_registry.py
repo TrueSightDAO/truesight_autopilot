@@ -204,3 +204,40 @@ def peek_options(key: str) -> list[str] | None:
     except Exception as e:  # never block a turn
         logger.debug("peek_options failed: %s", e)
         return None
+
+
+def consume_thread(thread_id: int | str) -> int:
+    """Drop every resume-awaiting entry that points at ``thread_id``.
+
+    A governor replying with ordinary text IS the go-signal, but
+    ``handle_message`` never looks messages up by id, so nothing consumes the
+    entry the prompt was posted under. Without this the entry survives to the
+    TTL and the loop keeps nagging about a prompt already answered.
+
+    Deliberately non-destructive to single-fire semantics: ``lookup`` still pops
+    on the reaction path, so a later emoji reaction on the same message is a
+    harmless no-op rather than a second turn.
+
+    Returns the number of entries removed.
+    """
+    try:
+        tid = str(thread_id).strip()
+        if not tid:
+            return 0
+        with _lock:
+            data = _load()
+            _prune(data)
+            stale = [
+                mid
+                for mid, entry in data.items()
+                if isinstance(entry, dict)
+                and str(entry.get("thread_id", "")).strip() == tid
+            ]
+            for mid in stale:
+                data.pop(mid, None)
+            if stale:
+                _save(data)
+            return len(stale)
+    except Exception as e:  # never block a turn
+        logger.debug("resume_registry consume_thread failed: %s", e)
+        return 0
