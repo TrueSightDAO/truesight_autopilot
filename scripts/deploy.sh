@@ -54,13 +54,17 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
         # So: carry local modifications across the reset, and never clean untracked
         # paths. Anything the new commit renames/deletes still wins; we only
         # restore files the reset would otherwise silently revert.
-        carried=\$(git -C $REMOTE_DIR diff --name-only)
+        local_patch=/tmp/deploy_local_edits.patch
+        git -C $REMOTE_DIR diff > \$local_patch
         git -C $REMOTE_DIR reset --hard origin/main
-        if [ -n \"\$carried\" ]; then
-            git -C $REMOTE_DIR checkout -- \$carried 2>/dev/null || true
-            echo \"  WARNING: local edits on this box were CARRIED across the deploy:\"
-            echo \"\$carried\" | sed 's/^/    /'
-            echo \"  -> commit or revert these; they are not in origin/main\"
+        if [ -s \$local_patch ]; then
+            if git -C $REMOTE_DIR apply --3way \$local_patch 2>/dev/null; then
+                echo "  WARNING: local edits on this box were CARRIED across the deploy"
+                git -C $REMOTE_DIR diff --name-only | sed 's/^/    /'
+                echo "  -> commit or revert these; they are not in origin/main"
+            else
+                echo "  WARNING: could NOT re-apply local edits; patch saved at \$local_patch"
+            fi
         fi
         git -C $REMOTE_DIR clean -nd | sed 's/^/  untracked (kept): /' || true
     else
