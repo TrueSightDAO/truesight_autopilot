@@ -492,7 +492,7 @@ def test_max_trusted_lease_is_sane():
 # ── awaiting → awaiting_stale split ───────────────────────────────────────────
 #
 # Regression guard for the failure mode this split exists to fix: a thread parked
-# awaiting a governor decision, whose prompt then ages out of the 24h freshness
+# awaiting a governor decision, whose prompt then ages out of the 1h freshness
 # window, used to be reported as ``lost_goal`` / "nothing running". It was neither
 # lost nor idle -- it was blocked on the governor, who was never told.
 

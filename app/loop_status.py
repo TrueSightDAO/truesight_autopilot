@@ -83,7 +83,16 @@ MAX_TRUSTED_LEASE_S = 86_400.0
 #: path consumes it, so a thread answered by a plain text reply keeps its entry
 #: until the 7-day TTL. Measured live: 880 Discord entries in 48h, 2457 in 7d.
 #: Freshness-bounding is what stops every Discord channel classifying AWAITING.
-DEFAULT_AWAITING_FRESH_S = 24 * 60 * 60.0
+# A resume-awaiting prompt that has gone unanswered this long is no longer
+# "fresh": the thread is blocked on the governor, not on Sophia, so it must
+# start nudging instead of staying silent.
+#
+# Was 24h. A thread waiting a full day for a decision was precisely the
+# silence this surface exists to break. Alert dedupe is hourly per
+# session+state (loop_alerts.DEFAULT_DEDUPE_S), so lowering this only moves
+# the FIRST nudge earlier -- it does not raise the steady-state rate for a
+# thread that stays parked.
+DEFAULT_AWAITING_FRESH_S = 60 * 60.0
 
 #: Track types that represent a live chat turn. ``deploy:``/``email:`` style
 #: background tracks are deliberately excluded -- the daemon classifies
