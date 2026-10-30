@@ -39,6 +39,13 @@ from typing import Any, Iterable
 STATE_BUSY = "busy"
 STATE_STALLED = "stalled"
 STATE_AWAITING = "awaiting"
+#: A thread that was parked awaiting a governor decision and whose prompt has
+#: since aged out of the freshness window. Split from STATE_AWAITING because
+#: the two need opposite treatment: a fresh prompt is working as intended and
+#: must not alert, while a stale one is the single most common way work is
+#: silently abandoned -- the governor believes they are waiting on Sophia,
+#: Sophia is waiting on the governor, and neither side is told.
+STATE_AWAITING_STALE = "awaiting_stale"
 STATE_LOST_GOAL = "lost_goal"
 STATE_IDLE = "idle"
 
@@ -46,12 +53,17 @@ ALL_STATES: tuple[str, ...] = (
     STATE_BUSY,
     STATE_STALLED,
     STATE_AWAITING,
+    STATE_AWAITING_STALE,
     STATE_LOST_GOAL,
     STATE_IDLE,
 )
 
 #: States worth a governor's attention.
-DEFECT_STATES: frozenset[str] = frozenset({STATE_STALLED, STATE_LOST_GOAL})
+#: ``STATE_AWAITING`` is deliberately absent: a fresh prompt is the system
+#: working, not failing. ``STATE_AWAITING_STALE`` is deliberately present.
+DEFECT_STATES: frozenset[str] = frozenset(
+    {STATE_STALLED, STATE_LOST_GOAL, STATE_AWAITING_STALE}
+)
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 
@@ -288,7 +300,7 @@ def awaiting_age(
     telegram_awaiting: dict[str, float],
     discord_awaiting: dict[str, float],
     now: float,
-    fresh_s: float = DEFAULT_AWAITING_FRESH_S,
+    fresh_s: float | None = DEFAULT_AWAITING_FRESH_S,
 ) -> float | None:
     """Seconds since Sophia posted a *fresh* resume-awaiting prompt, if any.
 
@@ -305,7 +317,10 @@ def awaiting_age(
             if not session_id.endswith(f":{ident}"):
                 continue
             age = max(0.0, now - ts)
-            if age > fresh_s:
+            # ``fresh_s=None`` means "no cutoff": report the age whatever it is.
+            # Callers use that to distinguish a prompt that is working from one
+            # that aged out, without a second scan of the registries.
+            if fresh_s is not None and age > fresh_s:
                 continue
             if best is None or age < best:
                 best = age
@@ -320,7 +335,8 @@ def classify_session(
     *,
     lease: Lease | None,
     awaiting_age_s: float | None,
-    open_goal_text: str | None,
+    awaiting_any_age_s: float | None = None,
+    open_goal_text: str | None = None,
     now: float,
     auto_advance: bool,
     label: str = "",
@@ -363,6 +379,23 @@ def classify_session(
             state=STATE_AWAITING,
             reason=f"awaiting decision — prompt posted {awaiting_age_s:.0f}s ago",
             age_s=awaiting_age_s,
+            label=label or (lease.label if lease else ""),
+            goal=goal,
+        )
+
+    # Parked awaiting a decision, but the prompt has aged out (or the registry
+    # was never refreshed). This is blocked-on-the-governor, NOT lost work, so
+    # it must be classified before the lost_goal fallthrough claims it with the
+    # misleading reason "nothing running".
+    if goal and awaiting_any_age_s is not None:
+        return SessionStatus(
+            session_id=session_id,
+            state=STATE_AWAITING_STALE,
+            reason=(
+                f"awaiting your decision \u2014 prompt posted {awaiting_any_age_s:.0f}s "
+                "ago and never refreshed"
+            ),
+            age_s=awaiting_any_age_s,
             label=label or (lease.label if lease else ""),
             goal=goal,
         )

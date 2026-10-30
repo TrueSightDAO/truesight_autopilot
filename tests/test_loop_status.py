@@ -12,6 +12,7 @@ from app.loop_status import (
     DEFECT_STATES,
     MAX_TRUSTED_LEASE_S,
     STATE_AWAITING,
+    STATE_AWAITING_STALE,
     STATE_BUSY,
     STATE_IDLE,
     STATE_LOST_GOAL,
@@ -474,10 +475,104 @@ def test_summarize_empty():
     }
 
 
-def test_defect_states_is_exactly_the_two_bad_ones():
-    assert DEFECT_STATES == {STATE_STALLED, STATE_LOST_GOAL}
+def test_defect_states_include_awaiting_stale_but_not_awaiting():
+    # A fresh ``awaiting`` is the system working as designed and must stay
+    # silent; ``awaiting_stale`` is a governor blocked on a decision and must
+    # alert. Conflating them is the bug this split fixes.
+    assert DEFECT_STATES == {STATE_STALLED, STATE_LOST_GOAL, STATE_AWAITING_STALE}
+    assert STATE_AWAITING not in DEFECT_STATES
+    assert STATE_BUSY not in DEFECT_STATES
 
 
 def test_max_trusted_lease_is_sane():
     assert MAX_TRUSTED_LEASE_S >= DEFAULT_TRACK_LEASE_S
     assert math.isfinite(MAX_TRUSTED_LEASE_S)
+
+
+# ── awaiting → awaiting_stale split ───────────────────────────────────────────
+#
+# Regression guard for the failure mode this split exists to fix: a thread parked
+# awaiting a governor decision, whose prompt then ages out of the 24h freshness
+# window, used to be reported as ``lost_goal`` / "nothing running". It was neither
+# lost nor idle -- it was blocked on the governor, who was never told.
+
+
+def test_stale_awaiting_is_not_reported_as_lost_goal():
+    now = 1_000_000.0
+    st = classify_session(
+        "s1",
+        lease=None,
+        awaiting_age_s=None,  # aged out of the freshness window
+        awaiting_any_age_s=90_000.0,  # 25h, but we still know it is parked
+        open_goal_text="ship the nudge split",
+        now=now,
+        auto_advance=True,
+    )
+    assert st.state == STATE_AWAITING_STALE
+    assert st.state != STATE_LOST_GOAL
+    # The old reason ("nothing running") was the actively misleading part.
+    assert "nothing running" not in st.reason.lower()
+    assert "awaiting your decision" in st.reason.lower()
+
+
+def test_fresh_awaiting_stays_reserved_and_silent():
+    """A prompt that is still working must not become alertable."""
+    now = 1_000_000.0
+    st = classify_session(
+        "s1",
+        lease=None,
+        awaiting_age_s=600.0,
+        awaiting_any_age_s=600.0,
+        open_goal_text="g",
+        now=now,
+        auto_advance=True,
+    )
+    assert st.state == STATE_AWAITING
+    assert not st.is_defect
+
+
+def test_stale_awaiting_without_goal_is_not_awaiting_stale():
+    """No goal means no plan to be blocked on, so do not claim blocked-on-you.
+
+    Without a goal the pre-existing fallthrough applies (``idle``); the
+    point of the assertion is only that we do not manufacture an
+    ``awaiting_stale`` alert out of a thread that has no plan at all.
+    """
+    st = classify_session(
+        "s1",
+        lease=None,
+        awaiting_age_s=None,
+        awaiting_any_age_s=90_000.0,
+        open_goal_text=None,
+        now=1_000_000.0,
+        auto_advance=True,
+    )
+    assert st.state != STATE_AWAITING_STALE
+
+
+def test_awaiting_stale_is_a_defect_so_it_actually_alerts():
+    st = classify_session(
+        "s1",
+        lease=None,
+        awaiting_age_s=None,
+        awaiting_any_age_s=90_000.0,
+        open_goal_text="g",
+        now=1_000_000.0,
+        auto_advance=True,
+    )
+    assert st.is_defect
+
+
+def test_awaiting_any_age_ignores_the_freshness_cutoff():
+    """``fresh_s=None`` must report the age instead of returning None."""
+    now = 1_000_000.0
+    # Matching is by suffix ":{ident}", so the key must be the transport
+    # identity and the session id must end with it.
+    sid = "pk-abc:tg:100:200"
+    reg = {"tg:100:200": now - 90_000.0}
+    capped = awaiting_age(sid, telegram_awaiting=reg, discord_awaiting={}, now=now)
+    uncapped = awaiting_age(
+        sid, telegram_awaiting=reg, discord_awaiting={}, now=now, fresh_s=None
+    )
+    assert capped is None
+    assert uncapped == 90_000.0
