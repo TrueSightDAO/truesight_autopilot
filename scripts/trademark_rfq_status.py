@@ -147,6 +147,10 @@ FIRMS = [
             "declined to take instructions from an AI assistant "
             "(Zhandra Pataueg, 2026-10-22) -- requires direct client contact"
         ),
+        "declined": (
+            "will not act on AI-authored instructions; a human must write to them "
+            "directly (Zhandra Pataueg, 2026-10-22)"
+        ),
     },
 ]
 
@@ -452,7 +456,12 @@ def build_report(results, state, now) -> tuple[str, str]:
     """Return (markdown, title)."""
     quoted = [f for f in FIRMS if results[f["key"]]["status"] == "QUOTED"]
     blocked = [f for f in FIRMS if results[f["key"]]["status"] == "BLOCKED_ON_US"]
-    waiting = [f for f in FIRMS if f["key"] not in {x["key"] for x in quoted + blocked}]
+    waiting = [
+        f
+        for f in FIRMS
+        if f["key"] not in {x["key"] for x in quoted + blocked}
+        and not f.get("declined")
+    ]
 
     d = now.strftime("%A %d %B %Y")
     lines = [
@@ -475,10 +484,13 @@ def build_report(results, state, now) -> tuple[str, str]:
     for f in FIRMS:
         info = results[f["key"]]
         q = QUOTES.get(f["key"], {})
+        label = icon.get(info["status"], info["status"])
+        if f.get("declined"):
+            label = "\U0001f6ab Declined (human needed)"
         lines.append(
             "| **{}** | {} | {} | {} | {} | {} |".format(
                 f["name"],
-                icon.get(info["status"], info["status"]),
+                label,
                 q.get("prof", "—"),
                 q.get("official", "—"),
                 q.get("search", "—"),
@@ -496,6 +508,8 @@ def build_report(results, state, now) -> tuple[str, str]:
             note.append(f"last inbound {info['last_date'][:22]} ({info['count']} msg)")
         else:
             note.append("no inbound mail")
+        if f.get("declined"):
+            note.append(f"\U0001f6ab DECLINED: {f['declined']}")
         if q.get("prof_note"):
             note.append(q["prof_note"])
         if q.get("extra_class") and q.get("extra_class") != "n/a in quote":
