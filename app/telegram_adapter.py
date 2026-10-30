@@ -2460,6 +2460,21 @@ def handle_message(
                 pass  # fall through to normal queue if progress fetch fails
 
         _ack_queued_if_busy(chat_id, thread_id, lock, session_id, public_key)
+        # A governor's plain text reply IS the go-signal, but handle_message never
+        # looks messages up by id, so nothing used to consume the resume-awaiting
+        # entry the prompt was posted under -- it survived to its TTL and the loop
+        # nagged about a prompt already answered. Clear this thread's entries here,
+        # at the dispatch seam. The reaction path still pops independently.
+        try:
+            _n = resume_registry.consume_thread(thread_id)
+            if _n:
+                logger.info(
+                    "consume_thread: cleared %d resume-awaiting entr(y/ies) for %s",
+                    _n,
+                    thread_id,
+                )
+        except Exception:
+            logger.debug("consume_thread failed for %s", thread_id, exc_info=True)
         # Run the turn (and auto-advance through the plan's next units when
         # AUTO_ADVANCE is on). Sends the text + voice reply per turn internally.
         _run_turn_with_auto_advance(

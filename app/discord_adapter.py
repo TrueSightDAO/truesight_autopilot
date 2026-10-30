@@ -1545,6 +1545,23 @@ def handle_message(
     # hand a future worker an invitation it could never honour.
     _record_dispatch_mark(session_id)
 
+    # A governor's plain text reply IS the go-signal, but handle_message never
+    # looks messages up by id, so nothing used to consume the resume-awaiting
+    # entry the prompt was posted under -- it survived to its TTL and the loop
+    # nagged about a prompt already answered. Clear this channel's entries here,
+    # at the far side of the gate, so only a message that actually dispatches a
+    # turn counts as the reply. The reaction path still pops independently.
+    try:
+        _n = discord_resume_registry.consume_channel(channel_id)
+        if _n:
+            logger.info(
+                "consume_channel: cleared %d resume-awaiting entr(y/ies) for %s",
+                _n,
+                channel_id,
+            )
+    except Exception:
+        logger.debug("consume_channel failed for %s", channel_id, exc_info=True)
+
     logger.info(
         "Discord %s message from %s (%s) in %s -- dispatching turn",
         role,
