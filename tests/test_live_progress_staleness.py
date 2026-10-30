@@ -26,7 +26,9 @@ def _hash(key: str) -> str:
 
 def test_fresh_heartbeat_is_live():
     now = time.time()
-    assert cst._live_progress_is_fresh({"heartbeat": now, "started_at": now}, now) is True
+    assert (
+        cst._live_progress_is_fresh({"heartbeat": now, "started_at": now}, now) is True
+    )
 
 
 def test_stale_heartbeat_is_not_live():
