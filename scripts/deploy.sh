@@ -160,12 +160,16 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     mkdir -p $REMOTE_DIR/context
     if [ -d $REMOTE_DIR/context/agentic_ai_context/.git ]; then
         cd $REMOTE_DIR/context/agentic_ai_context && git fetch --all
-        carried=\$(git -C $REMOTE_DIR/context/agentic_ai_context diff --name-only)
+        local_patch=/tmp/deploy_local_edits_context.patch
+        git -C $REMOTE_DIR/context/agentic_ai_context diff > \$local_patch
         git -C $REMOTE_DIR/context/agentic_ai_context reset --hard origin/main
-        if [ -n \"\$carried\" ]; then
-            git -C $REMOTE_DIR/context/agentic_ai_context checkout -- \$carried 2>/dev/null || true
-            echo \"  WARNING: local edits CARRIED in context/agentic_ai_context:\"
-            echo \"\$carried\" | sed 's/^/    /'
+        if [ -s \$local_patch ]; then
+            if git -C $REMOTE_DIR/context/agentic_ai_context apply --3way \$local_patch 2>/dev/null; then
+                echo \"  WARNING: local edits CARRIED in context/agentic_ai_context:\"
+                git -C $REMOTE_DIR/context/agentic_ai_context diff --name-only | sed 's/^/    /'
+            else
+                echo \"  WARNING: could NOT re-apply context edits; patch saved at \$local_patch\"
+            fi
         fi
     else
         rm -rf $REMOTE_DIR/context/agentic_ai_context
@@ -181,12 +185,16 @@ echo "=== Syncing tokenomics (needed by gas_deploy_project tool) ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     if [ -d $REMOTE_DIR/context/tokenomics/.git ]; then
         cd $REMOTE_DIR/context/tokenomics && git fetch --all
-        carried=\$(git -C $REMOTE_DIR/context/tokenomics diff --name-only)
+        local_patch=/tmp/deploy_local_edits_tokenomics.patch
+        git -C $REMOTE_DIR/context/tokenomics diff > \$local_patch
         git -C $REMOTE_DIR/context/tokenomics reset --hard origin/main
-        if [ -n \"\$carried\" ]; then
-            git -C $REMOTE_DIR/context/tokenomics checkout -- \$carried 2>/dev/null || true
-            echo \"  WARNING: local edits CARRIED in context/tokenomics:\"
-            echo \"\$carried\" | sed 's/^/    /'
+        if [ -s \$local_patch ]; then
+            if git -C $REMOTE_DIR/context/tokenomics apply --3way \$local_patch 2>/dev/null; then
+                echo \"  WARNING: local edits CARRIED in context/tokenomics:\"
+                git -C $REMOTE_DIR/context/tokenomics diff --name-only | sed 's/^/    /'
+            else
+                echo \"  WARNING: could NOT re-apply tokenomics edits; patch saved at \$local_patch\"
+            fi
         fi
     else
         rm -rf $REMOTE_DIR/context/tokenomics
