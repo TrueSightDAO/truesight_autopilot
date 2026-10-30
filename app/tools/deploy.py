@@ -840,17 +840,44 @@ def deploy_autopilot(caller_session: str | None = None) -> str:
         # edits /etc/nginx/sites-available/sophia, which is a symlink into
         # /opt/truesight_autopilot/config/nginx/sophia.conf in the repo. So
         # the next deploy sees the repo as "dirty" and `git pull` refuses to
-        # merge with "Your local changes would be overwritten." Hard reset +
-        # clean treats the repo file as the source of truth and accepts that
-        # certbot's runtime edits get clobbered each deploy (then re-applied
-        # by certbot --nginx in step 4). This matches what scripts/deploy.sh
-        # already does.
+        # merge with "Your local changes would be overwritten." Hard reset
+        # treats the repo file as the source of truth and accepts that
+        # certbot's runtime edits to that one file get clobbered each deploy
+        # (then re-applied by certbot --nginx in step 4).
+        #
+        # But a bare `reset --hard` + `clean -fd` is unconditionally
+        # destructive to ANY other uncommitted or untracked work on the box
+        # -- this incident (2026-10-30): a deploy dispatched without checking
+        # git status first destroyed a whole feature's WIP (an untracked
+        # module + its tests, plus tracked-file patches) because neither was
+        # committed anywhere. Mirrors the fix landed in scripts/deploy.sh
+        # (#600): capture uncommitted diffs to a patch BEFORE resetting,
+        # re-apply with `--3way` after, and if the re-apply conflicts, reset
+        # again rather than leave conflict markers in a live file (a broken
+        # tree that won't boot is strictly worse than a lost edit). Never
+        # `clean -fd` -- untracked paths on a box running live services
+        # (e.g. farm_media_daemon/) are not garbage.
         try:
             logger.info("Step 1: git fetch + reset --hard origin/main + clean")
             _run_local(
-                "git fetch origin main && git reset --hard origin/main && git clean -fd",
+                "git fetch origin main\n"
+                "local_patch=/tmp/deploy_autopilot_local_edits.patch\n"
+                "git diff > $local_patch\n"
+                "git reset --hard origin/main\n"
+                "if [ -s $local_patch ]; then\n"
+                "    if git apply --3way $local_patch 2>/dev/null; then\n"
+                '        echo "  WARNING: local edits on this box were CARRIED across the deploy"\n'
+                "        git diff --name-only | sed 's/^/    /'\n"
+                '        echo "  -> commit or revert these; they are not in origin/main"\n'
+                "    else\n"
+                "        git reset --hard origin/main\n"
+                '        echo "  ERROR: could NOT re-apply local edits; box left CLEAN at origin/main"\n'
+                '        echo "         your edits are saved at $local_patch -- re-apply manually"\n'
+                "    fi\n"
+                "fi\n"
+                "git clean -nd | sed 's/^/  untracked (kept): /' || true",
                 cwd=remote_dir,
-                timeout=30,
+                timeout=60,
             )
             # Don't append git_pull to steps here — the subprocess will, so
             # the returned JSON has the full step list in execution order.
