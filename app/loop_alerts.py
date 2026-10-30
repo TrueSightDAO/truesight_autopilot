@@ -117,6 +117,9 @@ class Alert:
     reason: str = ""
     goal: str = ""
     age_s: float | None = None
+    #: True when the session had no channel and this was routed to the
+    #: fallback target, so the text must name its origin.
+    via_fallback: bool = False
 
     @property
     def dedupe_key(self) -> str:
@@ -146,12 +149,13 @@ class Alert:
         goal = (self.goal or "(no goal recorded)").strip()
         if len(goal) > MAX_GOAL_CHARS:
             goal = goal[: MAX_GOAL_CHARS - 1].rstrip() + "\u2026"
-        lines = [
-            header,
-            "",
-            f"Goal: {goal}",
-            f"State: {self.state}",
-        ]
+        lines = [header, ""]
+        if self.via_fallback:
+            # Posted into a shared channel because this session has none of its
+            # own -- without the id, a reader there cannot tell what it refers
+            # to.
+            lines.append(f"Session: {self.session_id}")
+        lines += [f"Goal: {goal}", f"State: {self.state}"]
         if self.reason:
             lines.append(f"Why: {self.reason}")
         if self.age_s is not None:
@@ -168,6 +172,8 @@ class AlertRun:
     sent: list[Alert] = field(default_factory=list)
     skipped_dedupe: list[str] = field(default_factory=list)
     unmapped: list[str] = field(default_factory=list)
+    #: Sessions with no channel that were routed to the fallback instead.
+    fallback: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     #: Eligible (not already claimed) alerts deferred by the per-sweep cap.
     capped: int = 0
@@ -199,6 +205,42 @@ def target_for_session(session_id: str) -> Target | None:
     m = _DC_RE.search(session_id)
     if m:
         return Target("discord", m.group("channel"), m.group("thread"))
+    return None
+
+
+#: Where alerts for sessions with no channel of their own should land.
+#: Shape mirrors a session suffix with no leading colon and no session hash,
+#: e.g. ``tg:-1003919341801:41214`` or ``dc:923008087315587072``.
+FALLBACK_ENV = "LOOP_ALERTS_FALLBACK_TARGET"
+
+_FALLBACK_TG_RE = re.compile(r"^(?:tg|telegram):(?P<chat>-?\d+)(?::(?P<thread>\d+))?$")
+_FALLBACK_DC_RE = re.compile(r"^(?:dc|discord):(?P<channel>\d+)(?::(?P<thread>\d+))?$")
+
+
+def fallback_target(environ=None) -> Target | None:
+    """Parse ``LOOP_ALERTS_FALLBACK_TARGET`` into a Target, or None.
+
+    Some real sessions have no channel of their own (handoff keys such as
+    ``...:envoy-foo``). Without a fallback those are only reported as
+    ``unmapped`` -- honest, but the alert reaches nobody. Pointing this at a
+    triage channel turns "nobody was told" into "a human was told, and was told
+    which session it came from".
+
+    Anything unparseable is treated as unset (fail-closed to the older
+    ``unmapped`` behaviour) rather than raising: a typo in one env var must not
+    stop the sweep from alerting on the sessions that *do* have channels.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get(FALLBACK_ENV) or "").strip()
+    if not raw:
+        return None
+    m = _FALLBACK_TG_RE.match(raw)
+    if m:
+        return Target("telegram", m.group("chat"), m.group("thread"))
+    m = _FALLBACK_DC_RE.match(raw)
+    if m:
+        return Target("discord", m.group("channel"), m.group("thread"))
+    log.warning("%s=%r is not a valid target; ignoring", FALLBACK_ENV, raw)
     return None
 
 
@@ -319,9 +361,14 @@ def plan_alerts(
         if not state_enabled(state, environ):
             continue
         target = target_for_session(sid)
+        via_fallback = False
         if target is None:
-            run.unmapped.append(f"{sid} [{state}]")
-            continue
+            target = fallback_target(environ)
+            if target is None:
+                run.unmapped.append(f"{sid} [{state}]")
+                continue
+            via_fallback = True
+            run.fallback.append(f"{sid} [{state}] -> {target.describe()}")
         alert = Alert(
             session_id=sid,
             state=state,
@@ -329,6 +376,7 @@ def plan_alerts(
             reason=record.get("reason") or "",
             goal=record.get("goal") or "",
             age_s=_age_of(record),
+            via_fallback=via_fallback,
         )
         # Skip already-claimed alerts BEFORE the cap -- in live mode too. The
         # authoritative claim remains the SET NX below; this read is what makes
@@ -550,6 +598,7 @@ def deliver_all(
         planned=list(run.planned),
         skipped_dedupe=list(run.skipped_dedupe),
         unmapped=list(run.unmapped),
+        fallback=list(run.fallback),
         errors=list(run.errors),
         capped=run.capped,
     )
