@@ -236,6 +236,15 @@ def reconcile(
                     discord_awaiting=discord_awaiting,
                     now=moment,
                 ),
+                # Same scan, no freshness cutoff: lets the classifier tell a
+                # prompt that is still working from one that aged out.
+                awaiting_any_age_s=loop_status.awaiting_age(
+                    sid,
+                    telegram_awaiting=telegram_awaiting,
+                    discord_awaiting=discord_awaiting,
+                    now=moment,
+                    fresh_s=None,
+                ),
                 open_goal_text=goals.get(sid),
                 now=moment,
                 auto_advance=auto_advance,

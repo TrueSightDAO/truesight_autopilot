@@ -635,3 +635,85 @@ def test_deliver_telegram_uses_envoy_token(monkeypatch):
     assert out["status"] == "sent"
     assert "/botenvoy-tg-tok/sendMessage" in captured["url"]
     assert "sophia-env-tok" not in captured["url"]
+
+
+# ── awaiting_stale alerting ───────────────────────────────────────────────────
+#
+# The split is only useful if the new state actually reaches the governor. These
+# pin both halves: it alerts by default, and the copy does not insult the reader
+# by calling a blocked-on-you thread "nothing running".
+
+
+def _stale_status(sid="s1"):
+    return {
+        "session_id": sid,
+        "state": loop_status.STATE_AWAITING_STALE,
+        "reason": "awaiting your decision — prompt posted 90000s ago and never refreshed",
+        "goal": "ship the nudge split",
+        "age_s": 90_000.0,
+    }
+
+
+def _target():
+    return loop_alerts.Target(kind="telegram", chat_id="1", thread_id="2")
+
+
+def test_awaiting_stale_alerts_by_default():
+    assert loop_alerts.state_enabled(loop_status.STATE_AWAITING_STALE, {}) is True
+
+
+def test_fresh_awaiting_still_never_alerts():
+    """The whole point of keeping the two states apart."""
+    assert loop_alerts.state_enabled(loop_status.STATE_AWAITING, {}) is False
+
+
+def test_awaiting_stale_alert_can_be_disabled():
+    env = {"LOOP_ALERTS_AWAITING_STALE": "false"}
+    assert loop_alerts.state_enabled(loop_status.STATE_AWAITING_STALE, env) is False
+
+
+def test_awaiting_stale_copy_asks_instead_of_reporting_a_fault():
+    a = loop_alerts.Alert(
+        session_id="s1",
+        state=loop_status.STATE_AWAITING_STALE,
+        target=_target(),
+        reason=_stale_status()["reason"],
+        goal="ship the nudge split",
+        age_s=90_000.0,
+    )
+    text = a.text()
+    assert "waiting on you" in text.lower()
+    assert "nothing running" not in text.lower()
+    assert "blocked on your reply" in text.lower()
+    assert "Waiting for" in text
+
+
+def test_lost_goal_copy_is_unchanged():
+    a = loop_alerts.Alert(
+        session_id="s1",
+        state=loop_status.STATE_LOST_GOAL,
+        target=_target(),
+        reason="nothing running",
+        goal="g",
+        age_s=3600.0,
+    )
+    text = a.text()
+    assert "nothing running" in text.lower()
+    assert "Idle for" in text
+
+
+def test_stale_awaiting_reaches_dispatch():
+    """End of the chain: a stale-awaiting session must survive mapping + gating.
+
+    Uses the module's ``TG`` fixture rather than a bare id, because
+    ``target_for_session`` needs a transport prefix to route -- a bare id lands in
+    ``run.unmapped`` and is silently undeliverable, which is its own bug class.
+    """
+    run = loop_alerts.plan_alerts(
+        [_status(TG, loop_status.STATE_AWAITING_STALE)],
+        FakeRedis(),
+        environ={"LOOP_ALERTS_ENABLED": "true"},
+        dry_run=False,
+    )
+    assert [a.state for a in run.planned] == [loop_status.STATE_AWAITING_STALE]
+    assert run.unmapped == []

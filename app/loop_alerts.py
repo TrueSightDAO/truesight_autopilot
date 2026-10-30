@@ -124,11 +124,30 @@ class Alert:
 
     def text(self) -> str:
         """The message a governor actually reads in their thread."""
+        # The two defect classes need different wording. Telling a governor
+        # "nothing running" about a thread that is parked awaiting *their* reply
+        # is actively misleading -- it reads like a fault rather than a request.
+        if self.state == loop_status.STATE_AWAITING_STALE:
+            header = "\u23f3 Loop is waiting on you \u2014 decision needed"
+            age_prefix = "Waiting for"
+            hint = (
+                "Nothing is broken; this thread is blocked on your reply. "
+                "Answer here and I will pick up where I left off."
+            )
+        else:
+            header = (
+                "\U0001f501 Loop needs a nudge \u2014 goal left open, nothing running"
+            )
+            age_prefix = "Idle for"
+            hint = (
+                "Something stopped this thread mid-plan. Reply here to resume, "
+                "or start a fresh instruction."
+            )
         goal = (self.goal or "(no goal recorded)").strip()
         if len(goal) > MAX_GOAL_CHARS:
             goal = goal[: MAX_GOAL_CHARS - 1].rstrip() + "\u2026"
         lines = [
-            "\U0001f501 Loop needs a nudge \u2014 goal left open, nothing running",
+            header,
             "",
             f"Goal: {goal}",
             f"State: {self.state}",
@@ -136,12 +155,8 @@ class Alert:
         if self.reason:
             lines.append(f"Why: {self.reason}")
         if self.age_s is not None:
-            lines.append(f"Idle for: {_human_age(self.age_s)}")
-        lines += [
-            "",
-            "Something stopped this thread mid-plan. Reply here to resume, "
-            "or start a fresh instruction.",
-        ]
+            lines.append(f"{age_prefix}: {_human_age(self.age_s)}")
+        lines += ["", hint]
         return "\n".join(lines)
 
 
@@ -206,6 +221,11 @@ def state_enabled(state: str, environ=None) -> bool:
         return _truthy(env.get("LOOP_ALERTS_LOST_GOAL"), True)
     if state == loop_status.STATE_STALLED:
         return _truthy(env.get("LOOP_ALERTS_STALLED"), False)
+    # A thread blocked on the governor alerts by default: that is the whole
+    # point of the split from STATE_AWAITING, which stays silent because a
+    # fresh prompt is the system working as designed.
+    if state == loop_status.STATE_AWAITING_STALE:
+        return _truthy(env.get("LOOP_ALERTS_AWAITING_STALE"), True)
     # busy / awaiting / idle are not defects and never alert.
     return False
 
