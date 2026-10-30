@@ -50,6 +50,32 @@ logger = logging.getLogger("autopilot.tools.compact_session")
 
 _ACTIVE_WINDOW_SECS = 300.0  # a session "active elsewhere" if seen in the last 5 min
 
+# ``_live_progress`` is process-local and carries no TTL, so an entry whose turn died
+# mid-way (exception, BaseException, hard cancel) is never popped and would read as
+# "mid-turn" for the life of the process -- permanently refusing compaction for that
+# session hash. main.py refreshes ``heartbeat`` each tool round; anything older than
+# this is treated as dead and ignored. Deliberately far longer than
+# _ACTIVE_WINDOW_SECS: a single long tool round must never be mistaken for a dead
+# session, so the cost of a stale entry is a bounded wait, not a wrong decision.
+_LIVE_PROGRESS_MAX_AGE_SECS = 1800.0
+
+
+def _live_progress_is_fresh(rec: dict | None, now: float) -> bool:
+    """True only if this progress record's heartbeat is recent.
+
+    ``started_at`` is the fallback for records written before ``heartbeat``
+    existed. A missing or unparseable stamp is treated as NOT fresh: the guard
+    exists to protect a mutating compaction, so it must fail towards "not live"
+    rather than keep an unrecognised record blocking forever.
+    """
+    if not isinstance(rec, dict):
+        return False
+    stamp = rec.get("heartbeat", rec.get("started_at"))
+    try:
+        return (now - float(stamp)) < _LIVE_PROGRESS_MAX_AGE_SECS
+    except (TypeError, ValueError):
+        return False
+
 
 def _resolve_session(
     session_ref: str, current_session_id: str | None
@@ -102,7 +128,10 @@ def _active_key_for_hash(target_hash: str) -> str | None:
     for key in list(_live_progress.keys()):
         try:
             if hashlib.md5(str(key).encode()).hexdigest()[:12] == target_hash:
-                return str(key)
+                # Freshness-gate: presence alone is not proof of a live turn -- a
+                # leaked entry (turn died without popping) must not block.
+                if _live_progress_is_fresh(_live_progress.get(key), now):
+                    return str(key)
         except Exception:
             continue
     for key, ts in list(_active_streams.items()):
