@@ -127,11 +127,12 @@ def _active_key_for_hash(target_hash: str) -> str | None:
     now = time.time()
     for key in list(_live_progress.keys()):
         try:
-            if hashlib.md5(str(key).encode()).hexdigest()[:12] == target_hash:
-                # Freshness-gate: presence alone is not proof of a live turn -- a
-                # leaked entry (turn died without popping) must not block.
-                if _live_progress_is_fresh(_live_progress.get(key), now):
-                    return str(key)
+            # Freshness-gate: presence alone is not proof of a live turn -- a
+            # leaked entry (turn died without popping) must not block.
+            if hashlib.md5(str(key).encode()).hexdigest()[:12] == target_hash and (
+                _live_progress_is_fresh(_live_progress.get(key), now)
+            ):
+                return str(key)
         except Exception:
             continue
     for key, ts in list(_active_streams.items()):
