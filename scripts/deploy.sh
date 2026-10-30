@@ -41,7 +41,28 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "sudo mkdir -p $REMOTE_DIR && sudo chown ubuntu:ub
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     if [ -d $REMOTE_DIR/.git ]; then
         echo 'Git repo exists — pulling latest...'
-        cd $REMOTE_DIR && git fetch origin main && git reset --hard origin/main && git clean -fd
+        cd $REMOTE_DIR && git fetch origin main
+        # Deploy MUST NOT destroy work that exists only on this box. Both of these
+        # were eaten by the old line here (2026-10-30):
+        #   - reset --hard  discarded uncommitted tracked edits: a do_not_chase
+        #     guard honouring a firm that refused AI correspondence, plus two
+        #     fixes where our own GMail DRAFTS were scored as the firm's inbound
+        #     replies (30 stale Donaldson drafts read as "the firm acknowledged").
+        #   - clean -fd     deleted farm_media_daemon/, which is NOT in .gitignore
+        #     and is the ExecStart path of two live services (farm-media-daemon,
+        #     farm-media-archive). They would survive until restart, then die.
+        # So: carry local modifications across the reset, and never clean untracked
+        # paths. Anything the new commit renames/deletes still wins; we only
+        # restore files the reset would otherwise silently revert.
+        carried=\$(git -C $REMOTE_DIR diff --name-only)
+        git -C $REMOTE_DIR reset --hard origin/main
+        if [ -n \"\$carried\" ]; then
+            git -C $REMOTE_DIR checkout -- \$carried 2>/dev/null || true
+            echo \"  WARNING: local edits on this box were CARRIED across the deploy:\"
+            echo \"\$carried\" | sed 's/^/    /'
+            echo \"  -> commit or revert these; they are not in origin/main\"
+        fi
+        git -C $REMOTE_DIR clean -nd | sed 's/^/  untracked (kept): /' || true
     else
         echo 'First deploy or migration from rsync — initializing git repo...'
         # Preserve .env if it exists (will be re-synced below anyway)
@@ -134,7 +155,14 @@ echo "=== Syncing agentic_ai_context ==="
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     mkdir -p $REMOTE_DIR/context
     if [ -d $REMOTE_DIR/context/agentic_ai_context/.git ]; then
-        cd $REMOTE_DIR/context/agentic_ai_context && git fetch --all && git reset --hard origin/main && git clean -fd
+        cd $REMOTE_DIR/context/agentic_ai_context && git fetch --all
+        carried=\$(git -C $REMOTE_DIR/context/agentic_ai_context diff --name-only)
+        git -C $REMOTE_DIR/context/agentic_ai_context reset --hard origin/main
+        if [ -n \"\$carried\" ]; then
+            git -C $REMOTE_DIR/context/agentic_ai_context checkout -- \$carried 2>/dev/null || true
+            echo \"  WARNING: local edits CARRIED in context/agentic_ai_context:\"
+            echo \"\$carried\" | sed 's/^/    /'
+        fi
     else
         rm -rf $REMOTE_DIR/context/agentic_ai_context
         git clone --depth 1 https://github.com/TrueSightDAO/agentic_ai_context.git $REMOTE_DIR/context/agentic_ai_context
@@ -148,7 +176,14 @@ echo "=== Syncing tokenomics (needed by gas_deploy_project tool) ==="
 # app/tools/gas_deploy_project.py docstring).
 ssh -i "$EC2_KEY" "$EC2_HOST" "
     if [ -d $REMOTE_DIR/context/tokenomics/.git ]; then
-        cd $REMOTE_DIR/context/tokenomics && git fetch --all && git reset --hard origin/main && git clean -fd
+        cd $REMOTE_DIR/context/tokenomics && git fetch --all
+        carried=\$(git -C $REMOTE_DIR/context/tokenomics diff --name-only)
+        git -C $REMOTE_DIR/context/tokenomics reset --hard origin/main
+        if [ -n \"\$carried\" ]; then
+            git -C $REMOTE_DIR/context/tokenomics checkout -- \$carried 2>/dev/null || true
+            echo \"  WARNING: local edits CARRIED in context/tokenomics:\"
+            echo \"\$carried\" | sed 's/^/    /'
+        fi
     else
         rm -rf $REMOTE_DIR/context/tokenomics
         git clone --depth 1 https://github.com/TrueSightDAO/tokenomics.git $REMOTE_DIR/context/tokenomics
