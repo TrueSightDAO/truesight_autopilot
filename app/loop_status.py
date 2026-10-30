@@ -94,6 +94,22 @@ MAX_TRUSTED_LEASE_S = 86_400.0
 # thread that stays parked.
 DEFAULT_AWAITING_FRESH_S = 60 * 60.0
 
+#: An OPEN goal that has shown no progress for this long stops being a defect.
+#:
+#: A goal becomes terminal only on ``complete``/``dismiss`` (see
+#: :mod:`app.thread_goal`). A session that stops mid-plan writes neither, so its
+#: goal stays OPEN indefinitely and ``lost_goal`` re-nudged that thread on every
+#: single sweep -- long after the work underneath had been finished and verified.
+#: Measured live 2026-10-30 against the 14 open goals: two at **31 days** and one
+#: at **10 days**, then nothing until 1.9 days. The gap is wide and unambiguous,
+#: so the threshold sits in it rather than being plucked from the air.
+#:
+#: Aged out, the session becomes ``idle`` (deliberately NOT a defect state) and
+#: the reason says the goal is stale -- the honest reading is "work finished and
+#: nobody closed the goal", not "work stopped". A governor reopens the work by
+#: posting a fresh instruction, which opens a new goal with a fresh timestamp.
+DEFAULT_LOST_GOAL_STALE_S = 7 * 86_400.0
+
 #: Track types that represent a live chat turn. ``deploy:``/``email:`` style
 #: background tracks are deliberately excluded -- the daemon classifies
 #: *conversations*, and a cron track must not make a thread look busy.
@@ -346,11 +362,19 @@ def classify_session(
     awaiting_age_s: float | None,
     awaiting_any_age_s: float | None = None,
     open_goal_text: str | None = None,
+    goal_progress_age_s: float | None = None,
+    lost_goal_stale_s: float = DEFAULT_LOST_GOAL_STALE_S,
     now: float,
     auto_advance: bool,
     label: str = "",
 ) -> SessionStatus:
-    """Classify one session. Pure; never raises on odd input."""
+    """Classify one session. Pure; never raises on odd input.
+
+    ``goal_progress_age_s`` is seconds since this session's open goal last showed
+    progress. ``None`` means the age is unknown, which keeps the established
+    behaviour (report it as ``lost_goal``) rather than assuming it is stale --
+    an unknown age must never silently suppress a real defect.
+    """
     goal = (open_goal_text or "").strip()
 
     if lease is not None and lease.is_running:
@@ -410,6 +434,24 @@ def classify_session(
         )
 
     if goal and auto_advance:
+        # An open goal is only a defect while it is plausibly still live. Past the
+        # staleness window the thread is not "lost work" -- it is a finished (or
+        # abandoned) job whose goal was never closed, and re-nudging it forever
+        # trains the governor to ignore this surface entirely.
+        if goal_progress_age_s is not None and goal_progress_age_s > lost_goal_stale_s:
+            return SessionStatus(
+                session_id=session_id,
+                state=STATE_IDLE,
+                reason=(
+                    "open goal stale \u2014 no progress for "
+                    f"{goal_progress_age_s / 86_400:.1f}d "
+                    "(auto-advance is on, but nothing has moved; close the goal "
+                    "or post a fresh instruction)"
+                ),
+                age_s=goal_progress_age_s,
+                label=label or (lease.label if lease else ""),
+                goal=goal,
+            )
         return SessionStatus(
             session_id=session_id,
             state=STATE_LOST_GOAL,

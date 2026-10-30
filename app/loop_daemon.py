@@ -155,6 +155,35 @@ def load_goals() -> dict[str, str]:
     return out
 
 
+def load_goal_ages(moment: float) -> dict[str, float]:
+    """Map ``session_id`` -> seconds since its open goal last showed progress.
+
+    :func:`load_goals` returns only the goal *text*, which leaves the classifier
+    unable to tell a goal dropped an hour ago from one dropped a month ago -- so a
+    goal nobody ever closed re-nudged its thread forever. The age is the newest of
+    ``last_progress_ts`` (a turn that actually advanced the work) and ``opened_ts``,
+    so a goal that was just opened reads as fresh rather than instantly stale.
+
+    Sessions with no goal, or a terminal (completed/dismissed) goal, are omitted:
+    they are not candidates for ``lost_goal`` at all.
+    """
+    path_env = os.environ.get("THREAD_GOALS_PATH")
+    path = Path(path_env) if path_env else None
+    out: dict[str, float] = {}
+    for sid in _session_ids_in(path if path is not None else thread_goal._state_path()):
+        try:
+            goal = thread_goal.current_goal(sid, path=path)
+        except Exception:  # pragma: no cover - one bad goal must not kill a sweep
+            log.warning("goal replay failed for %s", sid, exc_info=True)
+            continue
+        if goal is None or goal.status != thread_goal.GOAL_OPEN:
+            continue
+        ts = max(goal.last_progress_ts or 0.0, goal.opened_ts or 0.0)
+        if ts > 0:
+            out[sid] = max(0.0, moment - ts)
+    return out
+
+
 def _session_ids_in(path: Path) -> list[str]:
     """Distinct session ids present in the goal log (single pass)."""
     try:
@@ -213,6 +242,7 @@ def reconcile(
     leases = load_tracks(tracks_path)
     telegram_awaiting, discord_awaiting = load_awaiting(moment)
     goals = load_goals()
+    goal_ages = load_goal_ages(moment)
 
     # Sessions appear in any of the three sources; a goal opened but never
     # turned (no track yet) is exactly the `lost_goal` case worth catching.
@@ -246,6 +276,7 @@ def reconcile(
                     fresh_s=None,
                 ),
                 open_goal_text=goals.get(sid),
+                goal_progress_age_s=goal_ages.get(sid),
                 now=moment,
                 auto_advance=auto_advance,
                 label=lease.label if lease is not None else "",
