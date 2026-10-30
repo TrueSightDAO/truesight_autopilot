@@ -138,6 +138,15 @@ FIRMS = [
         "to": "mail.asia@spruson.com",
         "contact": "mail.asia (Amy Chan)",
         "sent": "2026-10-16",
+        # 2026-10-22 (Zhandra Pataueg): Spruson will NOT take instructions from an
+        # AI assistant -- "we prefer to correspond directly with the client or
+        # their authorized representatives ... otherwise we will not be able to
+        # assist." Auto-chasing them would be a direct breach of that request, so
+        # this firm is never chased by the loop. A human must write to them.
+        "do_not_chase": (
+            "declined to take instructions from an AI assistant "
+            "(Zhandra Pataueg, 2026-10-22) -- requires direct client contact"
+        ),
     },
 ]
 
@@ -271,8 +280,12 @@ def scan_firm(svc, firm) -> dict:
     """Return latest inbound mail + classification for one firm."""
     # Include outbound to the firm as well: we need OUR replies in the thread to
     # tell whether a "needs our input" signal is still live or already answered.
-    q = f"(from:{firm['domain']} OR to:{firm['domain']}) newer_than:30d"
-    res = svc.users().messages().list(userId="me", q=q, maxResults=25).execute()
+    # Exclude drafts and raise the cap: 30 stale DRAFT copies in the Donaldson
+    # thread filled the old 25-message window entirely, pushing the firm's real
+    # inbound replies out of the result set -- which made a firm that HAD quoted
+    # look like it had never replied ("no inbound mail").
+    q = f"(from:{firm['domain']} OR to:{firm['domain']}) -in:drafts newer_than:30d"
+    res = svc.users().messages().list(userId="me", q=q, maxResults=50).execute()
     msgs = []
     for ref in res.get("messages", []) or []:
         m = (
@@ -290,7 +303,11 @@ def scan_firm(svc, firm) -> dict:
                 "subject": hdrs.get("subject", ""),
                 "text": _plain(_body(m["payload"])),
                 "internal_ts": int(m.get("internalDate", "0")) / 1000.0,
-                "ours": "SENT" in (m.get("labelIds") or []),
+                # Drafts are OURS in the making: the nudge loop leaves them in
+                # the thread, and scoring them as inbound made our own prose look
+                # like the firm replying (30 stale Donaldson drafts were being
+                # read as "the firm acknowledged"). Treat DRAFT as ours.
+                "ours": bool({"SENT", "DRAFT"} & set(m.get("labelIds") or [])),
             }
         )
     if not msgs:
@@ -353,6 +370,10 @@ def save_state(state: dict) -> None:
 # ── chase decision ────────────────────────────────────────────────────────
 def chase_due(firm, info, state, now) -> tuple[bool, str]:
     st = state["firms"].setdefault(firm["key"], {"chases": 0, "last_chase": None})
+    if firm.get("do_not_chase"):
+        # Some firms have told us they will not correspond with an automated
+        # assistant. Chasing them again would breach that instruction.
+        return False, f"do-not-chase: {firm['do_not_chase']}"
     status = info["status"]
     if status == "QUOTED":
         return False, "already quoted"
