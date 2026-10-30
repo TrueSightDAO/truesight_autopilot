@@ -1,0 +1,127 @@
+# Farm Media Daemon — config template
+# Copy to /opt/truesight_autopilot/media_archive_daemon_config.yaml (never commit real creds)
+
+# Global daily upload budget across ALL farms (YouTube API "Video Uploads per day")
+# Unverified OAuth project: ~6/day. Verified: up to 100/day. Reset ~07:00 UTC.
+daily_budget: 6
+
+# YouTube project(s) — add more entries to scale cap (multi-project support planned)
+projects:
+  - name: truesight-main
+    credentials: /opt/truesight_autopilot/config/youtube/youtube_token.json
+    client_secrets: /opt/truesight_autopilot/config/youtube/client_secret.json
+
+# Inboxes the daemon watches
+inboxes:
+  - farm_id: cleide
+    path: /home/ubuntu/media_archive_inbox/farm-media/cleide
+    priority: 2
+  - farm_id: paulo-la-do-sitio
+    path: /home/ubuntu/media_archive_inbox/farm-media/paulo-la-do-sitio
+    priority: 1
+
+# Raw archive worker (farm_media_archive.py) — originals -> S3 media.agroverse.shop
+# Raws follow bucket lifecycle (STANDARD_IA @30d -> DEEP_ARCHIVE @180d);
+# previews/ has NO lifecycle rule so previews stay HOT.
+archive:
+  bucket: media.agroverse.shop
+  region: us-east-1
+  preview_frame_frac: 0.25   # frame at 25% duration
+  roots:
+    # FORM 3 — a DIRECTORY of zips (the /media/to_process -> processing -> processed
+    # intake flow). Every settled *.zip is archived entry-by-entry; once ALL its
+    # media entries are in S3 (recorded in <zip>.archive.json) the zip AND that
+    # sidecar are moved into processed_dir. Finished zips never linger in zip_dir.
+    #
+    # When ONE dir holds zips from SEVERAL farms/namespaces, list `zip_farm_ids`
+    # (zip filename -> farm_id) so each zip is filed under its own raw/<farm_id>/.
+    # A zip ABSENT from the map is skipped (never mis-filed) — add it to archive it.
+    - farm_id: intake
+      zip_dir: /media/processing
+      processed_dir: /media/processed
+      settle_seconds: 60
+      extensions:
+        - .MOV
+        - .mov
+        - .mp4
+      zip_farm_ids:
+        santa_anna_fazenda_bahia_complete.zip: fazenda-santa-ana-bahia
+        sao_jorge_fazenda_complete.zip: fazenda-sao-jorge-bahia
+        vivi_fazenda_2025.zip: vivi-jesus-do-deus-itacare
+        itacare_pituba_samba_festival_2024.zip: event-media
+        tribo_mirim_roda_2024.zip: event-media
+
+    # FORM 1 — extracted directory of originals:
+    - farm_id: cleide
+      path: /home/ubuntu/cleide_media
+    - farm_id: paulo-la-do-sitio
+      path: /home/ubuntu/la_do_sitio_work
+
+    # FORM 2 — zip of originals (archives each ENTRY individually,
+    # never the zip blob — see MEDIA_ARCHIVE_PIPELINE.md ZIP HANDLING RULE).
+    # Each real media file inside is streamed to temp, sha256'd, given a
+    # captured_at + preview frame, uploaded to raw/<farm>/ + previews/<farm>/,
+    # then a durable state file <zip>.archive.json is written (resume-safe).
+    # __MACOSX/ and ._ AppleDouble junk entries are skipped automatically.
+    # `extensions` is VIDEO ONLY. Still photos (HEIC/JPG) must NEVER be listed
+    # here or on any root: "No S3 for still photos" (MEDIA_ARCHIVE_PIPELINE.md) --
+    # stills belong in the GitHub repo farm-media-raw/<farm>/photos/. A root with
+    # no `extensions` key defaults to video-only .MOV/.mov and logs a loud warning.
+    - farm_id: cacao-variety-parap
+      zip: /home/ubuntu/cacao_variety_parap.zip
+      extensions: [.MOV, .mov, .mp4]
+
+# Intake front door (farm_media_intake.py) -- claims dropped zips from
+# /media/to_process into /media/processing. Optional block; built-in defaults
+# apply if absent (/media/to_process, settle 300s, 20 GB headroom).
+intake:
+  to_process: /media/to_process
+  processing: /media/processing
+  duplicates: /media/duplicates
+  ledger: /opt/truesight_autopilot/farm_media_intake_ledger.json
+  settle_seconds: 300      # never claim a zip modified more recently than this
+  min_free_gb: 20          # refuse to claim if free space would drop below this
+
+# Sleep window: uploads pause 07:00-07:05 UTC for quota reset (configurable)
+quota_reset_utc: "07:05"
+
+# Upload defaults (per-sidecar override wins)
+defaults:
+  privacy: public
+  tags: [cacao, agroverse]
+  description_footer: "Cacao farm visit, CEPOTX, Para, Brazil."
+
+# Captions worker (farm_media_captions.py) — pt->en transcript enrichment
+# Runs BEFORE upload so new videos ship with English captions + description.
+# backfill subcommand also enriches already-uploaded videos.
+captions:
+  model: base            # faster-whisper model: base | small | medium
+  language: pt           # source audio language (task="translate" to English)
+  # LLM vision stage (`visual` subcommand): Gemini reads ~3 frames sampled
+  # across each clip and records what is VISIBLE in the sidecar as
+  # visual_description + visual_framing/setting/subjects/product_in_frame.
+  # Idempotent on visual_description, so re-runs never re-bill.
+  # Requires GEMINI_API_KEY. Do NOT set this to gemini-2.5-flash: it is 404
+  # for new project keys.
+  vision_model: gemini-3-flash-preview
+  visual_frame_fracs: [0.15, 0.50, 0.85]   # frames at 15% / 50% / 85% of duration
+
+# Photo enrichment (farm_media_photo_enrich.py) -- OCR + vision tags for still
+# photos (HEIC/JPG/PNG). Runs at archive time so every NEW photo's manifest
+# record is English-searchable (ocr_text_pt / ocr_text_en / scene / caption_en
+# / objects). Vision provider: GROK_API_KEY by default (reliable under bulk
+# backfill); GEMINI_API_KEY is the higher-quality fallback for foreign-text
+# translation and can be made primary with FARM_MEDIA_VISION_PROVIDER=gemini.
+# Needs tesseract (lang 'por') + at least one vision key; when absent,
+# enrichment degrades to whatever OCR gives. Reuses archive.roots paths
+# already watched -- no separate root list needed.
+photo_enrich:
+  enabled: true
+
+# Geo enrichment (farm_media_geo.py) — reverse-geocode sidecar GPS → place
+# label woven into the video description (📍 Place, Region). Requires a Google
+# Geocoding API key; when absent the description simply omits the place line.
+geo:
+  api_key_env: GOOGLE_MAPS_API_KEY   # env var holding the Maps/Geocoding key
+  cache_path: /tmp/farm_media_geo_cache.json   # dedupe cache (farms share GPS)
+

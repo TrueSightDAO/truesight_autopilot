@@ -1,0 +1,92 @@
+# Media Archive Daemon
+
+> Repo kept as **`farm-media-daemon`**; this is the media archive (MAP) daemon for TrueSightDAO farm media.
+
+One service, **two background workers**:
+
+1. **YouTube worker** (`farm_media_daemon.py`) — transcoded videos + sidecars land in the inbox queue; the worker uploads to YouTube and writes the `yt_id` back.
+2. **S3 archive worker** (`farm_media_archive.py`) — raw originals + preview frames → `media.agroverse.shop` (`raw/<farm>/` + hot `previews/<farm>/`); computes sha256, reads `captured_at` from the original, writes a resume-safe `<file>.raw.json` marker.
+3. **Captions worker** (`farm_media_captions.py`) — pt→en transcript enrichment. Transcribes each inbox video's (typically Portuguese) audio with faster-whisper (`task="translate"`), writes a WebVTT file beside the mp4, and makes the English translation the video **description**. When the sidecar carries GPS, `farm_media_geo.py` reverse-geocodes it (Google Geocoding API) and weaves a "📍 Place, Region" line into the description (stored back as `place_name` / `place_address` / `place_id`). After upload the `.vtt` is attached as a real **YouTube caption track** (toggleable, searchable). `backfill` subcommand enriches already-uploaded videos (sidecar `yt_id` present) the same way. See DESIGN.md §5.
+
+It **never touches GitHub** — manifests are committed deliberately by a Sophia or the CLI.
+
+**Design:** see [DESIGN.md](DESIGN.md) (governor-approved). **Plan:** `plans/FARM_MEDIA_DAEMON_PLAN.md` in agentic_ai_context.
+
+## How farms register
+1. Process media per-farm (transcode MOV→MP4, GPS re-inject, optional YOLO detect) — stays outside this repo.
+2. Drop `<file>.mp4` + `<file>.mp4.json` (sidecar, see DESIGN.md schema) into `media_archive_inbox/farm-media/<farm_id>/`.
+3. Add the farm to `config.yaml` (`inboxes:`).
+
+## How videos land & upload (YouTube worker)
+- The daemon watches inboxes, uploads sidecar-complete videos, writes `yt_id` into the sidecar.
+- Quota: global `daily_budget` (default 6/day), round-robin fairness, 429 backoff. Resume-safe by construction (sidecar is the state).
+
+## How raws archive to S3 (S3 archive worker)
+- Configure `archive.roots` in `config.yaml`: each root points at a farm's raw originals (an extracted dir, or a zip root once zip-streaming lands).
+- Per original file the worker does one pass: **sha256** (dedupe/integrity) → **`captured_at`** read from the original MOV/HEIC (ffmpeg drops it, so it is read upstream, never inferred) → one **ffmpeg preview frame** → raw upload to `raw/<farm>/` → preview upload to hot `previews/<farm>/` → write `<file>.raw.json` marker (resume-safe; restart skips done files).
+- Previews stay hot (Standard, no lifecycle) for fast explorer/timeline rendering; raws transition STANDARD_IA → DEEP_ARCHIVE per bucket lifecycle.
+- The worker **never touches GitHub and never deletes originals** — pruning happens deliberately, only after manifests carry the S3 URLs.
+
+## How manifests commit
+- `farm-media-manifest commit <farm_id>` aggregates sidecars → `farm_media_manifests/<farm>.json` + opens a PR (repo TrueSightDAO/farm_media_manifests).
+- Any Sophia can do this; the daemon never commits.
+
+## CLI
+- `farm-media-queue list [--farm <id>]` — uploaded / pending / needs_metadata / error.
+- `farm-media-publisher [--collection <id>] [--dry-run]` — reconcile inbox media → `galleries/<collection>.json` in `farm_media_manifests` (idempotent: writes only when the bytes changed). This is the timer's job; `--dry-run`/`--outdir` keep it off the network.
+- `farm-media-manifest commit <farm_id>` — commit step.
+- `farm_media_archive.py --once` — run one archive pass (S3 worker) for testing.
+- `farm-media-captions enrich` — transcribe+translate inbox videos to English (writes `.vtt` + sets description in sidecar; reverse-geocodes GPS into the description when a Maps key is present).
+- `farm-media-captions backfill` — enrich, then attach caption tracks + EN descriptions to already-uploaded videos (429-aware).
+- `farm-media-captions visual [--limit N] [--dry-run]` — LLM vision captions for archived clips: Gemini Flash samples ~3 frames straight from the S3 URL (no download) and writes `visual_description` + `visual_framing` / `visual_setting` / `visual_subjects` / `product_in_frame` into `<zip>.archive.json`, appending the visual gist to `description`. Idempotent on `visual_description` (a described clip is never re-billed); failures bump `visual_attempts` and stop after 3. Requires `GEMINI_API_KEY`.
+- `farm-media-daemon` — run the daemon (systemd unit provided).
+
+## Systemd
+- `systemd/farm-media-daemon.service` — YouTube worker.
+- `systemd/farm-media-archive.service` — S3 archive worker (sources `/opt/truesight_autopilot/.env` for AWS creds).
+- `systemd/farm-media-publisher.service` + `.timer` — gallery reconcile, every 15 min (idempotent; derives `galleries/<collection>.json` and writes it via the Contents API). Never rewrites `<farm_id>.json`.
+
+## How galleries publish (publisher)
+The web gallery `farms/<slug>/media.json` used to be the ONE hand-authored link in MAP, so it
+lagged the daemon (33 uploaded Cacau na Veia clips, page still photos-only). The
+`farm-media-publisher` closes that gap: on a systemd timer it reads each collection and writes
+`galleries/<collection>.json` into the machine-owned `farm_media_manifests` repo via the
+Contents API. It is **idempotent** (unchanged input → no commit) and reads the committed
+manifest when present (else the inbox sidecars), so it can never clobber the hand-verified
+`<farm_id>.json` metadata. The site fetches that JSON (PR6), with `./media.json` as fallback.
+
+## Credentials
+NEVER commit `config/youtube/*.json` or AWS keys — they live only on the box (gitignored / `.env`). The repo is public by design.
+
+## Backfill: per-item `source_zip` provenance
+
+Media archived before the per-item `source_zip` change has no origin-zip field in
+its inbox sidecar. `farm_media_backfill_source_zip.py` joins each sidecar to the
+authoritative `<zip>.archive.json` in `/media/processed/` (keyed on `farm_id` +
+`sha256`, falling back to `farm_id` + basename stem) and stamps `source_zip` in.
+Idempotent, dry-run by default:
+
+    python3 farm_media_backfill_source_zip.py            # report only
+    python3 farm_media_backfill_source_zip.py --apply    # write sidecars
+
+## Per-zip context card (`foo.zip.context.json`)
+
+A dropped zip can carry its identity alongside it as a sibling JSON card
+(`/media/to_process/foo.zip.context.json`), so its `farm_id` never has to be
+hand-typed into the config. The card is **inert to the claimer** (the front door
+enumerates `*.zip` only) but is **ferried with its zip** the whole funnel:
+`to_process/` -> `processing/` -> `processed/`.
+
+    {"farm_id": "fazenda-x", "title": "...", "event_date": "2026-01-21", "location": "..."}
+
+Resolution order in the archive worker: **(1)** the sibling card, else **(2)** the
+config's `zip_farm_ids` map, else **(3)** the root's own `farm_id`. A zip with a
+`zip_farm_ids` map in play but **no card and no entry** is **held** (fail-closed,
+never mis-filed), and `farm_media_intake.py` logs an `AWAITING CONTEXT` digest
+naming every held zip -- so a zip needing identity is **visible**, not stalled
+silently. A malformed card is treated as absent **and flagged** (never silently
+treated as "no card").
+
+    # front door logs, per pass:
+    AWAITING CONTEXT: 2 zip(s) held (no known farm_id): ilheus_warehouse.zip, ... \
+      -- drop a <zip>.context.json beside it, or add a zip_farm_ids entry

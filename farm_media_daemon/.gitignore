@@ -1,0 +1,19 @@
+# credentials — never commit
+config/youtube/*.json
+*.token
+*.cred
+.env
+
+# local state
+*.log
+manifest.json
+farm_media_inbox/
+*.mp4
+*.MOV
+*.HEIC
+*.jpg
+__pycache__/
+*.pyc
+
+# nearest-location index cache (fetch live via: farm_media_locations.py refresh)
+locations_cache.json

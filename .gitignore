@@ -69,3 +69,7 @@ followups/state.json
 # deploy (thread_goal.py's own docstring already *assumed* it survived).
 data/thread_goals.jsonl
 data/email_inbox_watch_state.json
+
+# farm_media_daemon build artifacts
+__pycache__/
+*.pyc
