@@ -339,6 +339,25 @@ def awaiting_age(
 # ── classification ───────────────────────────────────────────────────────────
 
 
+def _prompt_superseded(
+    awaiting_any_age_s: float | None,
+    last_activity_ts: float | None,
+    now: float,
+) -> bool:
+    """True only with positive proof the session acted after the prompt.
+
+    Deliberately conservative: no prompt age, or no activity timestamp, means
+    "cannot prove it", which returns False and leaves classification unchanged.
+    """
+    if awaiting_any_age_s is None or last_activity_ts is None:
+        return False
+    try:
+        prompt_ts = now - float(awaiting_any_age_s)
+        return float(last_activity_ts) > prompt_ts
+    except (TypeError, ValueError):
+        return False
+
+
 def classify_session(
     session_id: str,
     *,
@@ -346,12 +365,26 @@ def classify_session(
     awaiting_age_s: float | None,
     awaiting_any_age_s: float | None = None,
     open_goal_text: str | None = None,
+    last_activity_ts: float | None = None,
     now: float,
     auto_advance: bool,
     label: str = "",
 ) -> SessionStatus:
-    """Classify one session. Pure; never raises on odd input."""
+    """Classify one session. Pure; never raises on odd input.
+
+    ``last_activity_ts`` is when this session last produced a turn. It exists to
+    kill a real failure mode: an awaiting prompt whose registry entry is never
+    removed ages forever, so the loop keeps announcing a decision the governor
+    already made (observed at 77h on a session that had replied hours earlier).
+
+    The guard is positive-evidence-only. A *known* activity timestamp strictly
+    newer than the prompt proves the governor acted after it, so the prompt is
+    superseded. When the timestamp is missing or older we return the status we
+    always did -- an unevidenced suppression would silently drop a real
+    question, which is worse than the nag it replaces.
+    """
     goal = (open_goal_text or "").strip()
+    prompt_superseded = _prompt_superseded(awaiting_any_age_s, last_activity_ts, now)
 
     if lease is not None and lease.is_running:
         age = lease_age(lease, now)
@@ -382,7 +415,7 @@ def classify_session(
             goal=goal,
         )
 
-    if awaiting_age_s is not None:
+    if awaiting_age_s is not None and not prompt_superseded:
         return SessionStatus(
             session_id=session_id,
             state=STATE_AWAITING,
@@ -396,7 +429,7 @@ def classify_session(
     # was never refreshed). This is blocked-on-the-governor, NOT lost work, so
     # it must be classified before the lost_goal fallthrough claims it with the
     # misleading reason "nothing running".
-    if goal and awaiting_any_age_s is not None:
+    if goal and awaiting_any_age_s is not None and not prompt_superseded:
         return SessionStatus(
             session_id=session_id,
             state=STATE_AWAITING_STALE,
