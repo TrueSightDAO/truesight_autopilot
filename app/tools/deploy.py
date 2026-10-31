@@ -526,7 +526,11 @@ def _install_systemd_units(remote_dir: str, _ELEVATE: str) -> None:
         f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot-telegram.service /etc/systemd/system/ && "
         f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot-watchdog.service /etc/systemd/system/ && "
         f"{_ELEVATE} cp {remote_dir}/systemd/truesight-autopilot-discord.service /etc/systemd/system/ && "
-        f"{_ELEVATE} systemctl daemon-reload'",
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-loop-daemon.service /etc/systemd/system/ && "
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-loop-alerts.service /etc/systemd/system/ && "
+        f"{_ELEVATE} cp {remote_dir}/systemd/truesight-loop-alerts.timer /etc/systemd/system/ && "
+        f"{_ELEVATE} systemctl daemon-reload && "
+        f"{_ELEVATE} systemctl enable truesight-loop-alerts.timer'",
         cwd=remote_dir,
         timeout=30,
     )
@@ -630,6 +634,12 @@ def _post_pull_steps(remote_dir: str, start: float, steps: list[dict]) -> str:
     _restart_units = [
         "truesight-autopilot-telegram",
         "truesight-autopilot-watchdog",
+        # Loop reconciler + alert emitter. Historically NEVER restarted by a
+        # deploy, so every loop_status / resume-registry fix sat inert on disk
+        # until someone cycled the unit by hand. Observed 2026-10-30/31: #616
+        # and #619 were merged AND pulled, yet the daemon kept running the
+        # pre-fix module for hours while still nagging stale prompts.
+        "truesight-loop-daemon",
         "truesight-vault",
     ]
     if _discord_unit_enabled(remote_dir):
