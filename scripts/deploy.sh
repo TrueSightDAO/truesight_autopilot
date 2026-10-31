@@ -320,7 +320,11 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     # the adapter self-exits when disabled and its unit is Restart=always, so an
     # unconditional start would spin a restart loop.
     sudo cp $REMOTE_DIR/systemd/truesight-autopilot-discord.service /etc/systemd/system/
+    sudo cp $REMOTE_DIR/systemd/truesight-loop-daemon.service /etc/systemd/system/
+    sudo cp $REMOTE_DIR/systemd/truesight-loop-alerts.service /etc/systemd/system/
+    sudo cp $REMOTE_DIR/systemd/truesight-loop-alerts.timer /etc/systemd/system/
     sudo systemctl daemon-reload
+    sudo systemctl enable truesight-loop-alerts.timer
     sudo systemctl enable truesight-autopilot truesight-autopilot-telegram
     # Drain live chat turns before cycling the service. `sleep 5` was never a
     # drain: that is why a deploy at 2026-10-28 14:19:32 severed an in-flight
@@ -345,6 +349,11 @@ ssh -i "$EC2_KEY" "$EC2_HOST" "
     # Vault worker (port 8002) — restart so credential-vault fixes actually take
     # effect; it was silently running stale code because deploys skipped it.
     sudo systemctl restart truesight-vault 2>/dev/null || true
+    # Loop reconciler + alert emitter. These were NEVER cycled by a deploy,
+    # so loop_status / resume-registry fixes sat inert until someone
+    # restarted them by hand (observed 2026-10-30/31 with #616 and #619).
+    sudo systemctl restart truesight-loop-daemon
+    sudo systemctl enable --now truesight-loop-alerts.timer 2>/dev/null || true
     # Start the Telegram adapter only when a bot token is configured.
     if grep -q '^TELEGRAM_BOT_API_KEY=.' $REMOTE_DIR/.env 2>/dev/null; then
         sudo systemctl restart truesight-autopilot-telegram
