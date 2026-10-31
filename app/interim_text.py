@@ -6,11 +6,17 @@ longer than ``DEFAULT_AWAITING_FRESH_S`` (3600s) that placeholder aged from a
 *fresh* prompt into ``awaiting_stale``, so the loop nagged the governor about a
 decision that did not exist. A progress line is not a question.
 
-Deliberately an **exact allowlist**, not a verb pattern. An earlier draft
-matched ``<emoji> (Thinking|Running|...)`` and therefore also swallowed a
-genuine reply such as ``"\\U0001f504 Running the deploy now, will report"`` --
-suppressing the mark on a real answer silently removes the governor's
-reaction-to-resume affordance. Only strings Sophia itself emits qualify.
+Second defect (same day): the first cut recognised only two exact strings, so
+it caught the ``Thinking...`` line but not the per-tool-call placeholders
+(``ssh run``, ``merge pr``, ``pin note`` ...). Replayed against the live
+registry, it filtered 21 entries and let 63 through -- so a long turn still
+nagged. :func:`_is_tool_progress` closes that gap.
+
+Both rules are deliberately narrow. An earlier draft matched
+``<emoji> (Thinking|Running|...)`` and therefore also swallowed a genuine reply
+such as ``"Running the deploy now, will report"`` -- suppressing the mark on a
+real answer silently removes the governor's reaction-to-resume affordance.
+Only strings Sophia itself emits qualify.
 
 Kept dependency-free (stdlib only) so :mod:`app.loop_status` can import it and
 stay pure/unit-testable without pulling in the Discord adapter or credentials.
@@ -24,14 +30,42 @@ import re
 # U+2026 HORIZONTAL ELLIPSIS, which is what the call sites actually send.
 _INTERIM_EXACT: frozenset[str] = frozenset(
     {
-        "\U0001f504 Thinking\u2026",  # \U0001f504 Thinking\u2026        (turn start)
-        "\U0001f4c4 Processing attachment\u2026",  # \U0001f4c4 Processing attachment\u2026
+        "\U0001f504 Thinking\u2026",
+        "\U0001f4c4 Processing attachment\u2026",
     }
 )
 
 # The streaming loop re-posts the same placeholder with a round counter:
-# "\U0001f504 Thinking\u2026 (round 5)".
+# "Thinking... (round 5)".
 _INTERIM_ROUND_RE = re.compile("^\U0001f504 Thinking\u2026 \\(round \\d+\\)$")
+
+# Per-tool-call progress lines look like "<emoji> <tool name> <U+2026>", e.g.
+# "\u2699\ufe0f ssh run \u2026" or "\u2705 merge pr \u2026". The tool name is machine
+# generated and always lower case; human prose is not.
+_LEADING_EMOJI_RE = re.compile(
+    "^[\u2600-\u27bf\u2b00-\u2bff\U0001f000-\U0001faff]"
+)
+_LEADING_NON_WORD_RE = re.compile(r"^[^\w]+")
+_INTERIM_MAX_LEN = 80
+
+
+def _is_tool_progress(candidate: str) -> bool:
+    """True for a machine-generated per-tool-call progress line.
+
+    Signature: leading emoji, short, ends with U+2026, and the text after the
+    emoji is entirely lower case. ``"\u2699\ufe0f ssh run ..."`` (ASCII dots) is not
+    matched -- the call sites emit U+2026 -- and neither is a real reply that
+    merely begins with an emoji.
+    """
+    if len(candidate) > _INTERIM_MAX_LEN:
+        return False
+    if not candidate.endswith("\u2026"):
+        return False
+    if not _LEADING_EMOJI_RE.match(candidate):
+        return False
+    body = _LEADING_NON_WORD_RE.sub("", candidate[: -len("\u2026")]).strip()
+    # All lower case separates "merge pr" (machinery) from real prose.
+    return bool(body) and body == body.lower()
 
 
 def is_interim_text(text: str) -> bool:
@@ -41,4 +75,6 @@ def is_interim_text(text: str) -> bool:
         return False
     if candidate in _INTERIM_EXACT:
         return True
-    return bool(_INTERIM_ROUND_RE.match(candidate))
+    if _INTERIM_ROUND_RE.match(candidate):
+        return True
+    return _is_tool_progress(candidate)
