@@ -159,8 +159,8 @@ def test_progress_edits_status_in_place(monkeypatch):
         sent.append(text)
         return ["status-1"]
 
-    def fake_edit(channel_id, mid, text):
-        edited.append((mid, text))
+    def fake_edit(channel_id, mid, text, **kwargs):
+        edited.append((mid, text, kwargs.get("mark_resume", True)))
         return True
 
     monkeypatch.setattr(da, "send_message", fake_send)
@@ -180,8 +180,8 @@ def test_progress_edits_status_in_place(monkeypatch):
     assert shown is True
     # exactly ONE status message posted; everything else is an EDIT of it
     assert sent == ["\U0001f504 Thinking\u2026"]
-    assert all(mid == "status-1" for mid, _ in edited)
-    final_edits = [t for _, t in edited]
+    assert all(mid == "status-1" for mid, _, _ in edited)
+    final_edits = [t for _, t, _ in edited]
     assert "all done" in final_edits
     assert any("ssh run" in t for t in final_edits)
 
@@ -203,7 +203,7 @@ def test_progress_hiccups_on_brain_down(monkeypatch):
     monkeypatch.setattr(da, "_wait_for_brain", lambda *a, **k: False)
     edited = []
     monkeypatch.setattr(
-        da, "edit_message_text", lambda c, m, t: edited.append(t) or True
+        da, "edit_message_text", lambda c, m, t, **k: edited.append(t) or True
     )
     resp, shown = da.call_chat_with_progress("c1", "hello", "s1", "pk")
     assert shown is True
@@ -276,7 +276,7 @@ def test_proposal_does_not_append_stale_approval_prompt(monkeypatch):
     monkeypatch.setattr(da, "send_message", lambda c, t: ["status-1"])
     edited = []
     monkeypatch.setattr(
-        da, "edit_message_text", lambda c, m, t: edited.append(t) or True
+        da, "edit_message_text", lambda c, m, t, **k: edited.append(t) or True
     )
     monkeypatch.setattr(
         da.httpx,

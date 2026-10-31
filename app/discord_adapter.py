@@ -1029,9 +1029,11 @@ def call_chat_with_progress(
     tool_active: str | None = None
     last_edit = 0.0
 
-    def _edit(text: str) -> None:
+    def _edit(text: str, *, mark_resume: bool = False) -> None:
+        # Interim progress only by default: it must NOT flag the status message
+        # as a resume-awaiting prompt (see edit_message_text's mark_resume).
         nonlocal last_edit
-        edit_message_text(channel_id, status_id, text)
+        edit_message_text(channel_id, status_id, text, mark_resume=mark_resume)
         last_edit = time.time()
 
     try:
@@ -1119,20 +1121,33 @@ def call_chat_with_progress(
 
     except httpx.ReadTimeout:
         msg = "\u26a0\ufe0f Autopilot timed out \u2014 the LLM or a tool took too long."
-        _edit(msg)
+        _edit(msg, mark_resume=True)
         return msg, True
     except Exception as e:  # noqa: BLE001
         logger.exception("call_chat_with_progress failed")
         msg = f"\u26a0\ufe0f Error: {e}"
-        _edit(msg)
+        _edit(msg, mark_resume=True)
         return msg, True
 
 
-def edit_message_text(channel_id: str | int, message_id: str | int, text: str) -> bool:
+def edit_message_text(
+    channel_id: str | int,
+    message_id: str | int,
+    text: str,
+    *,
+    mark_resume: bool = True,
+) -> bool:
     """Edit a message the bot already posted (PATCH). True on success.
 
     Needs its own message id, so it pairs with ``send_message``. Used to keep a
     single status message updated in place during long attachment processing.
+
+    ``mark_resume`` flags the edited id for the reaction go-signal. Pass False
+    for INTERIM progress edits: they are not decision prompts, and marking them
+    bumped the registry timestamp on every tool call, so a long turn looked like
+    a prompt posted seconds ago and never answered -- which is what made
+    ``loop_status`` report ``awaiting_stale`` at a governor who had replied.
+    The final reply keeps the default, so a reaction still resumes.
     """
     if not message_id or message_id == "dry-run":
         return False
@@ -1149,7 +1164,7 @@ def edit_message_text(channel_id: str | int, message_id: str | int, text: str) -
         f"/channels/{channel_id}/messages/{message_id}",
         {"content": (text or "")[:_MESSAGE_LIMIT]},
     )
-    if result is not None:
+    if result is not None and mark_resume:
         # An edited message KEEPS its id, so when the final reply is delivered by
         # editing the status message, flag that id for the reaction go-signal
         # (the send_message hook alone would miss the edit path -- mirrors the
@@ -1199,7 +1214,7 @@ def _auto_process_attachment(
 
     def _update_status(msg: str) -> None:
         if status_id:
-            edit_message_text(channel_id, status_id, msg)
+            edit_message_text(channel_id, status_id, msg, mark_resume=False)
 
     def _run_script(script_name: str, *args: str, timeout: int = 120) -> dict:
         script_path = SCRIPTS_DIR / script_name
