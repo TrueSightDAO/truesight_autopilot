@@ -50,6 +50,7 @@ from typing import Any, Callable
 import httpx
 
 from . import discord_resume_registry
+from .interim_text import is_interim_text
 from .auth import create_jwt
 from .config import settings
 from .governor_registry import load_governors, sentinel_emails
@@ -618,13 +619,22 @@ def _api(method: str, path: str, payload: dict[str, Any] | None = None) -> dict 
     return None
 
 
-def send_message(channel_id: str | int, text: str) -> list[str]:
+def send_message(
+    channel_id: str | int, text: str, *, mark_resume: bool | None = None
+) -> list[str]:
     """Send text to a channel; returns the list of created message ids.
 
     Honours DISCORD_DRY_RUN: when set, the reply is logged but NOT posted.
+
+    ``mark_resume`` controls whether the posted message registers as
+    resume-awaiting (so a governor's reaction resumes the turn):
+    ``True`` force, ``False`` never, ``None`` (default) auto-detect -- interim
+    status placeholders do NOT register, real replies do.
     """
     ids: list[str] = []
     body = text or "(empty response)"
+    if mark_resume is None:
+        mark_resume = not is_interim_text(body)
     for chunk in chunk_text(body):
         if settings.discord_dry_run:
             logger.info(
@@ -640,7 +650,11 @@ def send_message(channel_id: str | int, text: str) -> list[str]:
             ids.append(result["id"])
             # Flag the posted reply as resume-awaiting so a later standard-emoji
             # reaction from an authorized governor acts as a go-signal (Tier-2 #6).
-            discord_resume_registry.mark_resume_awaiting(result["id"], channel_id, body)
+            # Interim placeholders are excluded -- see app.interim_text.
+            if mark_resume:
+                discord_resume_registry.mark_resume_awaiting(
+                    result["id"], channel_id, body
+                )
     return ids
 
 

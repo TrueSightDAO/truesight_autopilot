@@ -9,8 +9,9 @@ thread or Discord channel):
 
 This module is the **pure** half of that: it parses the state files the turn
 loop already writes and classifies them. It performs no I/O, holds no locks and
-imports nothing from the app -- so it is fully unit-testable and cannot become a
-second source of truth. :mod:`app.loop_daemon` does the reading and publishing.
+imports nothing from the app except the dependency-free
+:mod:`app.interim_text` helper -- so it stays fully unit-testable and cannot
+become a second source of truth. :mod:`app.loop_daemon` does the reading and publishing.
 
 State precedence (first match wins):
 
@@ -33,6 +34,8 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
+
+from .interim_text import is_interim_text
 
 # ── states ────────────────────────────────────────────────────────────────────
 
@@ -297,6 +300,14 @@ def parse_awaiting(raw: Any, *, now: float) -> dict[str, float]:
             continue
         ts = parse_ts(entry.get("ts"))
         if ts is None:
+            continue
+        # Legacy interim placeholders (pre-2026-10-31 registry entries) are
+        # machinery, not decision prompts. Without this filter a long turn's
+        # "Thinking..." placeholder ages past DEFAULT_AWAITING_FRESH_S and the
+        # session is announced as awaiting_stale for a question never asked.
+        # New entries are no longer written (see app.interim_text);
+        # this keeps already-persisted ones from nagging until their TTL lapses.
+        if is_interim_text(str(entry.get("text") or "")):
             continue
         if ts > freshest.get(key, 0.0):
             freshest[key] = ts
