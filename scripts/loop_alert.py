@@ -22,6 +22,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import loop_alerts  # noqa: E402
 
 
+def _configure_logging(verbose: bool = False) -> None:
+    """Set up logging, keeping request URLs (and their secrets) out of journald.
+
+    ``httpx`` logs every request at INFO as ``HTTP Request: POST <full url>``.
+    For Telegram that URL embeds the bot token
+    (``https://api.telegram.org/bot<token>/sendMessage``), so under systemd the
+    token used to land in journald in cleartext. ``basicConfig(level=INFO)`` is
+    what lets those records through; raising these two loggers to WARNING keeps
+    the useful lines and drops the URLs.
+
+    The same suppression is already deliberate in the chat adapters -- see
+    ``app/telegram_adapter.py:3069`` and ``app/discord_adapter.py:2148``.
+    """
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    # httpx logs the request; httpcore logs the connection. Neither message is
+    # useful to an operator reading journald, and both can carry a credential.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Loop alerts (U4) -- nudge dead threads"
@@ -42,10 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable summary")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    _configure_logging(verbose=args.verbose)
 
     environ = None
     if args.all_states:
