@@ -9,6 +9,7 @@ Reuses ``app.redis_claim.get_client()`` (same Redis the session-claim layer
 uses). Fails soft: if Redis is unreachable the registry reads as empty and
 writes are logged-and-dropped, so a chat turn is never stalled by the registry.
 """
+
 from __future__ import annotations
 
 import json
@@ -26,8 +27,37 @@ REGISTRY_KEY = "truesight:channels:registry"
 _lock = threading.Lock()
 
 
+def _clean_names(values) -> list[str]:
+    """Keep only non-empty strings, trimmed. Drops None/garbage from client payloads."""
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        name = value.strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def _empty_layout() -> dict:
+    """Placement overlay: explicit category order, per-channel placement, collapse set.
+
+    Built-in channels/categories live in each deployment's config.json and cannot
+    be mutated at runtime, so the sidebar's drag-and-drop is stored as an overlay
+    on top of that immutable config -- exactly like ``retired`` above.
+    """
+    return {"category_order": [], "channels": {}, "collapsed": []}
+
+
 def _empty() -> dict:
-    return {"channels": [], "categories": [], "retired": []}
+    return {
+        "channels": [],
+        "categories": [],
+        "retired": [],
+        "layout": _empty_layout(),
+    }
 
 
 def _load(client=None) -> dict:
@@ -40,8 +70,14 @@ def _load(client=None) -> dict:
                 data.setdefault("channels", [])
                 data.setdefault("categories", [])
                 data.setdefault("retired", [])
+                layout = data.setdefault("layout", _empty_layout())
+                if not isinstance(layout, dict):
+                    data["layout"] = layout = _empty_layout()
+                layout.setdefault("category_order", [])
+                layout.setdefault("channels", {})
+                layout.setdefault("collapsed", [])
                 return data
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - registry must never break a page load
         logger.warning("channel_registry load failed: %s", exc)
     return _empty()
 
@@ -50,7 +86,7 @@ def _save(data: dict, client=None) -> None:
     cli = client or redis_claim.get_client()
     try:
         cli.set(REGISTRY_KEY, json.dumps(data))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - registry must never break a request
         logger.warning("channel_registry save failed: %s", exc)
 
 
@@ -130,3 +166,54 @@ def rename_category(old_name, new_name) -> str:
                 ch["categoryName"] = n
         _save(data)
         return n
+
+
+# ── layout overlay (sidebar drag-and-drop + collapse state) ──────────────────
+
+
+def get_layout() -> dict:
+    with _lock:
+        return _load()["layout"]
+
+
+def update_layout(payload: dict) -> dict:
+    """Apply a partial layout update and return the full layout.
+
+    Accepts any subset of:
+      ``category_order`` -- full ordered list of category names
+      ``move``           -- {"channel_id": str, "category_name": str,
+                            "position": int|None}
+      ``collapsed``      -- full list of collapsed category names
+
+    Unknown payload keys are ignored so the client can send the whole view state
+    without the server having to know every field. Returns the merged layout.
+    """
+    payload = payload or {}
+    with _lock:
+        data = _load()
+        layout = data["layout"]
+
+        order = payload.get("category_order")
+        if isinstance(order, list):
+            layout["category_order"] = _clean_names(order)
+
+        collapsed = payload.get("collapsed")
+        if isinstance(collapsed, list):
+            layout["collapsed"] = _clean_names(collapsed)
+
+        move = payload.get("move")
+        if isinstance(move, dict):
+            channel_id = str(move.get("channel_id") or "").strip()
+            if channel_id:
+                placement = layout["channels"].get(channel_id) or {}
+                category_name = move.get("category_name")
+                if isinstance(category_name, str) and category_name.strip():
+                    placement["category_name"] = category_name.strip()
+                position = move.get("position")
+                if isinstance(position, int) and position >= 0:
+                    placement["position"] = position
+                if placement:
+                    layout["channels"][channel_id] = placement
+
+        _save(data)
+        return layout

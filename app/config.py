@@ -113,6 +113,18 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
     dry_run: bool = Field(default=False, validation_alias="DRY_RUN")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    # Max characters of a single message replayed by GET /session. Long tool
+    # output / context dumps used to be hard-cut at 2000 chars, which made a
+    # long Sophia reply look truncated after a page refresh. 20K covers any
+    # realistic reply; the client offers expand/collapse for the rare overflow.
+    session_history_max_chars: int = Field(
+        default=20000, validation_alias="SESSION_HISTORY_MAX_CHARS"
+    )
+    # Cap on ?limit= for GET /session, so the query string cannot be used to
+    # request an unbounded scrollback.
+    session_history_max_messages: int = Field(
+        default=500, validation_alias="SESSION_HISTORY_MAX_MESSAGES"
+    )
     max_pr_per_day: int = Field(default=5, validation_alias="MAX_PR_PER_DAY")
     # The follow-up loop (app/followup_loop.py) probes items defined in the
     # shared, public agentic_ai_context/OPEN_FOLLOWUPS.md and can act on them.

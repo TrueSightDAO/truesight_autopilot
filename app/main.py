@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .live_state import enabled as live_state_enabled
@@ -1429,7 +1429,9 @@ async def serve_upload(filename: str):
 
 
 @app.get("/session")
-async def get_session(request: Request, limit: int = 30) -> JSONResponse:
+async def get_session(
+    request: Request, limit: int = Query(default=30, ge=1, le=1000)
+) -> JSONResponse:
     """Return the current conversation history so the frontend can restore it on refresh.
     Uses X-Public-Key + X-Session-Id headers (same as session keying)."""
     public_key = request.headers.get("X-Public-Key", "")
@@ -1439,6 +1441,7 @@ async def get_session(request: Request, limit: int = 30) -> JSONResponse:
     history = _load_or_create_session(session_id)
 
     # Only return last N messages for performance
+    limit = max(1, min(int(limit), settings.session_history_max_messages))
     recent = history[-limit:] if len(history) > limit else history
 
     # Filter out internal system messages and strip legacy XML leaks
@@ -1448,9 +1451,12 @@ async def get_session(request: Request, limit: int = 30) -> JSONResponse:
         content = (msg.get("content") or "").strip()
         if not content:
             continue
-        # Truncate very long messages (context files can be 10K+ chars)
-        if len(content) > 2000:
-            content = content[:2000] + "\n...(truncated)"
+        # Cap very long messages (pasted context files can be 10K+ chars). The
+        # cap is settings-backed so a long Sophia reply is no longer hard-cut at
+        # 2000 chars on refresh -- see SESSION_HISTORY_MAX_CHARS.
+        max_chars = settings.session_history_max_chars
+        if max_chars > 0 and len(content) > max_chars:
+            content = content[:max_chars] + "\n\n…(truncated)"
         # Strip legacy XML tool-call syntax if it leaked through
         content = re.sub(
             r"<function_calls>.*?</function_calls>", "", content, flags=re.DOTALL
@@ -1724,6 +1730,27 @@ async def categories_rename(name: str, request: Request) -> JSONResponse:
     body = await request.json()
     new_name = channel_registry.rename_category(name, body.get("name"))
     return JSONResponse({"name": new_name})
+
+
+@app.put("/layout")
+async def layout_update(request: Request) -> JSONResponse:
+    """Reorder categories, move channels between categories, persist collapsed state.
+
+    Server side of the sidebar drag-and-drop. Built-in channels/categories live in
+    each deployment's config.json and cannot be mutated at runtime, so placement is
+    stored as an overlay (see app.channel_registry.update_layout).
+    """
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(
+            status_code=403, detail="channel layout is governor/sentinel-only"
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    return JSONResponse(channel_registry.update_layout(body))
 
 
 from .auth_routes import router as auth_router
