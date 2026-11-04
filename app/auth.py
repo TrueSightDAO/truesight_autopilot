@@ -114,6 +114,68 @@ def verify_payload(
             )
 
 
+def resolve_author_role(public_key_b64: str) -> str:
+    """Resolve the author tier for a verified public key from the ledger.
+
+    Returns 'governor' | 'sentinel' | 'member' | 'guest'. A key that does not
+    resolve to a registered identity is 'guest'; a registered identity whose
+    roles include 'governor'/'sentinel' gets that tier; otherwise 'member'.
+    """
+    from .governor_registry import resolve_key
+
+    identity = resolve_key(public_key_b64)
+    if identity is None:
+        return "guest"
+    roles = identity.get("roles") or []
+    if "governor" in roles:
+        return "governor"
+    if "sentinel" in roles:
+        return "sentinel"
+    return "member"
+
+
+def verify_payload_tiered(
+    payload: dict, signature: str, public_key_b64: str
+) -> str:
+    """Verify signature + timestamp + nonce (NO governor gate) and return the
+    resolved author role. Used by /auth-tier so any validly-signed key can mint
+    a JWT at its correct ledger tier (guest/member/sentinel/governor)."""
+    payload_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    if not verify_rsa_signature(payload_json, signature, public_key_b64):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid signature.",
+        )
+    ts_str = payload.get("timestamp", "")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid timestamp format.",
+        ) from None
+    now = datetime.now(timezone.utc)
+    skew = abs((now - ts).total_seconds())
+    if skew > settings.timestamp_skew_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Timestamp skew too large ({int(skew)}s).",
+        )
+    nonce = payload.get("nonce", "")
+    if not nonce:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nonce is required.",
+        )
+    if nonce in _seen_nonces:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Nonce already used (replay detected).",
+        )
+    _seen_nonces.add(nonce)
+    return resolve_author_role(public_key_b64)
+
+
 def is_governor(public_key_b64: str) -> bool:
     """Check if a public key belongs to a registered governor."""
     return _is_governor_from_registry(public_key_b64)

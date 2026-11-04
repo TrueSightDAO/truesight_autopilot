@@ -41,12 +41,14 @@ from .auth import (
     verify_jwt,
     verify_jwt_claims,
     verify_payload,
+    verify_payload_tiered,
 )
 from .media_archive_pipeline import router as media_archive_pipeline_router
 from .signature_ledger_pipeline import router as signature_ledger_pipeline_router
 from .auto_advance import next_action
 from .config import settings
 from . import loop_surface
+from . import channel_registry
 from .context_compaction import (
     backup_session_file,
     compact_history,
@@ -1616,11 +1618,112 @@ async def auth_challenge_dashboard(request: Request) -> JSONResponse:
         key="governor_chat_session",
         value=token,
         httponly=True,
-        secure=not settings.debug,
+        secure=True,
         samesite="lax",
         max_age=settings.jwt_expiry_minutes * 60,
     )
     return response
+
+
+@app.post("/auth-tier")
+async def auth_tier(request: Request) -> JSONResponse:
+    """Tiered auth challenge: verify the signature for ANY valid key, resolve its
+    ledger role (guest/member/sentinel/governor), and mint a JWT at that tier.
+
+    This is the first-party-client analogue of the adapter mint path. The path is
+    deliberately NOT under ``/auth/`` because nginx shadows ``/auth/`` to the vault
+    worker (port 8002); ``/auth-tier`` reaches the brain (port 8001)."""
+    body = await request.json()
+    payload = body.get("payload")
+    signature = body.get("signature")
+    public_key = request.headers.get("X-Public-Key", "")
+
+    if not payload or not signature or not public_key:
+        raise HTTPException(
+            status_code=400, detail="payload, signature, and X-Public-Key required."
+        )
+
+    role = verify_payload_tiered(payload, signature, public_key)
+    token = create_jwt(public_key, author_role=role)
+
+    return JSONResponse(
+        {
+            "token": token,
+            "author_role": role,
+            "expires_in": settings.jwt_expiry_minutes * 60,
+        }
+    )
+
+
+def _channel_role(request: Request) -> str:
+    """Return the JWT author_role, or 'guest' if no valid token is presented."""
+    try:
+        return author_role_from_claims(verify_jwt_claims(request))
+    except HTTPException:
+        return "guest"
+
+
+@app.get("/channels")
+async def channels_get(request: Request) -> JSONResponse:
+    """Shared channel/category registry (built-in channels live in config.json)."""
+    verify_jwt_claims(request)
+    return JSONResponse(channel_registry.get_registry())
+
+
+@app.post("/channels")
+async def channels_create(request: Request) -> JSONResponse:
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(status_code=403, detail="channel creation is governor/sentinel-only")
+    body = await request.json()
+    ch = channel_registry.create_channel(
+        body.get("category_name"), body.get("name"), body.get("visibility")
+    )
+    return JSONResponse(ch)
+
+
+@app.put("/channels/{channel_id}")
+async def channels_update(channel_id: str, request: Request) -> JSONResponse:
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(status_code=403, detail="channel updates are governor/sentinel-only")
+    body = await request.json()
+    ch = channel_registry.update_channel(channel_id, body.get("name"), body.get("visibility"))
+    if ch is None:
+        raise HTTPException(status_code=404, detail="channel not found")
+    return JSONResponse(ch)
+
+
+@app.delete("/channels/{channel_id}")
+async def channels_delete(channel_id: str, request: Request) -> JSONResponse:
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(status_code=403, detail="channel retirement is governor/sentinel-only")
+    channel_registry.delete_channel(channel_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/categories")
+async def categories_create(request: Request) -> JSONResponse:
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(status_code=403, detail="category creation is governor/sentinel-only")
+    body = await request.json()
+    name = channel_registry.create_category(body.get("name"))
+    return JSONResponse({"name": name})
+
+
+@app.delete("/categories/{name}")
+async def categories_delete(name: str, request: Request) -> JSONResponse:
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(status_code=403, detail="category deletion is governor/sentinel-only")
+    channel_registry.delete_category(name)
+    return JSONResponse({"ok": True})
+
+
+@app.put("/categories/{name}")
+async def categories_rename(name: str, request: Request) -> JSONResponse:
+    if _channel_role(request) not in ("governor", "sentinel"):
+        raise HTTPException(status_code=403, detail="category rename is governor/sentinel-only")
+    body = await request.json()
+    new_name = channel_registry.rename_category(name, body.get("name"))
+    return JSONResponse({"name": new_name})
 
 
 from .auth_routes import router as auth_router
@@ -5069,7 +5172,7 @@ async def chat_upload(
     author_name: str | None = None
     if payload_raw and signature and public_key:
         payload = json.loads(payload_raw)
-        verify_payload(payload, signature, public_key)
+        verify_payload(payload, signature, public_key, allow_sentinel=True)
         user_message_text = payload.get("message", "")
     else:
         claims = verify_jwt_claims(request)
