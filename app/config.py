@@ -605,6 +605,7 @@ class Settings(BaseSettings):
         "truesight_me_prod": "truesight_me_beta",
         "dapp_prod": "dapp_beta",
         "sunmint_prod": "sunmint_beta",
+        "sophia_client_prod": "sophia_client_beta",
     }
     # AUTO-GENERATED files that both a beta repo and its prod fork regenerate on
     # a schedule, so their independent bot commits diverge and block
