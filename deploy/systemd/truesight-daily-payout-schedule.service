@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily Payout Schedule (PS) - render and email the unpaid-tree schedule
+Documentation=https://github.com/TrueSightDAO/agentic_ai_context/blob/main/sops/PAYOUT_REPORT_SOP.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/truesight_autopilot
+ExecStart=/opt/truesight_autopilot/.venv/bin/python /opt/truesight_autopilot/scripts/daily_payout_schedule.py
+StandardOutput=journal
+StandardError=journal
